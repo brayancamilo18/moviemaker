@@ -1,0 +1,55 @@
+{
+    "coverage": {
+        "sentences": [
+            {"order": 1, "sceneOrder": 1, "text": "He ran and slammed the door!", "start": 0.0, "end": 3.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 2, "sceneOrder": 1, "text": "He ran and slammed the door!", "start": 4.0, "end": 7.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 3, "sceneOrder": 1, "text": "He ran and slammed the door!", "start": 8.0, "end": 11.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 4, "sceneOrder": 1, "text": "He ran and slammed the door!", "start": 12.0, "end": 15.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 5, "sceneOrder": 2, "text": "He ran and slammed the door!", "start": 16.0, "end": 19.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 6, "sceneOrder": 2, "text": "He ran and slammed the door!", "start": 20.0, "end": 23.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 7, "sceneOrder": 2, "text": "He ran and slammed the door!", "start": 24.0, "end": 27.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 8, "sceneOrder": 2, "text": "He ran and slammed the door!", "start": 28.0, "end": 31.6, "pauseAfter": 0.4, "alignment": "text"}
+        ],
+        "scenes": [
+            {"order": 1, "start": 0.0, "end": 16.0, "duration": 16.0, "sentenceCount": 4},
+            {"order": 2, "start": 16.0, "end": 32.0, "duration": 16.0, "sentenceCount": 4}
+        ]
+    },
+    "longSentence": {
+        "sentences": [
+            {
+                "order": 1,
+                "sceneOrder": 1,
+                "text": "The road went on, and the fog thickened, and the whistle came closer, and the trees leaned in, and I kept walking into the dark without turning around.",
+                "start": 0.0,
+                "end": 24.5,
+                "pauseAfter": 0.5,
+                "alignment": "text"
+            }
+        ],
+        "scenes": [
+            {"order": 1, "start": 0.0, "end": 25.0, "duration": 25.0, "sentenceCount": 1}
+        ]
+    },
+    "shortSentence": {
+        "sentences": [
+            {"order": 1, "sceneOrder": 1, "text": "Hi there.", "start": 0.0, "end": 0.5, "pauseAfter": 0.3, "alignment": "text"},
+            {"order": 2, "sceneOrder": 1, "text": "The rest of the scene is long enough to absorb the short beat.", "start": 0.8, "end": 5.2, "pauseAfter": 0.4, "alignment": "text"}
+        ],
+        "scenes": [
+            {"order": 1, "start": 0.0, "end": 5.6, "duration": 5.6, "sentenceCount": 2}
+        ]
+    },
+    "singleShotScenes": {
+        "sentences": [
+            {"order": 1, "sceneOrder": 1, "text": "The first room was empty.", "start": 0.0, "end": 3.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 2, "sceneOrder": 2, "text": "The second room was worse.", "start": 4.0, "end": 7.6, "pauseAfter": 0.4, "alignment": "text"},
+            {"order": 3, "sceneOrder": 3, "text": "The third room had no door.", "start": 8.0, "end": 11.6, "pauseAfter": 0.4, "alignment": "text"}
+        ],
+        "scenes": [
+            {"order": 1, "start": 0.0, "end": 4.0, "duration": 4.0, "sentenceCount": 1},
+            {"order": 2, "start": 4.0, "end": 8.0, "duration": 4.0, "sentenceCount": 1},
+            {"order": 3, "start": 8.0, "end": 12.0, "duration": 4.0, "sentenceCount": 1}
+        ]
+    }
+}

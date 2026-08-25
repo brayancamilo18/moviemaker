@@ -1,4 +1,10 @@
 *
 !private/
 !public/
+!stories/
+!stories/.gitkeep
+!tts-cache/
+!tts-cache/.gitkeep
+!image-cache/
+!image-cache/.gitkeep
 !.gitignore

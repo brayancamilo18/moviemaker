@@ -1,0 +1,62 @@
+{
+    "title": "La casa dejó de respirar",
+    "hook": "Bajé las escaleras y la casa dejó de respirar.",
+    "description": "Una casa en silencio absoluto esconde algo que todavía me espera al final del pasillo.",
+    "tags": [
+        "terror psicológico",
+        "casa encantada",
+        "narración",
+        "historia de terror"
+    ],
+    "thumbnailPrompt": "A decaying house hallway in heavy fog, empty armchair facing a window, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+    "scenes": [
+        {
+            "order": 1,
+            "narration": "Empecé a bajar las escaleras cuando la casa dejó de respirar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 2,
+            "narration": "En la sala el sillón miraba la ventana sin nadie sentado. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 3,
+            "narration": "El vaho del cristal escribió mi nombre al revés. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": "distant wooden creak"
+        },
+        {
+            "order": 4,
+            "narration": "La cocina olía a humedad antigua fuera de estación. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 5,
+            "narration": "Subí otra vez y la cama conservaba una marca ajena. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 6,
+            "narration": "El desván crujió tres veces y después guardó silencio. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 7,
+            "narration": "En el patio la niebla tenía la forma de un cuerpo. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        },
+        {
+            "order": 8,
+            "narration": "Cerré la puerta y entendí que yo había sido el intruso. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "imagePrompt": "A static cinematic shot of a dim hallway in a decaying house, heavy fog, no identifiable people, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+            "soundEffect": null
+        }
+    ]
+}

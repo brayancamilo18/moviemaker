@@ -1,0 +1,205 @@
+[
+    {
+        "slug": "santa-compana",
+        "name": "La Santa Compaña",
+        "region": "Galicia",
+        "summary": "A nocturnal procession of the dead that walks rural paths and parish roads, often led by a living person forced to carry a cauldron of holy water or a cross. Those who meet it may be marked for death or compelled to take the leader’s place until another living soul can be tricked into accepting the burden. Tradition holds that looking directly at the company, or failing to step aside and lie face down, is dangerous.",
+        "motifs": ["procession of the dead", "living leader", "cauldron or cross", "omen of death", "forced succession"]
+    },
+    {
+        "slug": "mouros-encantados",
+        "name": "Los Mouros encantados",
+        "region": "Galicia",
+        "summary": "Enchanted beings said to dwell in castros, dolmens, caves, and under buried treasure, often imagined as Moorish though the belief is older than the historical Moors. They appear as warriors guarding gold or as mouras combing golden hair at fountains, waiting for a mortal to break the spell with the right word, offering, or night (especially St. John’s Eve). Failure, greed, or speaking at the wrong moment returns them to stone and seals the hoard.",
+        "motifs": ["buried treasure", "enchanted maiden", "golden comb", "castros and dolmens", "broken geas"]
+    },
+    {
+        "slug": "nuberu",
+        "name": "El Nuberu",
+        "region": "Asturias",
+        "summary": "A storm-lord who rides or lives among the clouds and commands rain, hail, thunder, and drought. Villagers blamed failed harvests on his anger and told of capturing, tricking, or bargaining with him so he would spare a parish or wreck a rival’s fields. He is sometimes pictured as a bearded traveler in a wide hat, arriving from the direction of the gathering weather.",
+        "motifs": ["storm rider", "hail and drought", "bargain with the weather", "wide hat", "vengeance on crops"]
+    },
+    {
+        "slug": "guestia",
+        "name": "La Güestia",
+        "region": "Asturias",
+        "summary": "The Asturian host of the dead: a night procession of souls that travels parish boundaries with candles, the smell of wax, and sometimes dogs. Seeing it is an omen that someone in the household will die. The living are told to get off the path, avoid counting the figures, and not to answer if their name is called.",
+        "motifs": ["host of the dead", "candles and wax", "parish boundaries", "death omen", "do not answer"]
+    },
+    {
+        "slug": "cuelebre",
+        "name": "El Cuélebre",
+        "region": "Asturias",
+        "summary": "A winged serpent that grows throughout its life and guards caves, springs, and treasures, often keeping xanas (nymphs) captive. Its scales are said to be impenetrable, so heroes rely on cunning, a blessed weapon, or attacking the underbelly rather than brute force. When it flies, storms and crop blight may follow.",
+        "motifs": ["winged serpent", "cave hoard", "captive nymphs", "impenetrable scales", "cunning over force"]
+    },
+    {
+        "slug": "ojancano",
+        "name": "El Ojáncano",
+        "region": "Cantabria",
+        "summary": "A one-eyed, red-haired giant of the Cantabrian mountains, violent and cannibalistic, enemy of the Anjanas. He personifies brute wilderness: tearing up trees, hurling rocks, and devouring livestock or people. Folk tellings place his weakness in the single eye or in the red hair that must be burned or cut to undo him.",
+        "motifs": ["one-eyed giant", "red hair", "cannibal ogre", "enemy of fairies", "weakness in the eye"]
+    },
+    {
+        "slug": "anjanas",
+        "name": "Las Anjanas",
+        "region": "Cantabria",
+        "summary": "Benevolent fairy women of springs, forests, and mountain paths, opposed to the Ojáncano. They aid the poor, lost children, and the just, and they punish cruelty with gifts that turn to coal or with sudden misfortune. They are small or human-sized, dressed in fine clothes, and associated with water and secret treasures given only to the worthy.",
+        "motifs": ["spring fairies", "gifts to the worthy", "punish cruelty", "coal instead of gold", "allies against the giant"]
+    },
+    {
+        "slug": "basajaun",
+        "name": "El Basajaun",
+        "region": "Basque Country",
+        "summary": "The “lord of the woods,” a great hairy wild man who inhabits forests and high pastures. Shepherds credit him with warning of storms by shouting from the trees and with protecting flocks from wolves. Some tales say he first taught humans agriculture, milling, or ironworking, and that stealing his secrets brought those crafts into the valleys.",
+        "motifs": ["lord of the woods", "hairy wild man", "storm warning", "protector of flocks", "stolen crafts"]
+    },
+    {
+        "slug": "gaueko",
+        "name": "Gaueko",
+        "region": "Basque Country",
+        "summary": "The personification of night, whose rule is that the day belongs to the living and the night to Gaueko. He forbids certain work and roaming after dark and especially punishes those who boast they do not fear the dark. He may be felt as a gust of wind, a cow, a monster, or a voice repeating that proverb before someone on the path disappears.",
+        "motifs": ["night belongs to the night", "taboo on after-dark work", "punished bravado", "gust of wind", "threshold of home"]
+    },
+    {
+        "slug": "lamias",
+        "name": "Las Lamias",
+        "region": "Basque Country",
+        "summary": "River and spring beings (lamiak) with long hair and bird or duck feet, who comb their hair by the water and are said to have built bridges and dolmens overnight. Offerings of food or maize leave them well disposed; spying on their feet or stealing the comb brings ruin. They may drown the disrespectful or help a miller who keeps the pact.",
+        "motifs": ["duck feet", "golden comb", "night-built bridges", "food offerings", "do not look at the feet"]
+    },
+    {
+        "slug": "coco",
+        "name": "El Coco",
+        "region": "Iberian Peninsula",
+        "summary": "A shapeless or hooded bogey invoked across the Hispanic world to frighten children into obedience: if they do not sleep or behave, the Coco will come and carry them off. He has no single fixed body in tradition, which is part of the threat. The figure is a household warning, not a local cult being with a detailed origin legend.",
+        "motifs": ["bogeyman", "child-stealer", "shapeless hooded form", "lullaby threat", "obedience through fear"]
+    },
+    {
+        "slug": "encantada",
+        "name": "La Encantada",
+        "region": "Iberian Peninsula",
+        "summary": "An enchanted woman, often described as a Moorish maiden, who appears at caves, fountains, or ruined castles, especially on St. John’s Eve, combing hair of gold and guarding a hidden treasure. A mortal may free her by keeping silence, offering a blessed object, or holding her until dawn; speaking, greed, or looking back seals the enchantment again. She is cousin to the Galician moura but told throughout Spain under this name.",
+        "motifs": ["St. John's Eve", "golden hair", "fountain apparition", "treasure under a spell", "broken silence"]
+    },
+    {
+        "slug": "silbon",
+        "name": "El Silbón",
+        "region": "Venezuela",
+        "summary": "A tall, gaunt llanero spirit condemned to wander the plains after killing his father, carrying a sack of his victim’s bones that rattles as he walks. His whistle sounds far away when he is near and close at hand when he is still distant, so travelers who hear a faint whistle are in greatest danger. He is said to attack drunkards, womanizers, and the cruel, and dogs or the smell of tobacco may drive him off.",
+        "motifs": ["whistling", "distance-inversion", "bag of bones", "punishment for patricide", "llanos night"]
+    },
+    {
+        "slug": "sayona",
+        "name": "La Sayona",
+        "region": "Venezuela",
+        "summary": "A female revenant who appears on lonely roads as a beautiful woman and then shows a skull-like or flayed face to unfaithful men. In the common telling she murdered her husband after a false accusation of adultery and is damned to hunt womanizers. Highways, riversides, and the llanos at night are her ground; a prayer, a blessed medal, or refusing to give her a ride are the usual protections.",
+        "motifs": ["beautiful then skull", "punishes unfaithful men", "roadside hitchhiker", "false accusation", "damned hunt"]
+    },
+    {
+        "slug": "familiar",
+        "name": "El Familiar",
+        "region": "Argentina",
+        "summary": "A demonic familiar kept by owners of sugar mills in Tucumán and Santiago del Estero, usually appearing as a great black dog, goat, or chained beast in a hidden room. Prosperity of the mill is bought with a pact that periodically demands a worker’s life. The creature is fed in secret; those who see it or hear the chain at night are not expected to last.",
+        "motifs": ["pact at the mill", "black dog", "tribute of workers", "hidden chain", "bought prosperity"]
+    },
+    {
+        "slug": "luz-mala",
+        "name": "La Luz Mala",
+        "region": "Argentina",
+        "summary": "A wandering light over the pampas, marshes, and old trails, taken as a soul in torment or as a sign of bones or treasure buried beneath. Following it leads travelers off the path, into bogs, or to fever and death. Gauchos traditionally salute it, avoid pointing at it, or mark the spot by day to find a grave rather than chase the flame at night.",
+        "motifs": ["will-o'-the-wisp", "unquiet grave", "buried bones", "do not follow the light", "pampas night"]
+    },
+    {
+        "slug": "trauco",
+        "name": "El Trauco",
+        "region": "Chiloé",
+        "summary": "A small, deformed forest dwarf of Chiloé who wears a conical hat and carries a stone-headed cane. He is blamed for unexplained pregnancies: his gaze or breath fascinates women and they cannot resist him. He lives in the woods, is jealous and dangerous to men who interfere, and is warded with knives, garlic, or the help of a machi.",
+        "motifs": ["forest dwarf", "conical hat", "hypnotic gaze", "unexplained pregnancy", "stone cane"]
+    },
+    {
+        "slug": "caleuche",
+        "name": "El Caleuche",
+        "region": "Chiloé",
+        "summary": "A brightly lit ghost ship that sails the inland seas of Chiloé at night, crewed by the drowned and by warlocks, able to travel underwater and to appear or vanish in an instant. Music, dancing, and lights are heard from deck. The drowned are said to be given a new life aboard; meddling islanders may be abducted or made to forget what they saw.",
+        "motifs": ["ghost ship", "lights and music", "crew of the drowned", "submerges at will", "warlocks of Chiloé"]
+    },
+    {
+        "slug": "pincoya",
+        "name": "La Pincoya",
+        "region": "Chiloé",
+        "summary": "A sea nymph of Chiloé, beautiful and draped in seaweed, whose dance on the shore tells the fortune of the fishery. If she faces the land, shellfish and fish will be plentiful; if she faces the open sea, scarcity follows. She is also said to help the shipwrecked and to work in concert with other marine beings of the archipelago.",
+        "motifs": ["seaweed nymph", "dance of plenty", "facing land or sea", "fishery omen", "rescues the shipwrecked"]
+    },
+    {
+        "slug": "tunche",
+        "name": "El Tunche",
+        "region": "Peruvian Amazonia",
+        "summary": "A restless dead or forest spirit known by a sharp whistle that cuts through the jungle night. In Amazonian river lore the whistle that sounds far may mean the Tunche is close, and answering or mocking it can bring sickness or death. It is often an unquiet soul—someone who died without proper rites, by drowning, or by violence—and the living are taught to keep silent or to answer only with the exact same tone.",
+        "motifs": ["jungle whistle", "unquiet dead", "do not answer wrongly", "distance-inversion", "death omen"]
+    },
+    {
+        "slug": "chullachaqui",
+        "name": "El Chullachaqui",
+        "region": "Amazonia",
+        "summary": "A forest guardian and trickster whose feet are mismatched—one human, one much larger or turned like an animal’s, hence the Quechua name. He imitates a relative or hunting companion to lure people off the trail until they are lost. Uneven tracks in the mud betray him; tobacco, knowledge of the forest, or refusing to follow a voice that should not be there are the usual defenses.",
+        "motifs": ["mismatched feet", "imitates loved ones", "getting lost", "forest guardian", "uneven tracks"]
+    },
+    {
+        "slug": "patasola",
+        "name": "La Patasola",
+        "region": "Colombia",
+        "summary": "A one-legged woman of the Andean and Amazonian forests who appears to hunters, loggers, and unfaithful men as a beautiful person in need of help, then reveals a monstrous mouth and a single bloody leg. She guards the woods and punishes those who abuse the forest or abandon their families. Her scream and the one-legged track are the signs that it is too late to turn back.",
+        "motifs": ["one leg", "seduction then monster", "forest guardian", "punishes loggers", "bloody footprint"]
+    },
+    {
+        "slug": "mohan",
+        "name": "El Mohán",
+        "region": "Colombia",
+        "summary": "A hairy river being of the Magdalena and other Colombian waters, with long tangled hair and a sack or hoard of gold in caves along the bank. He drowns fishermen, capsizes canoes, and abducts young women to his underwater or cave dwelling. Tobacco smoke, prayers, and staying off the river at certain hours are traditional precautions.",
+        "motifs": ["river ogre", "long tangled hair", "abducts women", "gold in the bank-cave", "drowning fishermen"]
+    },
+    {
+        "slug": "sombreron",
+        "name": "El Sombrerón",
+        "region": "Guatemala",
+        "summary": "A short man in black with an enormous hat who appears at night to braid horses’ manes and to court young women, especially those with long hair, by serenading outside the window. The girl wastes away, unable to sleep or eat, until the hat-wearer is driven off. Cutting the hair, scattering mustard seeds, or a priest’s blessing are the usual remedies.",
+        "motifs": ["enormous hat", "braided horse manes", "serenade at the window", "long-haired girls", "wasting away"]
+    },
+    {
+        "slug": "cegua",
+        "name": "La Cegua",
+        "region": "Central America",
+        "summary": "A roadside apparition, strongest in Costa Rican and neighboring tellings, who looks like a beautiful woman from behind until the traveler sees a horse’s head or a fleshless face. She waits for drunkards and womanizers on lonely roads and leaves them mad, crashed, or dead. The figure is kin to the Salvadoran Cihuanaba and other Mesoamerican night women of the road.",
+        "motifs": ["horse-headed woman", "road at night", "punishes drunkards", "beautiful from behind", "madness after the glance"]
+    },
+    {
+        "slug": "cadejo",
+        "name": "El Cadejo",
+        "region": "Central America",
+        "summary": "Two supernatural dogs that walk night roads: a white cadejo that guards sober travelers going home, and a black cadejo that attacks drunkards or leads them to ruin. They are large, shaggy, and often chained, with glowing eyes. Meeting the black one means do not run; running invites it to take you.",
+        "motifs": ["white protector dog", "black ruinous dog", "glowing eyes", "chain", "do not run"]
+    },
+    {
+        "slug": "ciguapa",
+        "name": "La Ciguapa",
+        "region": "Dominican Republic",
+        "summary": "A wild woman of the mountains and forests whose feet point backward, so her tracks lead hunters the wrong way. Long hair covers her body; she is nocturnal, wordless or bird-voiced, and lures men who then vanish. Folklore says she can be caught with a dog, or by looking at her through the crook of a tree or another seeing-trick, because a direct gaze is not enough.",
+        "motifs": ["backward feet", "misleading tracks", "hair-covered body", "nocturnal lure", "caught through a crook"]
+    },
+    {
+        "slug": "xtabay",
+        "name": "La Xtabay",
+        "region": "Yucatán",
+        "summary": "A beautiful woman who waits under a ceiba at night, combing her hair and calling men off the path to thorns, ravines, or death. Yucatec tellings bind her to the legend of Xkeban, the publicly sinful woman who was kind, and Utz-Colel, the publicly virtuous woman who was cruel: after death the kind sinner’s grave flowers, and the cruel woman’s spirit becomes the Xtabay. Perfume of plumeria and the ceiba’s roots mark her ground.",
+        "motifs": ["ceiba tree", "combing hair", "lures men at night", "Xkeban and Utz-Colel", "plumeria scent"]
+    },
+    {
+        "slug": "nahual",
+        "name": "El Nahual",
+        "region": "Mesoamerica",
+        "summary": "In Mesoamerican folk belief a person—often a ritual specialist—has an animal counterpart (nahual or tonal) and may send the soul out or take animal form: dog, coyote, turkey, owl, or jaguar. The nahual can protect a community or, in witch-lore, suck blood, blight crops, and travel as a ball of light. Harming the animal harms the person; identifying the witch means watching which animal is wounded at dawn.",
+        "motifs": ["animal double", "shapeshift at night", "wound the animal wound the witch", "ball of light", "guardian or sorcerer"]
+    }
+]
