@@ -44,12 +44,14 @@ final class SoundResolver
 
     private bool $storyBudgetWarned = false;
 
+    private int $synthSequence = 0;
+
     public function __construct(
         private AudioLibrary $library,
         private SoundLibraryImporter $importer,
         private LibraryClipProcessor $processor,
         private SoundVerifier $verifier,
-        private SyntheticAmbience $synthesizer,
+        private SyntheticSound $synthesizer,
         private SoundCategorizer $categorizer,
         private QueryLadder $ladder,
         private Filesystem $files,
@@ -426,32 +428,94 @@ final class SoundResolver
      */
     private function fromSynth(array $tags, string $query, string $type, float $minDuration): ResolvedSound
     {
-        if ($type === 'sfx') {
-            $this->logger->warning('No hay SFX usable; no se sintetiza un golpe mudo.', [
+        $category = $this->categorizer->categorize($tags, $query);
+        $profile = $this->synthProfileFor($category, $query, $tags, $type);
+
+        if ($type === 'sfx' && ! $this->synthesizer->isCredibleEffect($profile)) {
+            $this->logger->warning($this->omittedEffectReason($category, $profile), [
                 'query' => $query,
                 'tags' => $tags,
+                'category' => $category,
+                'profile' => $profile,
             ]);
 
             return $this->emptySynth();
         }
 
+        if ($type !== 'sfx') {
+            $profile = $this->synthesizer->ambienceProfile($profile);
+        }
+
         try {
-            $mood = $this->synthesizer->inferMood($query, $tags);
-            $duration = max($minDuration, 30.0);
-            $generated = $this->synthesizer->generate($mood, $duration);
-            $clip = $this->indexSynth($type, $query, $tags, $generated);
+            $seed = $this->nextSynthSeed($query, $tags);
+            $duration = $this->synthesizer->isCredibleEffect($profile)
+                ? $this->effectDuration($profile)
+                : max($minDuration, 30.0);
+            $generated = $this->synthesizer->generate($profile, $duration, $seed);
+            $clip = $this->indexSynth($type, $query, $tags, $generated, $seed);
             $path = $this->library->absolutePath((string) $clip['file']);
 
             return $this->fromClip($clip, ResolvedSound::SOURCE_SYNTH, 0.0, $path);
         } catch (Throwable $exception) {
-            $this->logger->warning('No se pudo sintetizar el bed de audio.', [
+            $this->logger->warning('No se pudo sintetizar el audio.', [
                 'type' => $type,
                 'query' => $query,
+                'profile' => $profile,
                 'error' => $exception->getMessage(),
             ]);
 
             return $this->emptySynth();
         }
+    }
+
+    /**
+     * @param  list<string>  $tags
+     */
+    private function synthProfileFor(?string $categorySlug, string $query, array $tags, string $type): string
+    {
+        if ($categorySlug !== null) {
+            $category = $this->categorizer->find($categorySlug);
+
+            if ($category !== null) {
+                return $this->synthesizer->normalizeProfile($category['synthProfile']);
+            }
+        }
+
+        $inferred = $this->synthesizer->inferProfile($query, $tags);
+
+        if ($type === 'sfx' && ! $this->synthesizer->isCredibleEffect($inferred)) {
+            return SyntheticSound::PROFILE_NONE;
+        }
+
+        return $inferred;
+    }
+
+    private function omittedEffectReason(?string $category, string $profile): string
+    {
+        if ($profile === SyntheticSound::PROFILE_NONE && $category !== null) {
+            return "Efecto omitido: la categoría {$category} tiene synthProfile=none; un sonido genérico sacaría al espectador de la historia.";
+        }
+
+        if ($profile === SyntheticSound::PROFILE_NONE) {
+            return 'Efecto omitido: no hay síntesis creíble (impact/friction) para esta señal.';
+        }
+
+        return "Efecto omitido: el perfil sintético '{$profile}' no es creíble para un efecto.";
+    }
+
+    private function effectDuration(string $profile): float
+    {
+        return $profile === SyntheticSound::PROFILE_FRICTION ? 0.95 : 0.55;
+    }
+
+    /**
+     * @param  list<string>  $tags
+     */
+    private function nextSynthSeed(string $query, array $tags): int
+    {
+        $this->synthSequence++;
+
+        return (int) sprintf('%u', crc32($this->synthSequence.':'.$query.':'.implode(',', $tags)));
     }
 
     private function emptySynth(): ResolvedSound
@@ -654,11 +718,11 @@ final class SoundResolver
      * @param  list<string>  $tags
      * @return array<string, mixed>
      */
-    private function indexSynth(string $type, string $query, array $tags, string $generated): array
+    private function indexSynth(string $type, string $query, array $tags, string $generated, int $seed): array
     {
         $this->processor->assertAudio($generated);
 
-        $hash = sha1($type.':'.mb_strtolower(trim($query)));
+        $hash = sha1($type.':'.mb_strtolower(trim($query)).':'.$seed);
         $filename = 'synth-'.$hash.'.wav';
         $relative = $type.'/'.$filename;
         $destination = $this->library->directoryFor($type).DIRECTORY_SEPARATOR.$filename;

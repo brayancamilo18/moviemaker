@@ -370,6 +370,38 @@ final class SoundResolverTest extends TestCase
         $this->assertNull($resolved->ladderLevel);
     }
 
+    public function test_ambience_synthesizes_a_bed_when_nothing_else_resolves(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $resolved = $this->resolve('ambience', 'zzzzuniquetone', ['zzzzuniquetone']);
+
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $resolved->source);
+        $this->assertNotSame('', $resolved->path);
+        $this->assertFileExists($resolved->path);
+        $this->assertNull($resolved->ladderLevel);
+    }
+
+    public function test_synthesizes_impact_and_friction_effects_only(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $impact = $this->resolve('sfx', 'dull thud impact', ['thud', 'dull', 'impact']);
+        $friction = $this->resolve('sfx', 'wood crack timber', ['wood', 'crack', 'timber']);
+        $animal = $this->resolve('sfx', 'dog barking distant', ['dog', 'bark', 'animal']);
+
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $impact->source);
+        $this->assertFileExists($impact->path);
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $friction->source);
+        $this->assertFileExists($friction->path);
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $animal->source);
+        $this->assertSame('', $animal->path);
+    }
+
     public function test_signals_for_story_include_ambience_and_scene_effects(): void
     {
         $story = Story::fromArray([
