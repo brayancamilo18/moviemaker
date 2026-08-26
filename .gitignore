@@ -27,6 +27,9 @@
 !/storage/app/image-cache/.gitkeep
 /storage/app/whisper/
 /storage/app/tmp/
+/resources/audio/**/*.wav
+!/resources/audio/core/
+!/resources/audio/core/**/*.wav
 /storage/pail
 /vendor
 /tts-service/venv/

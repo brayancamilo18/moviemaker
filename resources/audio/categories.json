@@ -1,0 +1,194 @@
+[
+    {
+        "slug": "wind_exterior",
+        "keywords": ["wind", "howl", "gale"],
+        "type": "ambience",
+        "curatedQuery": "wind howling",
+        "coreFile": "wind-exterior.wav",
+        "synthProfile": "wind"
+    },
+    {
+        "slug": "rain",
+        "keywords": ["rain", "rainfall", "drizzle"],
+        "type": "ambience",
+        "curatedQuery": "rain window",
+        "coreFile": "rain.wav",
+        "synthProfile": "wind"
+    },
+    {
+        "slug": "forest_night",
+        "keywords": ["forest", "woods", "cricket"],
+        "type": "ambience",
+        "curatedQuery": "forest night crickets",
+        "coreFile": "forest-night.wav",
+        "synthProfile": "wind"
+    },
+    {
+        "slug": "room_tone_interior",
+        "keywords": ["room", "interior", "indoor"],
+        "type": "ambience",
+        "curatedQuery": "empty room tone indoor",
+        "coreFile": "room-tone-interior.wav",
+        "synthProfile": "room"
+    },
+    {
+        "slug": "drone_dread",
+        "keywords": ["drone", "dread", "ominous"],
+        "type": "ambience",
+        "curatedQuery": "low drone ominous rumble",
+        "coreFile": "drone-dread.wav",
+        "synthProfile": "drone"
+    },
+    {
+        "slug": "water_river",
+        "keywords": ["river", "stream", "creek"],
+        "type": "ambience",
+        "curatedQuery": "river stream water flow",
+        "coreFile": "water-river.wav",
+        "synthProfile": "wind"
+    },
+    {
+        "slug": "storm_distant",
+        "keywords": ["storm", "thunder", "lightning"],
+        "type": "ambience",
+        "curatedQuery": "distant thunder storm rumble",
+        "coreFile": "storm-distant.wav",
+        "synthProfile": "drone"
+    },
+    {
+        "slug": "urban_distant",
+        "keywords": ["urban", "city", "traffic"],
+        "type": "ambience",
+        "curatedQuery": "distant city traffic night",
+        "coreFile": "urban-distant.wav",
+        "synthProfile": "drone"
+    },
+    {
+        "slug": "cave_hollow",
+        "keywords": ["cave", "cavern", "hollow"],
+        "type": "ambience",
+        "curatedQuery": "cave drip",
+        "coreFile": "cave-hollow.wav",
+        "synthProfile": "drone"
+    },
+    {
+        "slug": "door",
+        "keywords": ["door", "hinge", "doorway"],
+        "type": "sfx",
+        "curatedQuery": "door creak slow wooden",
+        "coreFile": "door.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "footsteps_hard",
+        "keywords": ["footsteps", "wooden", "floor"],
+        "type": "sfx",
+        "curatedQuery": "footsteps wooden floor hard",
+        "coreFile": "footsteps-hard.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "footsteps_soft",
+        "keywords": ["gravel", "dirt", "grass"],
+        "type": "sfx",
+        "curatedQuery": "footsteps gravel dirt soft",
+        "coreFile": "footsteps-soft.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "wood_stress",
+        "keywords": ["wood", "crack", "timber"],
+        "type": "sfx",
+        "curatedQuery": "wood crack creak stress",
+        "coreFile": "wood-stress.wav",
+        "synthProfile": "friction"
+    },
+    {
+        "slug": "metal",
+        "keywords": ["metal", "clang", "iron"],
+        "type": "sfx",
+        "curatedQuery": "metal gate clang iron",
+        "coreFile": "metal.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "glass",
+        "keywords": ["glass", "shatter", "pane"],
+        "type": "sfx",
+        "curatedQuery": "glass crack shatter",
+        "coreFile": "glass.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "impact_dull",
+        "keywords": ["thud", "dull", "impact"],
+        "type": "sfx",
+        "curatedQuery": "dull thud impact body",
+        "coreFile": "impact-dull.wav",
+        "synthProfile": "impact"
+    },
+    {
+        "slug": "impact_sharp",
+        "keywords": ["slap", "snap", "sharp"],
+        "type": "sfx",
+        "curatedQuery": "sharp hit slap crack",
+        "coreFile": "impact-sharp.wav",
+        "synthProfile": "impact"
+    },
+    {
+        "slug": "cloth_movement",
+        "keywords": ["cloth", "fabric", "clothing"],
+        "type": "sfx",
+        "curatedQuery": "cloth rustle fabric movement",
+        "coreFile": "cloth-movement.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "water_drip",
+        "keywords": ["drip", "droplet", "leak"],
+        "type": "sfx",
+        "curatedQuery": "water drip single drop",
+        "coreFile": "water-drip.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "animal_distant",
+        "keywords": ["dog", "bark", "animal"],
+        "type": "sfx",
+        "curatedQuery": "dog barking distant animal",
+        "coreFile": "animal-distant.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "electrical",
+        "keywords": ["radio", "static", "buzz"],
+        "type": "sfx",
+        "curatedQuery": "radio static",
+        "coreFile": "electrical.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "breath_human",
+        "keywords": ["breath", "breathing", "inhale"],
+        "type": "sfx",
+        "curatedQuery": "breathing close human",
+        "coreFile": "breath-human.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "paper",
+        "keywords": ["paper", "page", "sheet"],
+        "type": "sfx",
+        "curatedQuery": "paper rustle page turn",
+        "coreFile": "paper.wav",
+        "synthProfile": "none"
+    },
+    {
+        "slug": "latch_lock",
+        "keywords": ["keys", "jingle", "latch"],
+        "type": "sfx",
+        "curatedQuery": "keys jingle",
+        "coreFile": "latch-lock.wav",
+        "synthProfile": "none"
+    }
+]
