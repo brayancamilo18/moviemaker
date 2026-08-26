@@ -314,6 +314,8 @@ final class StorySoundManifest
         $entry['ladderLevel'] = array_key_exists('ladderLevel', $previous)
             ? ($previous['ladderLevel'] === null ? null : (int) $previous['ladderLevel'])
             : null;
+        $reason = trim((string) ($previous['omitReason'] ?? ''));
+        $entry['omitReason'] = $reason !== '' ? $reason : null;
 
         return $entry;
     }
@@ -335,6 +337,7 @@ final class StorySoundManifest
         $entry['sourceUrl'] = $resolved->sourceUrl;
         $entry['attributionRequired'] = $resolved->attributionRequired;
         $entry['ladderLevel'] = $resolved->ladderLevel;
+        $entry['omitReason'] = $resolved->omitReason;
 
         $target = $this->planner->targetLufs($plan['type'], $plan['intensity']);
 
@@ -378,6 +381,7 @@ final class StorySoundManifest
             'sourceUrl' => null,
             'attributionRequired' => false,
             'ladderLevel' => null,
+            'omitReason' => null,
         ];
     }
 

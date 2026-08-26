@@ -76,6 +76,7 @@ final class SoundResolverTest extends TestCase
 
         $this->assertSame(ResolvedSound::SOURCE_SYNTH, $resolved->source);
         $this->assertSame('', $resolved->path);
+        $this->assertNotNull($resolved->omitReason);
         $this->assertNull($resolved->ladderLevel);
         $this->assertEmpty($this->app->make(AudioLibrary::class)->filter('sfx', 'uniquequeryxyz'));
     }
@@ -400,6 +401,7 @@ final class SoundResolverTest extends TestCase
         $this->assertFileExists($friction->path);
         $this->assertSame(ResolvedSound::SOURCE_SYNTH, $animal->source);
         $this->assertSame('', $animal->path);
+        $this->assertNotNull($animal->omitReason);
     }
 
     public function test_signals_for_story_include_ambience_and_scene_effects(): void

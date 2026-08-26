@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\DataObjects\CoverageReport;
 use App\DataObjects\ResolvedSound;
 use App\DataObjects\Story;
+use App\Services\Audio\CoverageAuditor;
 use App\Services\Audio\StorySoundManifest;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
@@ -19,7 +21,8 @@ final class SoundsCommand extends Command
     protected $signature = 'story:sounds
         {file : JSON del guion}
         {--refresh : Vuelve a resolver todas las señales}
-        {--refresh-cue= : Fuerza la resolución de una señal concreta}';
+        {--refresh-cue= : Fuerza la resolución de una señal concreta}
+        {--audit : Solo audita lo ya resuelto, sin tocar nada}';
 
     protected $description = 'Resuelve las señales de audio de una historia y escribe sounds.json';
 
@@ -27,6 +30,7 @@ final class SoundsCommand extends Command
 
     public function __construct(
         private StorySoundManifest $manifest,
+        private CoverageAuditor $auditor,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -50,18 +54,30 @@ final class SoundsCommand extends Command
         }
 
         $slug = pathinfo($storyFile, PATHINFO_FILENAME);
+        $story = Story::fromArray($payload);
         $timings = $this->readTimings($slug);
         $refresh = (bool) $this->option('refresh');
         $refreshCue = trim((string) $this->option('refresh-cue'));
+        $auditOnly = (bool) $this->option('audit');
 
         try {
-            $manifest = $this->manifest->sync(
-                $slug,
-                Story::fromArray($payload),
-                $timings,
-                $refresh,
-                $refreshCue !== '' ? $refreshCue : null,
-            );
+            if ($auditOnly) {
+                if (! $this->manifest->exists($slug)) {
+                    $this->error('No hay sounds.json. Ejecuta story:sounds sin --audit primero.');
+
+                    return self::FAILURE;
+                }
+
+                $manifest = $this->manifest->load($slug);
+            } else {
+                $manifest = $this->manifest->sync(
+                    $slug,
+                    $story,
+                    $timings,
+                    $refresh,
+                    $refreshCue !== '' ? $refreshCue : null,
+                );
+            }
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
 
@@ -75,6 +91,18 @@ final class SoundsCommand extends Command
         $this->renderTable($manifest['cues']);
         $this->renderSummary($manifest['cues']);
         $this->line('sounds.json: '.$this->manifest->pathFor($slug));
+
+        if ($auditOnly) {
+            $report = $this->auditor->audit(
+                $story,
+                $manifest['cues'],
+                $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'narration.wav',
+            );
+            $this->renderCoverage($report);
+
+            return $report->passed ? self::SUCCESS : self::FAILURE;
+        }
+
         $this->comment('Si el algoritmo elige mal, edita la ruta en sounds.json y vuelve a mezclar.');
 
         return self::SUCCESS;
@@ -94,12 +122,13 @@ final class SoundsCommand extends Command
                 $this->truncate((string) ($cue['query'] ?? ''), 36),
                 $this->truncate(basename((string) ($cue['file'] ?? '')), 32),
                 $this->colorSource($source),
+                $this->ladderLabel($cue['ladderLevel'] ?? null),
                 sprintf('%.2f', (float) ($cue['score'] ?? 0)),
                 sprintf('%+.1f dB', (float) ($cue['gainDb'] ?? 0)),
             ];
         }
 
-        $this->table(['Señal', 'Query', 'Fichero', 'Origen', 'Puntuación', 'Nivel'], $rows);
+        $this->table(['Señal', 'Query', 'Fichero', 'Origen', 'Escalera', 'Puntuación', 'Nivel'], $rows);
     }
 
     /**
@@ -107,47 +136,50 @@ final class SoundsCommand extends Command
      */
     private function renderSummary(array $cues): void
     {
-        $counts = [
-            ResolvedSound::SOURCE_CACHE => 0,
-            ResolvedSound::SOURCE_DOWNLOAD => 0,
-            ResolvedSound::SOURCE_FALLBACK => 0,
-            ResolvedSound::SOURCE_SYNTH => 0,
-        ];
-
-        foreach ($cues as $cue) {
-            $source = (string) ($cue['source'] ?? '');
-
-            if (array_key_exists($source, $counts)) {
-                $counts[$source]++;
-            }
-        }
+        $sources = $this->auditor->sourceBreakdown($cues);
+        $ladder = $this->auditor->ladderBreakdown($cues);
 
         $this->newLine();
-        $this->line('Caché: '.$counts[ResolvedSound::SOURCE_CACHE]);
-        $this->line('Descargadas: '.$counts[ResolvedSound::SOURCE_DOWNLOAD]);
-        $this->line('Respaldo: '.$counts[ResolvedSound::SOURCE_FALLBACK]);
-
-        if ($counts[ResolvedSound::SOURCE_SYNTH] > 0) {
-            $this->line('<fg=red>Sintetizadas: '.$counts[ResolvedSound::SOURCE_SYNTH].'</>');
-        }
-
-        $ladder = [1 => 0, 2 => 0, 3 => 0, 4 => 0];
-
-        foreach ($cues as $cue) {
-            $level = $cue['ladderLevel'] ?? null;
-
-            if (is_int($level) && array_key_exists($level, $ladder)) {
-                $ladder[$level]++;
-            }
-        }
-
         $this->line(sprintf(
-            'Escalera Freesound: 1=%d  2=%d  3=%d  4=%d',
+            'Reparto por origen: caché=%d  descarga=%d  respaldo=%d  synth=%d',
+            $sources[ResolvedSound::SOURCE_CACHE],
+            $sources[ResolvedSound::SOURCE_DOWNLOAD],
+            $sources[ResolvedSound::SOURCE_FALLBACK],
+            $sources[ResolvedSound::SOURCE_SYNTH],
+        ));
+        $this->line(sprintf(
+            'Reparto por escalera: 1=%d  2=%d  3=%d  4=%d',
             $ladder[1],
             $ladder[2],
             $ladder[3],
             $ladder[4],
         ));
+    }
+
+    private function renderCoverage(CoverageReport $report): void
+    {
+        $this->newLine();
+
+        foreach ($report->warnings as $warning) {
+            $this->warn($warning);
+        }
+
+        if ($report->passed) {
+            $this->info('Auditoría de cobertura: sin bloqueantes.');
+
+            return;
+        }
+
+        $this->error('Auditoría de cobertura: hay bloqueantes.');
+
+        foreach ($report->blocking as $blocking) {
+            $this->error('  · '.$blocking);
+        }
+    }
+
+    private function ladderLabel(mixed $level): string
+    {
+        return is_int($level) && $level > 0 ? (string) $level : '—';
     }
 
     private function colorSource(string $source): string

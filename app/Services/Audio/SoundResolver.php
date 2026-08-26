@@ -432,14 +432,15 @@ final class SoundResolver
         $profile = $this->synthProfileFor($category, $query, $tags, $type);
 
         if ($type === 'sfx' && ! $this->synthesizer->isCredibleEffect($profile)) {
-            $this->logger->warning($this->omittedEffectReason($category, $profile), [
+            $reason = $this->omittedEffectReason($category, $profile);
+            $this->logger->warning($reason, [
                 'query' => $query,
                 'tags' => $tags,
                 'category' => $category,
                 'profile' => $profile,
             ]);
 
-            return $this->emptySynth();
+            return $this->emptySynth($reason);
         }
 
         if ($type !== 'sfx') {
@@ -518,7 +519,7 @@ final class SoundResolver
         return (int) sprintf('%u', crc32($this->synthSequence.':'.$query.':'.implode(',', $tags)));
     }
 
-    private function emptySynth(): ResolvedSound
+    private function emptySynth(?string $omitReason = null): ResolvedSound
     {
         return new ResolvedSound(
             path: '',
@@ -530,6 +531,7 @@ final class SoundResolver
             sourceUrl: null,
             score: 0.0,
             ladderLevel: null,
+            omitReason: $omitReason,
         );
     }
 

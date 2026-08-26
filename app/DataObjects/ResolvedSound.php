@@ -24,5 +24,6 @@ final readonly class ResolvedSound
         public ?string $sourceUrl,
         public float $score,
         public ?int $ladderLevel = null,
+        public ?string $omitReason = null,
     ) {}
 }
