@@ -33,7 +33,7 @@ final class CoverageAuditor
 
         $this->auditAmbiencePerScene($story, $indexed, $blocking);
         $this->auditBedCoverage($story, $narrationPath, $blocking);
-        $this->auditKeyEffects($story, $indexed, $blocking, $warnings);
+        $this->auditEffects($story, $indexed, $blocking, $warnings);
         $this->auditResolvedFiles($resolved, $blocking);
 
         return new CoverageReport(
@@ -188,19 +188,22 @@ final class CoverageAuditor
      * @param  list<string>  $blocking
      * @param  list<string>  $warnings
      */
-    private function auditKeyEffects(Story $story, array $indexed, array &$blocking, array &$warnings): void
+    private function auditEffects(Story $story, array $indexed, array &$blocking, array &$warnings): void
     {
         foreach ($story->scenes as $scene) {
             foreach ($scene->soundEffectSpecs() as $index => $effect) {
-                if ($effect->kind !== SceneSoundEffect::KIND_KEY) {
-                    continue;
-                }
-
                 $id = 'sfx.'.$scene->order.'.'.($index + 1);
                 $cue = $indexed[$id] ?? null;
                 $path = $this->existingPath($cue);
 
                 if ($path !== null) {
+                    continue;
+                }
+
+                if ($effect->kind === SceneSoundEffect::KIND_TEXTURE) {
+                    $reason = $this->omitReason($cue) ?? 'efecto de textura omitido';
+                    $warnings[] = "Efecto de textura {$id} omitido: {$reason}";
+
                     continue;
                 }
 

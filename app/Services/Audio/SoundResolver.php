@@ -141,7 +141,7 @@ final class SoundResolver
                 }
             }
 
-            return $this->finishLocally($tags, $query, $type, $minDuration, $exclude);
+            return $this->finishLocally($tags, $query, $type, $minDuration, $exclude, $category);
         } catch (Throwable $exception) {
             $this->logger->warning('La resolución de audio continuó tras un error.', [
                 'type' => $type,
@@ -277,6 +277,55 @@ final class SoundResolver
      * @param  list<string>  $tags
      * @param  list<string>  $exclude
      */
+    private function fromCoreKit(?string $categorySlug, string $type, float $minDuration, array $exclude): ?ResolvedSound
+    {
+        if ($categorySlug === null || $categorySlug === '') {
+            return null;
+        }
+
+        $category = $this->categorizer->find($categorySlug);
+
+        if ($category === null || $category['type'] !== $type) {
+            return null;
+        }
+
+        $relative = 'core/'.$category['coreFile'];
+        $clip = [
+            'file' => $relative,
+            'type' => $type,
+            'tags' => $category['keywords'],
+            'source_id' => 'core-'.$category['slug'],
+            'lufs' => 0.0,
+            'attribution_required' => false,
+            'author' => 'horror-studio',
+            'license' => 'internal',
+            'source_url' => 'internal://core/'.$category['slug'],
+        ];
+
+        foreach ($this->library->filter($type) as $existing) {
+            if ((string) ($existing['file'] ?? '') === $relative) {
+                $clip = $existing;
+                break;
+            }
+        }
+
+        if ($this->excluded($clip, $exclude)) {
+            return null;
+        }
+
+        $path = $this->library->absolutePath($relative);
+
+        if (! $this->accepted($path, $type, $minDuration)) {
+            return null;
+        }
+
+        return $this->fromClip($clip, ResolvedSound::SOURCE_FALLBACK, 0.0, $path);
+    }
+
+    /**
+     * @param  list<string>  $tags
+     * @param  list<string>  $exclude
+     */
     private function fromFallback(array $tags, string $type, float $minDuration, array $exclude): ?ResolvedSound
     {
         $ranked = $this->rankLibrary($tags, $type, $minDuration, $exclude, 0.0001);
@@ -294,9 +343,22 @@ final class SoundResolver
      * @param  list<string>  $tags
      * @param  list<string>  $exclude
      */
-    private function finishLocally(array $tags, string $query, string $type, float $minDuration, array $exclude): ResolvedSound
-    {
+    private function finishLocally(
+        array $tags,
+        string $query,
+        string $type,
+        float $minDuration,
+        array $exclude,
+        ?string $category = null,
+    ): ResolvedSound {
         try {
+            $category ??= $this->categorizer->categorize($tags, $query);
+            $fromCore = $this->fromCoreKit($category, $type, $minDuration, $exclude);
+
+            if ($fromCore instanceof ResolvedSound) {
+                return $fromCore;
+            }
+
             $fromFallback = $this->fromFallback($tags, $type, $minDuration, $exclude);
 
             if ($fromFallback instanceof ResolvedSound) {

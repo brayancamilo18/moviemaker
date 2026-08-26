@@ -5,10 +5,19 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Audio\SoundCategorizer;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class SoundCategorizerTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Http::fake();
+        Http::preventStrayRequests();
+    }
+
     public function test_loads_twenty_four_categories_with_expected_profiles(): void
     {
         $categories = $this->categorizer()->all();

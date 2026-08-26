@@ -12,8 +12,10 @@ use App\Services\Audio\SoundLibraryImporter;
 use App\Services\Audio\SoundResolver;
 use App\Services\Audio\StorySoundManifest;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -249,6 +251,77 @@ final class SoundResolverTest extends TestCase
         $this->assertStringContainsString('plain-door', strtolower($resolved->path));
     }
 
+    public function test_empty_ladder_resolves_from_the_core_kit_as_fallback(): void
+    {
+        $queries = [];
+
+        Http::fake(function ($request) use (&$queries) {
+            if (str_contains($request->url(), '/search/text')) {
+                $queries[] = (string) $request['query'];
+
+                return Http::response(['results' => []], 200);
+            }
+
+            return Http::response('', 404);
+        });
+
+        $this->installCore('door.wav');
+
+        $resolved = $this->resolve('sfx', 'door creak slow', ['door', 'creak']);
+
+        $this->assertSame(ResolvedSound::SOURCE_FALLBACK, $resolved->source);
+        $this->assertStringContainsString('core/door.wav', str_replace('\\', '/', $resolved->path));
+        $this->assertFileExists($resolved->path);
+        $this->assertNull($resolved->ladderLevel);
+        $this->assertSame([
+            'door creak slow',
+            'door creak',
+            'door',
+            'door creak slow wooden',
+        ], $queries);
+    }
+
+    public function test_synthesizes_when_the_core_kit_is_missing_and_the_profile_is_credible(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $resolved = $this->resolve('sfx', 'dull thud impact', ['thud', 'dull', 'impact']);
+
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $resolved->source);
+        $this->assertFileExists($resolved->path);
+        $this->assertNull($resolved->omitReason);
+    }
+
+    public function test_omits_sfx_with_synth_profile_none_when_the_core_kit_is_missing(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $resolved = $this->resolve('sfx', 'door creak slow', ['door', 'creak']);
+
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $resolved->source);
+        $this->assertSame('', $resolved->path);
+        $this->assertNotNull($resolved->omitReason);
+        $this->assertStringContainsString('none', mb_strtolower($resolved->omitReason));
+    }
+
+    public function test_ambience_never_omits_and_falls_to_synthetic_drone(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $resolved = $this->resolve('ambience', 'zzzzuniquetone', ['zzzzuniquetone']);
+
+        $this->assertSame(ResolvedSound::SOURCE_SYNTH, $resolved->source);
+        $this->assertNotSame('', $resolved->path);
+        $this->assertFileExists($resolved->path);
+        $this->assertNull($resolved->omitReason);
+    }
+
     public function test_skips_the_network_when_the_signal_budget_is_exhausted(): void
     {
         $this->app->make('config')->set('stories.audio.resolve_budget_seconds', 0);
@@ -258,11 +331,12 @@ final class SoundResolverTest extends TestCase
             'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
         ]);
 
-        $this->indexClip('sfx/wood-crack-single-9.wav', 'sfx', ['wood', 'crack'], 0.8);
+        $this->installCore('door.wav');
 
-        $resolved = $this->resolve('sfx', 'wood snap', ['wood', 'snap']);
+        $resolved = $this->resolve('sfx', 'door creak slow', ['door', 'creak']);
 
         $this->assertSame(ResolvedSound::SOURCE_FALLBACK, $resolved->source);
+        $this->assertStringContainsString('core/door.wav', str_replace('\\', '/', $resolved->path));
         Http::assertNothingSent();
     }
 
@@ -291,15 +365,49 @@ final class SoundResolverTest extends TestCase
         ]);
 
         $resolver = $this->app->make(SoundResolver::class);
-        $resolver->resolve(['alphaone'], 'alphaone cue', 'sfx');
-        $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
-        $resolver->resolve(['gammatre'], 'gammatre cue', 'sfx');
+        $resolver->resolve(['door', 'creak'], 'door creak slow', 'sfx');
         $sent = Http::recorded()->count();
 
-        $resolver->resolve(['deltfour'], 'deltfour cue', 'sfx');
+        $this->assertSame(3, $sent);
+
+        $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
+        $resolver->resolve(['gammatre'], 'gammatre cue', 'sfx');
 
         $this->assertSame($sent, Http::recorded()->count());
-        $this->assertGreaterThanOrEqual(3, $sent);
+    }
+
+    /**
+     * @param  list<string>  $tags
+     */
+    #[DataProvider('unresolvableSignals')]
+    public function test_resolve_never_throws_when_every_source_is_down(
+        string $type,
+        string $query,
+        array $tags,
+    ): void {
+        Http::fake(function () {
+            throw new ConnectionException('Connection refused');
+        });
+
+        $resolved = $this->app->make(SoundResolver::class)->resolve($tags, $query, $type, 6.0);
+
+        $this->assertInstanceOf(ResolvedSound::class, $resolved);
+        $this->assertContains($resolved->source, [
+            ResolvedSound::SOURCE_SYNTH,
+            ResolvedSound::SOURCE_FALLBACK,
+        ]);
+    }
+
+    /**
+     * @return array<string, array{string, string, list<string>}>
+     */
+    public static function unresolvableSignals(): array
+    {
+        return [
+            'sfx unknown' => ['sfx', 'zzzzuniquetone', ['zzzzuniquetone']],
+            'ambience unknown' => ['ambience', 'zzzzuniquetone', ['zzzzuniquetone']],
+            'sfx empty tags' => ['sfx', 'qqqnomatchxyz', []],
+        ];
     }
 
     public function test_caps_downloads_at_three_per_level_and_eight_per_signal(): void
@@ -468,6 +576,15 @@ final class SoundResolverTest extends TestCase
         }
 
         $this->app->make(AudioLibrary::class)->add($this->clip($file, $type, $tags, $duration));
+    }
+
+    private function installCore(string $coreFile, float $duration = 1.0): string
+    {
+        $relative = 'core/'.$coreFile;
+        $absolute = $this->libraryDir.DIRECTORY_SEPARATOR.str_replace('/', DIRECTORY_SEPARATOR, $relative);
+        $this->makeWav($absolute, $duration);
+
+        return $relative;
     }
 
     /**
