@@ -6,18 +6,43 @@ namespace App\Services\Audio;
 
 use App\DataObjects\ResolvedSound;
 use App\DataObjects\Story;
+use App\Exceptions\FreesoundException;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
 final class SoundResolver
 {
+    private const MAX_ATTEMPTS_PER_LEVEL = 3;
+
+    private const MAX_ATTEMPTS_PER_SIGNAL = 8;
+
+    private const CIRCUIT_FAILURE_THRESHOLD = 3;
+
     private readonly float $cacheThreshold;
 
     private readonly int $searchCandidates;
 
     private readonly int $verifyAttempts;
+
+    private readonly float $signalBudgetSeconds;
+
+    private readonly float $storyBudgetSeconds;
+
+    private float $storyStartedAt = 0.0;
+
+    private float $signalStartedAt = 0.0;
+
+    private int $signalAttempts = 0;
+
+    private int $consecutiveProviderFailures = 0;
+
+    private bool $circuitOpen = false;
+
+    private bool $storyBudgetWarned = false;
 
     public function __construct(
         private AudioLibrary $library,
@@ -33,7 +58,9 @@ final class SoundResolver
     ) {
         $this->cacheThreshold = (float) $config->get('stories.audio.cache_match_threshold', 0.6);
         $this->searchCandidates = max(1, (int) $config->get('stories.audio.resolve.search_candidates', 8));
-        $this->verifyAttempts = max(1, (int) $config->get('stories.audio.resolve.verify_attempts', 3));
+        $this->verifyAttempts = max(1, (int) $config->get('stories.audio.resolve.verify_attempts', self::MAX_ATTEMPTS_PER_LEVEL));
+        $this->signalBudgetSeconds = max(0.0, (float) $config->get('stories.audio.resolve_budget_seconds', 20));
+        $this->storyBudgetSeconds = max(0.0, (float) $config->get('stories.audio.resolve_total_budget_seconds', 600));
     }
 
     /**
@@ -75,6 +102,10 @@ final class SoundResolver
      */
     public function resolve(array $tags, string $query, string $type, float $minDuration = 0, array $exclude = []): ResolvedSound
     {
+        $this->beginStoryClock();
+        $this->signalStartedAt = microtime(true);
+        $this->signalAttempts = 0;
+
         $type = strtolower(trim($type));
         $query = trim($query);
         $tags = $this->normalizeTags($tags);
@@ -94,21 +125,21 @@ final class SoundResolver
                 return $fromCache;
             }
 
-            foreach ($this->ladder->levels($query, $tags, $category) as $step) {
-                $fromDownload = $this->fromDownload($tags, $step['query'], $type, $minDuration, $exclude, $step['level']);
+            if ($this->canUseNetwork()) {
+                foreach ($this->ladder->levels($query, $tags, $category) as $step) {
+                    if (! $this->canUseNetwork()) {
+                        break;
+                    }
 
-                if ($fromDownload instanceof ResolvedSound) {
-                    return $fromDownload;
+                    $fromDownload = $this->fromDownload($tags, $step['query'], $type, $minDuration, $exclude, $step['level']);
+
+                    if ($fromDownload instanceof ResolvedSound) {
+                        return $fromDownload;
+                    }
                 }
             }
 
-            $fromFallback = $this->fromFallback($tags, $type, $minDuration, $exclude);
-
-            if ($fromFallback instanceof ResolvedSound) {
-                return $fromFallback;
-            }
-
-            return $this->fromSynth($tags, $query, $type, $minDuration);
+            return $this->finishLocally($tags, $query, $type, $minDuration, $exclude);
         } catch (Throwable $exception) {
             $this->logger->warning('La resolución de audio continuó tras un error.', [
                 'type' => $type,
@@ -116,7 +147,7 @@ final class SoundResolver
                 'error' => $exception->getMessage(),
             ]);
 
-            return $this->fromSynth($tags, $query, $type, $minDuration);
+            return $this->finishLocally($tags, $query, $type, $minDuration, $exclude);
         }
     }
 
@@ -143,9 +174,15 @@ final class SoundResolver
      */
     private function fromDownload(array $tags, string $query, string $type, float $minDuration, array $exclude, int $ladderLevel): ?ResolvedSound
     {
+        if (! $this->canUseNetwork()) {
+            return null;
+        }
+
         try {
             $candidates = $this->importer->search($type, $query, $this->searchCandidates);
+            $this->recordProviderSuccess();
         } catch (Throwable $exception) {
+            $this->recordProviderFailure($exception);
             $this->logger->warning('Freesound no disponible al resolver audio.', [
                 'type' => $type,
                 'query' => $query,
@@ -179,7 +216,14 @@ final class SoundResolver
             static fn (array $left, array $right): int => $right['score'] <=> $left['score'],
         );
 
-        foreach (array_slice($scored, 0, $this->verifyAttempts) as $item) {
+        $levelAttempts = 0;
+        $perLevel = min($this->verifyAttempts, self::MAX_ATTEMPTS_PER_LEVEL);
+
+        foreach ($scored as $item) {
+            if ($levelAttempts >= $perLevel || ! $this->canUseNetwork()) {
+                break;
+            }
+
             /** @var array{id: int, name: string, author: string, license: string, duration: float, rating: float, downloads?: int, tags: list<string>, previewUrl: string, sourceUrl: string} $sound */
             $sound = $item['sound'];
             $existing = $this->library->findBySourceId((int) $sound['id']);
@@ -189,10 +233,14 @@ final class SoundResolver
             }
 
             $extraTags = array_values(array_unique([...$tags, ...SoundLibraryImporter::tagsFromQuery($query)]));
+            $this->signalAttempts++;
+            $levelAttempts++;
 
             try {
                 $result = $this->importer->ingest($sound, $type, $extraTags);
+                $this->recordProviderSuccess();
             } catch (Throwable $exception) {
+                $this->recordProviderFailure($exception);
                 $this->logger->warning('Fallo al descargar un candidato de Freesound.', [
                     'id' => $sound['id'],
                     'error' => $exception->getMessage(),
@@ -238,6 +286,139 @@ final class SoundResolver
         }
 
         return null;
+    }
+
+    /**
+     * @param  list<string>  $tags
+     * @param  list<string>  $exclude
+     */
+    private function finishLocally(array $tags, string $query, string $type, float $minDuration, array $exclude): ResolvedSound
+    {
+        try {
+            $fromFallback = $this->fromFallback($tags, $type, $minDuration, $exclude);
+
+            if ($fromFallback instanceof ResolvedSound) {
+                return $fromFallback;
+            }
+
+            return $this->fromSynth($tags, $query, $type, $minDuration);
+        } catch (Throwable $exception) {
+            $this->logger->warning('El respaldo local de audio también falló.', [
+                'type' => $type,
+                'query' => $query,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return $this->emptySynth();
+        }
+    }
+
+    private function beginStoryClock(): void
+    {
+        if ($this->storyStartedAt <= 0.0) {
+            $this->storyStartedAt = microtime(true);
+        }
+    }
+
+    private function canUseNetwork(): bool
+    {
+        if ($this->circuitOpen) {
+            return false;
+        }
+
+        if ($this->storyBudgetExceeded()) {
+            $this->warnStoryBudgetOnce();
+
+            return false;
+        }
+
+        if ($this->signalBudgetExceeded()) {
+            return false;
+        }
+
+        return $this->signalAttempts < self::MAX_ATTEMPTS_PER_SIGNAL;
+    }
+
+    private function storyBudgetExceeded(): bool
+    {
+        if ($this->storyStartedAt <= 0.0) {
+            return false;
+        }
+
+        return (microtime(true) - $this->storyStartedAt) >= $this->storyBudgetSeconds;
+    }
+
+    private function signalBudgetExceeded(): bool
+    {
+        if ($this->signalStartedAt <= 0.0) {
+            return false;
+        }
+
+        return (microtime(true) - $this->signalStartedAt) >= $this->signalBudgetSeconds;
+    }
+
+    private function warnStoryBudgetOnce(): void
+    {
+        if ($this->storyBudgetWarned) {
+            return;
+        }
+
+        $this->storyBudgetWarned = true;
+        $this->logger->warning('Presupuesto de resolución de la historia agotado; el resto se resuelve sin red.');
+    }
+
+    private function recordProviderSuccess(): void
+    {
+        $this->consecutiveProviderFailures = 0;
+    }
+
+    private function recordProviderFailure(Throwable $exception): void
+    {
+        if (! $this->isProviderFailure($exception)) {
+            return;
+        }
+
+        $this->consecutiveProviderFailures++;
+
+        if ($this->circuitOpen || $this->consecutiveProviderFailures < self::CIRCUIT_FAILURE_THRESHOLD) {
+            return;
+        }
+
+        $this->circuitOpen = true;
+        $this->logger->warning('Freesound marcado como caído tras tres fallos consecutivos; el resto de la ejecución no tocará la red.');
+    }
+
+    private function isProviderFailure(Throwable $exception): bool
+    {
+        $current = $exception;
+
+        while ($current instanceof Throwable) {
+            if ($current instanceof ConnectionException) {
+                return true;
+            }
+
+            if ($current instanceof RequestException) {
+                $status = $current->response->status();
+
+                return $status >= 500 || $status === 408;
+            }
+
+            $current = $current->getPrevious();
+        }
+
+        if ($exception instanceof FreesoundException) {
+            $message = $exception->getMessage();
+
+            if (preg_match('/HTTP 5\d\d/', $message) === 1) {
+                return true;
+            }
+
+            return str_contains(mb_strtolower($message), 'conectar')
+                || str_contains(mb_strtolower($message), 'timeout')
+                || str_contains(mb_strtolower($message), 'timed out');
+        }
+
+        return false;
     }
 
     /**
@@ -290,7 +471,16 @@ final class SoundResolver
 
     private function accepted(string $path, string $type, float $minDuration): bool
     {
-        $result = $this->verifier->verify($path, $type, $minDuration);
+        try {
+            $result = $this->verifier->verify($path, $type, $minDuration);
+        } catch (Throwable $exception) {
+            $this->logger->info('Audio descartado.', [
+                'path' => $path,
+                'failures' => [$exception->getMessage()],
+            ]);
+
+            return false;
+        }
 
         if ($result->passed) {
             return true;

@@ -248,6 +248,90 @@ final class SoundResolverTest extends TestCase
         $this->assertStringContainsString('plain-door', strtolower($resolved->path));
     }
 
+    public function test_skips_the_network_when_the_signal_budget_is_exhausted(): void
+    {
+        $this->app->make('config')->set('stories.audio.resolve_budget_seconds', 0);
+        $this->app->make('config')->set('stories.audio.resolve_total_budget_seconds', 600);
+
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $this->indexClip('sfx/wood-crack-single-9.wav', 'sfx', ['wood', 'crack'], 0.8);
+
+        $resolved = $this->resolve('sfx', 'wood snap', ['wood', 'snap']);
+
+        $this->assertSame(ResolvedSound::SOURCE_FALLBACK, $resolved->source);
+        Http::assertNothingSent();
+    }
+
+    public function test_skips_the_network_for_remaining_signals_when_the_story_budget_is_exhausted(): void
+    {
+        $this->app->make('config')->set('stories.audio.resolve_budget_seconds', 20);
+        $this->app->make('config')->set('stories.audio.resolve_total_budget_seconds', 0);
+
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $resolver = $this->app->make(SoundResolver::class);
+        $first = $resolver->resolve(['alphaone'], 'alphaone cue', 'sfx');
+        $second = $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
+
+        $this->assertInstanceOf(ResolvedSound::class, $first);
+        $this->assertInstanceOf(ResolvedSound::class, $second);
+        Http::assertNothingSent();
+    }
+
+    public function test_opens_the_circuit_after_three_consecutive_freesound_5xx_errors(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['detail' => 'unavailable'], 503),
+        ]);
+
+        $resolver = $this->app->make(SoundResolver::class);
+        $resolver->resolve(['alphaone'], 'alphaone cue', 'sfx');
+        $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
+        $resolver->resolve(['gammatre'], 'gammatre cue', 'sfx');
+        $sent = Http::recorded()->count();
+
+        $resolver->resolve(['deltfour'], 'deltfour cue', 'sfx');
+
+        $this->assertSame($sent, Http::recorded()->count());
+        $this->assertGreaterThanOrEqual(3, $sent);
+    }
+
+    public function test_caps_downloads_at_three_per_level_and_eight_per_signal(): void
+    {
+        $seq = 0;
+
+        Http::fake(function ($request) use (&$seq) {
+            if (str_contains($request->url(), '/data/previews/')) {
+                return Http::response('', 200);
+            }
+
+            $results = [];
+
+            for ($i = 0; $i < 6; $i++) {
+                $seq++;
+                $results[] = $this->apiSound($seq, 'Take '.$seq, ['door', 'creak'], 4.0, 10, 1.0);
+            }
+
+            return Http::response(['results' => $results], 200);
+        });
+
+        $resolved = $this->resolve('sfx', 'door creak slow', ['door', 'creak']);
+
+        $this->assertInstanceOf(ResolvedSound::class, $resolved);
+
+        $previews = Http::recorded(
+            static fn ($request): bool => str_contains($request->url(), '/data/previews/'),
+        );
+
+        $this->assertLessThanOrEqual(8, $previews->count());
+        $this->assertGreaterThan(3, $previews->count());
+    }
+
     public function test_falls_back_to_a_clip_with_a_shared_tag(): void
     {
         Http::fake([
