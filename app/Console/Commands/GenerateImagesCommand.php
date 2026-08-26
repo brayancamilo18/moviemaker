@@ -16,6 +16,7 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 final class GenerateImagesCommand extends Command
@@ -34,6 +35,10 @@ final class GenerateImagesCommand extends Command
 
     private readonly float $rateLimitSeconds;
 
+    private readonly string $ffprobe;
+
+    private readonly float $timeout;
+
     public function __construct(
         private ImageGenerator $images,
         private ShotPlanner $planner,
@@ -47,6 +52,8 @@ final class GenerateImagesCommand extends Command
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->imageCacheDirectory = storage_path('app/'.$config->get('stories.images.cache_path', 'image-cache'));
         $this->rateLimitSeconds = (float) $config->get('stories.images.rate_limit_seconds');
+        $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
+        $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
     }
 
     public function handle(): int
@@ -103,7 +110,7 @@ final class GenerateImagesCommand extends Command
             return self::FAILURE;
         }
 
-        $shots = $this->planner->plan($timings, $story);
+        $shots = $this->planner->plan($timings, $story, $this->audioDuration($storyDirectory, $timings));
 
         if ($shots === []) {
             $this->error('El planificador no produjo ningún plano.');
@@ -117,9 +124,11 @@ final class GenerateImagesCommand extends Command
             return self::FAILURE;
         }
 
+        $prompts = $this->prompts->previewAll($shots, $bible, $story);
+
         if ($dryRun) {
             $this->warn('Modo simulación: no se generarán imágenes.');
-            $this->printPrompts($selected, $bible, $story, $slug);
+            $this->printPrompts($selected, $shots, $prompts, $slug);
 
             return self::SUCCESS;
         }
@@ -133,7 +142,7 @@ final class GenerateImagesCommand extends Command
         $previous = $this->readPreviousShots($shotsPath);
 
         try {
-            $rows = $this->generateShots($shots, $selected, $previous, $bible, $story, $slug, $force);
+            $rows = $this->generateShots($shots, $selected, $previous, $prompts, $slug, $force);
         } catch (Throwable $exception) {
             $this->newLine();
             $this->error($exception->getMessage());
@@ -143,6 +152,7 @@ final class GenerateImagesCommand extends Command
 
         $this->writeJson($shotsPath, [
             'version' => 1,
+            'plannerVersion' => ShotPlanner::VERSION,
             'shots' => $rows,
         ]);
 
@@ -225,14 +235,14 @@ final class GenerateImagesCommand extends Command
      * @param  list<Shot>  $shots
      * @param  list<Shot>  $selected
      * @param  array<int, array<string, mixed>>  $previous
+     * @param  list<string>  $prompts
      * @return list<array<string, mixed>>
      */
     private function generateShots(
         array $shots,
         array $selected,
         array $previous,
-        VisualBible $bible,
-        Story $story,
+        array $prompts,
         string $slug,
         bool $force,
     ): array {
@@ -250,8 +260,8 @@ final class GenerateImagesCommand extends Command
         $rows = [];
 
         try {
-            foreach ($shots as $shot) {
-                $prompt = $this->prompts->build($shot, $bible, $story);
+            foreach ($shots as $index => $shot) {
+                $prompt = $prompts[$index] ?? '';
 
                 if (! isset($generateOrders[$shot->order])) {
                     $rows[] = $this->rowFromPrevious($shot, $prompt, $previous, $slug);
@@ -282,14 +292,22 @@ final class GenerateImagesCommand extends Command
     }
 
     /**
+     * @param  list<Shot>  $selected
      * @param  list<Shot>  $shots
+     * @param  list<string>  $prompts
      */
-    private function printPrompts(array $shots, VisualBible $bible, Story $story, string $slug): void
+    private function printPrompts(array $selected, array $shots, array $prompts, string $slug): void
     {
+        $byOrder = [];
+
+        foreach ($shots as $index => $shot) {
+            $byOrder[$shot->order] = $prompts[$index] ?? '';
+        }
+
         $this->newLine();
 
-        foreach ($shots as $shot) {
-            $prompt = $this->prompts->build($shot, $bible, $story);
+        foreach ($selected as $shot) {
+            $prompt = $byOrder[$shot->order] ?? '';
             $seed = $this->baseSeed($slug, $shot->order);
             $duration = $shot->end - $shot->start;
 
@@ -339,6 +357,8 @@ final class GenerateImagesCommand extends Command
             'sourceText' => $shot->sourceText,
             'framing' => $shot->framing,
             'motion' => $shot->motion,
+            'subject' => $shot->subject,
+            'threatStage' => $shot->threatStage,
             'prompt' => $prompt,
             'seed' => $seed,
             'imagePath' => $imagePath,
@@ -573,7 +593,7 @@ final class GenerateImagesCommand extends Command
     }
 
     /**
-     * @param  array{count: int, meanDuration: float, minDuration: float, maxDuration: float, framing: array<string, int>}  $stats
+     * @param  array{count: int, meanDuration: float, minDuration: float, maxDuration: float, framing: array<string, int>, subject: array<string, int>, threatStage: array<string, int>}  $stats
      * @param  list<array<string, mixed>>  $rows
      */
     private function renderSummary(array $stats, array $rows, string $shotsPath): void
@@ -591,6 +611,26 @@ final class GenerateImagesCommand extends Command
             }
 
             $this->line("    {$framing}: {$count}");
+        }
+
+        $this->line('  Subject:');
+
+        foreach ($stats['subject'] as $subject => $count) {
+            if ($count === 0) {
+                continue;
+            }
+
+            $this->line("    {$subject}: {$count}");
+        }
+
+        $this->line('  Amenaza:');
+
+        foreach ($stats['threatStage'] as $stage => $count) {
+            if ($count === 0) {
+                continue;
+            }
+
+            $this->line("    {$stage}: {$count}");
         }
 
         $this->line('  Plan: '.$shotsPath);
@@ -620,6 +660,58 @@ final class GenerateImagesCommand extends Command
         $this->line('<fg=red>Marcadores (regenerar con --only y, si hace falta, --force):</>');
         $this->line('<fg=red>  #'.implode('  #', $placeholders).'</>');
         $this->line('<fg=red>  php artisan story:images {file} --only='.implode(',', $placeholders).'</>');
+    }
+
+    /**
+     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
+     */
+    private function audioDuration(string $storyDirectory, array $timings): float
+    {
+        foreach (['narration_mix.wav', 'narration_mix.mp3', 'narration.wav'] as $name) {
+            $path = $storyDirectory.DIRECTORY_SEPARATOR.$name;
+
+            if (! $this->files->isFile($path)) {
+                continue;
+            }
+
+            $duration = $this->probeDuration($path);
+
+            if ($duration !== null) {
+                return $duration;
+            }
+        }
+
+        $scenes = $timings['scenes'] ?? [];
+
+        if ($scenes !== []) {
+            $last = $scenes[array_key_last($scenes)];
+
+            if (is_array($last) && isset($last['end'])) {
+                return (float) $last['end'];
+            }
+        }
+
+        throw new RuntimeException('No hay mix de audio ni timings de escena para teselar los planos.');
+    }
+
+    private function probeDuration(string $path): ?float
+    {
+        $process = new Process([
+            $this->ffprobe, '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'csv=p=0',
+            $path,
+        ]);
+        $process->setTimeout($this->timeout);
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            return null;
+        }
+
+        $duration = (float) trim($process->getOutput());
+
+        return $duration > 0 ? round($duration, 3) : null;
     }
 
     private function truncate(string $text, int $width = 48): string

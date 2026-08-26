@@ -6,7 +6,10 @@ namespace App\Services\Image;
 
 use App\DataObjects\Shot;
 use App\DataObjects\Story;
+use App\DataObjects\StoryScene;
 use Illuminate\Contracts\Config\Repository;
+use InvalidArgumentException;
+use RuntimeException;
 
 final class ShotPlanner
 {
@@ -25,6 +28,9 @@ final class ShotPlanner
         'pan_left',
         'pan_right',
     ];
+
+    /** Versión del algoritmo de planificación persistida en shots.json. */
+    public const VERSION = 2;
 
     private const ACTION_VERBS = [
         'burst', 'chase', 'crack', 'crash', 'dash', 'flee', 'grab', 'hit', 'jump',
@@ -56,7 +62,7 @@ final class ShotPlanner
      * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}|list<array<string, mixed>>  $timings
      * @return list<Shot>
      */
-    public function plan(array $timings, Story $story): array
+    public function plan(array $timings, Story $story, float $audioDuration): array
     {
         $sentences = $this->sentences($timings);
         $sceneEnds = $this->sceneEnds($timings, $sentences);
@@ -66,6 +72,7 @@ final class ShotPlanner
 
         foreach ($this->groupByScene($sentences, $knownScenes) as $sceneOrder => $sceneSentences) {
             $windows = $this->sentenceWindows($sceneSentences, $sceneEnds[$sceneOrder] ?? null);
+            $windows = $this->attachBeats($windows, $story);
             $groups = $this->groupWindows($windows);
             $groups = $this->mergeShort($groups);
 
@@ -74,16 +81,18 @@ final class ShotPlanner
             }
         }
 
-        return $this->toShots($units);
+        return $this->tile($this->toShots($units), $audioDuration);
     }
 
     /**
      * @param  list<Shot>  $shots
-     * @return array{count: int, meanDuration: float, minDuration: float, maxDuration: float, framing: array<string, int>}
+     * @return array{count: int, meanDuration: float, minDuration: float, maxDuration: float, framing: array<string, int>, subject: array<string, int>, threatStage: array<string, int>}
      */
     public function stats(array $shots): array
     {
         $framing = array_fill_keys(self::FRAMINGS, 0);
+        $subject = array_fill_keys(['protagonist', 'threat', 'both', 'environment', 'detail'], 0);
+        $threatStage = array_fill_keys(['hint', 'presence', 'reveal'], 0);
 
         if ($shots === []) {
             return [
@@ -92,6 +101,8 @@ final class ShotPlanner
                 'minDuration' => 0.0,
                 'maxDuration' => 0.0,
                 'framing' => $framing,
+                'subject' => $subject,
+                'threatStage' => $threatStage,
             ];
         }
 
@@ -100,6 +111,11 @@ final class ShotPlanner
         foreach ($shots as $shot) {
             $durations[] = $shot->end - $shot->start;
             $framing[$shot->framing] = ($framing[$shot->framing] ?? 0) + 1;
+            $subject[$shot->subject] = ($subject[$shot->subject] ?? 0) + 1;
+
+            if (is_string($shot->threatStage) && $shot->threatStage !== '') {
+                $threatStage[$shot->threatStage] = ($threatStage[$shot->threatStage] ?? 0) + 1;
+            }
         }
 
         return [
@@ -108,6 +124,8 @@ final class ShotPlanner
             'minDuration' => $this->seconds(min($durations)),
             'maxDuration' => $this->seconds(max($durations)),
             'framing' => $framing,
+            'subject' => $subject,
+            'threatStage' => $threatStage,
         ];
     }
 
@@ -164,8 +182,8 @@ final class ShotPlanner
     }
 
     /**
-     * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $windows
-     * @return list<array{sceneOrder: int, start: float, end: float, text: string}>
+     * @param  list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>  $windows
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
      */
     private function groupWindows(array $windows): array
     {
@@ -207,8 +225,8 @@ final class ShotPlanner
     }
 
     /**
-     * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $groups
-     * @return list<array{sceneOrder: int, start: float, end: float, text: string}>
+     * @param  list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>  $groups
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
      */
     private function mergeShort(array $groups): array
     {
@@ -246,8 +264,8 @@ final class ShotPlanner
     }
 
     /**
-     * @param  array{sceneOrder: int, start: float, end: float, text: string}  $window
-     * @return list<array{sceneOrder: int, start: float, end: float, text: string}>
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $window
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
      */
     private function splitOversized(array $window): array
     {
@@ -275,8 +293,8 @@ final class ShotPlanner
     }
 
     /**
-     * @param  array{sceneOrder: int, start: float, end: float, text: string}  $window
-     * @return list<array{sceneOrder: int, start: float, end: float, text: string}>
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $window
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
      */
     private function packByInternalPauses(array $window): array
     {
@@ -298,12 +316,7 @@ final class ShotPlanner
                 ? $window['end']
                 : $cursor + $span * ($weights[$index] / $totalWeight);
 
-            $segments[] = [
-                'sceneOrder' => $window['sceneOrder'],
-                'start' => $cursor,
-                'end' => $end,
-                'text' => $chunk,
-            ];
+            $segments[] = $this->unit($window, $cursor, $end, $chunk);
             $cursor = $end;
         }
 
@@ -338,8 +351,8 @@ final class ShotPlanner
     }
 
     /**
-     * @param  array{sceneOrder: int, start: float, end: float, text: string}  $window
-     * @return list<array{sceneOrder: int, start: float, end: float, text: string}>
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $window
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
      */
     private function splitEqual(array $window): array
     {
@@ -359,19 +372,19 @@ final class ShotPlanner
                 $pieceWords = array_slice($words, $from);
             }
 
-            $pieces[] = [
-                'sceneOrder' => $window['sceneOrder'],
-                'start' => $window['start'] + $index * $slice,
-                'end' => $index === $parts - 1 ? $window['end'] : $window['start'] + ($index + 1) * $slice,
-                'text' => implode(' ', $pieceWords) ?: $window['text'],
-            ];
+            $pieces[] = $this->unit(
+                $window,
+                $window['start'] + $index * $slice,
+                $index === $parts - 1 ? $window['end'] : $window['start'] + ($index + 1) * $slice,
+                implode(' ', $pieceWords) ?: $window['text'],
+            );
         }
 
         return $pieces;
     }
 
     /**
-     * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $units
+     * @param  list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>  $units
      * @return list<Shot>
      */
     private function toShots(array $units): array
@@ -382,10 +395,32 @@ final class ShotPlanner
         $previousFraming = null;
         $previousMotion = null;
         $previousScene = null;
+        $runKey = null;
+        $run = 0;
 
         foreach ($units as $index => $unit) {
+            $key = $unit['sceneOrder'].':'.$unit['beatIndex'];
+
+            if ($key === $runKey) {
+                $run++;
+            } else {
+                $run = 0;
+                $runKey = $key;
+            }
+
+            $subject = $this->subjectForRun($unit['subject'], $run);
+            $threatStage = in_array($subject, ['threat', 'both'], true)
+                ? $unit['threatStage']
+                : null;
+
             $sceneChanged = $previousScene !== $unit['sceneOrder'];
-            $framing = $this->nextFraming($framingIndex, $previousFraming, $sceneChanged);
+            $framing = $this->nextFraming(
+                $framingIndex,
+                $previousFraming,
+                $sceneChanged,
+                $subject,
+                $threatStage,
+            );
             $duration = $unit['end'] - $unit['start'];
             $motion = $this->nextMotion($motionIndex, $previousMotion, $unit['text'], $duration);
 
@@ -397,6 +432,8 @@ final class ShotPlanner
                 sourceText: $unit['text'],
                 framing: $framing,
                 motion: $motion,
+                subject: $subject,
+                threatStage: $threatStage,
                 imagePath: null,
             );
 
@@ -408,24 +445,246 @@ final class ShotPlanner
         return $shots;
     }
 
-    private function nextFraming(int &$index, ?string $previous, bool $sceneStart): string
+    /**
+     * Cubre la línea de tiempo del máster sin huecos: el primer plano arranca en 0,
+     * cada uno se sostiene hasta el siguiente y el último llega a $audioDuration.
+     *
+     * @param  list<Shot>  $shots
+     * @return list<Shot>
+     */
+    private function tile(array $shots, float $audioDuration): array
     {
-        $count = count(self::FRAMINGS);
-
-        if ($sceneStart) {
-            $index = 1;
-
-            if ($previous !== self::FRAMINGS[0]) {
-                return self::FRAMINGS[0];
-            }
-
-            $index = 2;
-
-            return self::FRAMINGS[1];
+        if ($shots === []) {
+            throw new RuntimeException('No hay planos para teselar sobre el audio.');
         }
 
+        if ($audioDuration <= 0) {
+            throw new InvalidArgumentException('La duración del audio debe ser mayor que 0.');
+        }
+
+        $audioDuration = $this->seconds($audioDuration);
+        $windows = [];
+
+        foreach ($shots as $index => $shot) {
+            $start = $index === 0 ? 0.0 : $this->seconds($shot->start);
+            $next = $shots[$index + 1] ?? null;
+            $end = $next === null ? $audioDuration : $this->seconds($next->start);
+
+            if ($end + 0.0005 < $start) {
+                throw new RuntimeException(sprintf(
+                    'El teselado produce un intervalo invertido en el plano %d (%.3f–%.3f).',
+                    $shot->order,
+                    $start,
+                    $end,
+                ));
+            }
+
+            $end = max($start, $end);
+
+            if ($next === null) {
+                $speechEnd = max($start, min($this->seconds($shot->end), $end));
+
+                if ($speechEnd > $start) {
+                    foreach ($this->splitOversizedHold($shot, $start, $speechEnd) as $piece) {
+                        $windows[] = $piece;
+                    }
+                }
+
+                if ($end > $speechEnd + 0.0005) {
+                    $windows[] = [
+                        'shot' => $shot,
+                        'start' => $this->seconds($speechEnd),
+                        'end' => $this->seconds($end),
+                        'continuation' => false,
+                        'closing' => true,
+                    ];
+                }
+            } else {
+                foreach ($this->splitOversizedHold($shot, $start, $end) as $piece) {
+                    $windows[] = $piece;
+                }
+            }
+        }
+
+        $tiled = [];
+        $framingIndex = 0;
+        $motionIndex = 0;
+        $previousFraming = null;
+        $previousMotion = null;
+
+        foreach ($windows as $index => $piece) {
+            $source = $piece['shot'];
+            $closing = $piece['closing'] ?? false;
+            $framing = $source->framing;
+            $motion = $source->motion;
+            $subject = $source->subject;
+            $threatStage = $source->threatStage;
+            $duration = $piece['end'] - $piece['start'];
+
+            if ($closing) {
+                $subject = 'environment';
+                $threatStage = null;
+                $motion = 'static';
+                $framing = $this->nextFraming(
+                    $framingIndex,
+                    $previousFraming,
+                    false,
+                    $subject,
+                    null,
+                );
+            } else {
+                if ($piece['continuation'] || ($previousFraming !== null && $framing === $previousFraming)) {
+                    $framing = $this->nextFraming(
+                        $framingIndex,
+                        $previousFraming,
+                        false,
+                        $source->subject,
+                        $source->threatStage,
+                    );
+                }
+
+                if ($piece['continuation'] || ($previousMotion !== null && $motion === $previousMotion)) {
+                    $motion = $this->nextMotion($motionIndex, $previousMotion, $source->sourceText, $duration);
+                }
+            }
+
+            $tiled[] = new Shot(
+                order: $index + 1,
+                sceneOrder: $source->sceneOrder,
+                start: $this->seconds($piece['start']),
+                end: $this->seconds($piece['end']),
+                sourceText: $source->sourceText,
+                framing: $framing,
+                motion: $motion,
+                subject: $subject,
+                threatStage: $threatStage,
+                imagePath: $source->imagePath,
+            );
+
+            $previousFraming = $framing;
+            $previousMotion = $motion;
+        }
+
+        $sum = 0.0;
+
+        foreach ($tiled as $shot) {
+            $sum += $shot->end - $shot->start;
+        }
+
+        if (abs($sum - $audioDuration) > 0.01) {
+            throw new RuntimeException(sprintf(
+                'El teselado cubre %.3f s y el audio dura %.3f s.',
+                $sum,
+                $audioDuration,
+            ));
+        }
+
+        return $tiled;
+    }
+
+    /**
+     * Si absorber silencio deja un plano más de 3 s por encima de max_duration, parte el exceso.
+     *
+     * @return list<array{shot: Shot, start: float, end: float, continuation: bool, closing?: bool}>
+     */
+    private function splitOversizedHold(Shot $shot, float $start, float $end): array
+    {
+        $maxHold = $this->maxDuration + 3.0;
+        $pieces = [];
+        $cursor = $start;
+        $continuation = false;
+
+        while (($end - $cursor) > $maxHold + 0.0005) {
+            $cut = $this->seconds($cursor + $this->maxDuration);
+            $pieces[] = [
+                'shot' => $shot,
+                'start' => $this->seconds($cursor),
+                'end' => $cut,
+                'continuation' => $continuation,
+            ];
+            $cursor = $cut;
+            $continuation = true;
+        }
+
+        $pieces[] = [
+            'shot' => $shot,
+            'start' => $this->seconds($cursor),
+            'end' => $this->seconds($end),
+            'continuation' => $continuation,
+        ];
+
+        return $pieces;
+    }
+
+    private function subjectForRun(string $original, int $run): string
+    {
+        if ($run === 0) {
+            return $original;
+        }
+
+        $alternates = ['detail', 'environment'];
+        $start = $original === 'detail' ? 1 : 0;
+
+        return $alternates[($run - 1 + $start) % 2];
+    }
+
+    private function nextFraming(
+        int &$index,
+        ?string $previous,
+        bool $sceneStart,
+        string $subject,
+        ?string $stage,
+    ): string {
+        $pool = $this->framingPool($subject, $stage);
+
+        if ($sceneStart) {
+            $preferred = match (true) {
+                $subject === 'threat' && $stage === 'hint' => ['wide establishing', 'medium shot'],
+                $stage === 'reveal' => ['close detail', 'low angle'],
+                default => ['wide establishing', 'medium shot'],
+            };
+
+            $preferred = array_values(array_intersect($preferred, $pool));
+
+            if ($preferred === []) {
+                $preferred = $pool;
+            }
+
+            foreach ($preferred as $framing) {
+                if ($framing !== $previous) {
+                    return $framing;
+                }
+            }
+        }
+
+        return $this->pickFromPool($pool, $previous, $index);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function framingPool(string $subject, ?string $stage): array
+    {
+        if ($subject === 'threat' && $stage === 'hint') {
+            return ['wide establishing', 'medium shot'];
+        }
+
+        if ($stage === 'reveal') {
+            return ['close detail', 'low angle', 'extreme close up', 'over the shoulder'];
+        }
+
+        return self::FRAMINGS;
+    }
+
+    /**
+     * @param  list<string>  $pool
+     */
+    private function pickFromPool(array $pool, ?string $previous, int &$index): string
+    {
+        $count = count($pool);
+
         for ($step = 0; $step < $count; $step++) {
-            $framing = self::FRAMINGS[$index % $count];
+            $framing = $pool[$index % $count];
             $index++;
 
             if ($framing !== $previous) {
@@ -433,7 +692,7 @@ final class ShotPlanner
             }
         }
 
-        return self::FRAMINGS[0];
+        return $pool[0];
     }
 
     private function nextMotion(int &$index, ?string $previous, string $text, float $duration): string
@@ -568,9 +827,125 @@ final class ShotPlanner
     }
 
     /**
-     * @param  array{sceneOrder: int, start: float, end: float, text: string}  $left
-     * @param  array{sceneOrder: int, start: float, end: float, text: string}  $right
-     * @return array{sceneOrder: int, start: float, end: float, text: string}
+     * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $windows
+     * @return list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>
+     */
+    private function attachBeats(array $windows, Story $story): array
+    {
+        if ($windows === []) {
+            return [];
+        }
+
+        $scene = $this->scene($story, $windows[0]['sceneOrder']);
+        $attached = [];
+
+        foreach ($windows as $index => $window) {
+            $beat = $this->beatForWindow($window['text'], $index, count($windows), $scene);
+            $attached[] = [
+                'sceneOrder' => $window['sceneOrder'],
+                'start' => $window['start'],
+                'end' => $window['end'],
+                'text' => $window['text'],
+                'beatIndex' => $beat['index'],
+                'subject' => $beat['subject'],
+                'threatStage' => $beat['threatStage'],
+            ];
+        }
+
+        return $attached;
+    }
+
+    /**
+     * @return array{index: int, subject: string, threatStage: ?string}
+     */
+    private function beatForWindow(string $text, int $sentenceIndex, int $sentenceCount, ?StoryScene $scene): array
+    {
+        $beats = $scene?->visualBeats ?? [];
+
+        if ($scene === null || $beats === []) {
+            return [
+                'index' => 0,
+                'subject' => 'environment',
+                'threatStage' => null,
+            ];
+        }
+
+        $index = $this->beatIndexByNarration($text, $scene->narration, count($beats));
+
+        if ($index === null) {
+            $index = (int) min(
+                count($beats) - 1,
+                floor($sentenceIndex * count($beats) / max($sentenceCount, 1)),
+            );
+        }
+
+        $beat = $beats[$index];
+
+        return [
+            'index' => $index,
+            'subject' => $beat['subject'],
+            'threatStage' => $beat['threatStage'],
+        ];
+    }
+
+    private function beatIndexByNarration(string $sourceText, string $narration, int $beatCount): ?int
+    {
+        $haystack = mb_strtolower($narration);
+        $needle = mb_strtolower($sourceText);
+
+        if ($haystack === '' || $needle === '' || $beatCount < 1) {
+            return null;
+        }
+
+        $pos = mb_strpos($haystack, $needle);
+
+        if ($pos === false) {
+            $snippet = mb_substr($needle, 0, 48);
+            $pos = $snippet === '' ? false : mb_strpos($haystack, $snippet);
+        }
+
+        if ($pos === false) {
+            return null;
+        }
+
+        $span = max(1, mb_strlen($haystack) - mb_strlen($needle));
+        $ratio = min(1.0, $pos / $span);
+
+        return min($beatCount - 1, (int) floor($ratio * $beatCount));
+    }
+
+    /**
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $base
+     * @return array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}
+     */
+    private function unit(array $base, float $start, float $end, string $text): array
+    {
+        return [
+            'sceneOrder' => $base['sceneOrder'],
+            'start' => $start,
+            'end' => $end,
+            'text' => $text,
+            'beatIndex' => $base['beatIndex'],
+            'subject' => $base['subject'],
+            'threatStage' => $base['threatStage'],
+        ];
+    }
+
+    private function scene(Story $story, int $order): ?StoryScene
+    {
+        foreach ($story->scenes as $scene) {
+            if ($scene->order === $order) {
+                return $scene;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $left
+     * @param  array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}  $right
+     * @return array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}
      */
     private function mergeUnits(array $left, array $right): array
     {
@@ -579,6 +954,9 @@ final class ShotPlanner
             'start' => $left['start'],
             'end' => $right['end'],
             'text' => trim($left['text'].' '.$right['text']),
+            'beatIndex' => $left['beatIndex'],
+            'subject' => $left['subject'],
+            'threatStage' => $left['threatStage'],
         ];
     }
 

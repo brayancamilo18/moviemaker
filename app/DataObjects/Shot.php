@@ -14,6 +14,8 @@ final readonly class Shot
         public string $sourceText,
         public string $framing,
         public string $motion,
+        public string $subject,
+        public ?string $threatStage,
         public ?string $imagePath,
     ) {}
 }

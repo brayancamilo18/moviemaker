@@ -106,6 +106,12 @@ final class MixCommand extends Command
         }
 
         $this->renderTracks($result['tracks']);
+        $this->line(sprintf(
+            'Duración del máster: %.3f s (última frase %.3f s + cola %.1f s).',
+            $result['duration'],
+            $result['lastPhraseEnd'],
+            $result['tailSeconds'],
+        ));
 
         if ($dryRun) {
             $this->comment('Simulación: no se generó audio.');

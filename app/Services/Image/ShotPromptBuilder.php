@@ -12,7 +12,12 @@ use Illuminate\Contracts\Config\Repository;
 
 final class ShotPromptBuilder
 {
-    private const MAX_WORDS = 60;
+    private const MAX_WORDS = 75;
+
+    /**
+     * @var list<string>
+     */
+    private const FIGURE_SUBJECTS = ['protagonist', 'threat', 'both'];
 
     /**
      * @var array<string, string>
@@ -50,10 +55,38 @@ final class ShotPromptBuilder
 
     public function build(Shot $shot, VisualBible $bible, Story $story): string
     {
+        $rotation = [];
+
+        return $this->compose($shot, $bible, $story, $rotation);
+    }
+
+    /**
+     * @param  list<Shot>  $shots
+     * @return list<string>
+     */
+    public function previewAll(array $shots, VisualBible $bible, Story $story): array
+    {
+        $rotation = [];
+        $prompts = [];
+
+        foreach ($shots as $shot) {
+            $prompts[] = $this->compose($shot, $bible, $story, $rotation);
+        }
+
+        return $prompts;
+    }
+
+    /**
+     * @param  array<string, int>  $rotation
+     */
+    private function compose(Shot $shot, VisualBible $bible, Story $story, array &$rotation): string
+    {
+        $beat = $this->resolveBeat($shot, $story);
+
         $parts = array_filter([
-            $shot->framing,
-            $this->visualBeat($shot, $story),
-            $this->entityLine($shot, $bible),
+            $this->figureLine($shot, $bible, $rotation),
+            $this->sanitize($this->beatDescription($beat)),
+            $this->sanitize($shot->framing),
             $this->sanitize($bible->setting),
             $this->sanitize($bible->timeOfDay),
             $this->sanitize($bible->weather),
@@ -62,31 +95,142 @@ final class ShotPromptBuilder
             $this->negatives($bible),
         ], static fn (string $part): bool => trim($part) !== '');
 
-        $prompt = $this->soften(implode(', ', $parts));
-
-        return $this->limitWords($prompt);
+        return $this->limitWords($this->soften(implode(', ', $parts)));
     }
 
-    private function visualBeat(Shot $shot, Story $story): string
+    /**
+     * @param  array<string, int>  $rotation
+     */
+    private function figureLine(Shot $shot, VisualBible $bible, array &$rotation): string
+    {
+        $subject = $shot->subject;
+        $threatStage = $shot->threatStage;
+
+        if (! in_array($subject, self::FIGURE_SUBJECTS, true)) {
+            return '';
+        }
+
+        $parts = [];
+
+        if (in_array($subject, ['protagonist', 'both'], true)) {
+            $character = $this->resolveCharacter($shot, $bible);
+
+            if ($character !== null) {
+                $parts[] = $this->sanitize($character['bodyDescriptor']);
+                $framing = $this->nextFraming($character, $rotation);
+
+                if ($framing !== '') {
+                    $parts[] = $this->sanitize($framing);
+                }
+            }
+        }
+
+        if (in_array($subject, ['threat', 'both'], true)) {
+            $parts[] = $this->sanitize($bible->threat['nature']);
+            $parts[] = $this->sanitize($this->threatStageDescriptor($bible, $threatStage));
+        }
+
+        return implode(', ', array_filter($parts));
+    }
+
+    /**
+     * @param  array{slug: string, bodyDescriptor: string, framingOptions: list<string>}  $character
+     * @param  array<string, int>  $rotation
+     */
+    private function nextFraming(array $character, array &$rotation): string
+    {
+        $options = $character['framingOptions'];
+
+        if ($options === []) {
+            return '';
+        }
+
+        $slug = $character['slug'];
+        $index = $rotation[$slug] ?? 0;
+        $rotation[$slug] = $index + 1;
+
+        return $options[$index % count($options)];
+    }
+
+    /**
+     * @return array{slug: string, bodyDescriptor: string, framingOptions: list<string>}|null
+     */
+    private function resolveCharacter(Shot $shot, VisualBible $bible): ?array
+    {
+        if ($bible->characters === []) {
+            return null;
+        }
+
+        $haystack = $this->fold($shot->sourceText);
+
+        foreach ($bible->characters as $character) {
+            if ($this->mentions($haystack, $character['slug'])) {
+                return $character;
+            }
+        }
+
+        return $bible->characters[0];
+    }
+
+    private function threatStageDescriptor(VisualBible $bible, ?string $stage): string
+    {
+        if ($stage === null || $stage === '') {
+            return '';
+        }
+
+        foreach ($bible->threat['stages'] as $item) {
+            if ($item['stage'] === $stage) {
+                return $item['descriptor'];
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @return array{description: string, subject: string, threatStage: ?string}|null
+     */
+    private function resolveBeat(Shot $shot, Story $story): ?array
     {
         $scene = $this->scene($story, $shot->sceneOrder);
         $beats = $scene?->visualBeats ?? [];
 
-        if ($scene === null || $beats === []) {
-            return $this->sanitize($scene?->imagePrompt ?? '');
+        if ($scene === null) {
+            return null;
         }
 
-        $beat = $this->beatByNarrationPosition($shot->sourceText, $scene->narration, $beats)
+        if ($beats === []) {
+            $description = trim($scene->imagePrompt);
+
+            if ($description === '') {
+                return null;
+            }
+
+            return [
+                'description' => $description,
+                'subject' => 'environment',
+                'threatStage' => null,
+            ];
+        }
+
+        return $this->beatByNarrationPosition($shot->sourceText, $scene->narration, $beats)
             ?? $this->beatByOverlap($shot->sourceText, $beats)
             ?? $beats[0];
-
-        return $this->sanitize($beat);
     }
 
     /**
-     * @param  list<string>  $beats
+     * @param  array{description: string, subject: string, threatStage: ?string}|null  $beat
      */
-    private function beatByNarrationPosition(string $sourceText, string $narration, array $beats): ?string
+    private function beatDescription(?array $beat): string
+    {
+        return $beat['description'] ?? '';
+    }
+
+    /**
+     * @param  list<array{description: string, subject: string, threatStage: ?string}>  $beats
+     * @return array{description: string, subject: string, threatStage: ?string}|null
+     */
+    private function beatByNarrationPosition(string $sourceText, string $narration, array $beats): ?array
     {
         $haystack = $this->fold($narration);
         $needle = $this->fold($sourceText);
@@ -114,16 +258,17 @@ final class ShotPromptBuilder
     }
 
     /**
-     * @param  list<string>  $beats
+     * @param  list<array{description: string, subject: string, threatStage: ?string}>  $beats
+     * @return array{description: string, subject: string, threatStage: ?string}|null
      */
-    private function beatByOverlap(string $sourceText, array $beats): ?string
+    private function beatByOverlap(string $sourceText, array $beats): ?array
     {
         $haystack = $this->fold($sourceText);
         $best = null;
         $bestScore = 0;
 
         foreach ($beats as $beat) {
-            $score = $this->overlap($haystack, $this->fold($beat));
+            $score = $this->overlap($haystack, $this->fold($this->beatDescription($beat)));
 
             if ($score > $bestScore) {
                 $bestScore = $score;
@@ -134,30 +279,6 @@ final class ShotPromptBuilder
         return $best;
     }
 
-    private function entityLine(Shot $shot, VisualBible $bible): string
-    {
-        $haystack = $this->fold($shot->sourceText);
-        $chunks = [];
-
-        foreach ($bible->characters as $character) {
-            if (! $this->mentions($haystack, $character['slug'])) {
-                continue;
-            }
-
-            $chunks[] = $this->sanitize(trim($character['descriptor'].', '.$character['framingRule']));
-        }
-
-        foreach ($bible->recurringObjects as $object) {
-            if (! $this->mentions($haystack, $object['slug'])) {
-                continue;
-            }
-
-            $chunks[] = $this->sanitize($object['descriptor']);
-        }
-
-        return implode(', ', array_filter($chunks));
-    }
-
     private function paletteLine(VisualBible $bible): string
     {
         return implode(', ', $bible->palette);
@@ -165,7 +286,13 @@ final class ShotPromptBuilder
 
     private function negatives(VisualBible $bible): string
     {
-        $items = ['no text', 'no watermark', 'no faces', 'no modern logos'];
+        $items = [
+            'no text',
+            'no watermark',
+            'no logos',
+            'no clear facial features',
+            'no direct eye contact',
+        ];
         $seen = array_map(static fn (string $item): string => mb_strtolower($item), $items);
 
         foreach ($bible->avoid as $item) {

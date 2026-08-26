@@ -6,6 +6,8 @@ namespace App\Providers;
 
 use App\Contracts\ImageGenerator;
 use App\Contracts\TextToSpeech;
+use App\Services\Audio\FreesoundClient;
+use App\Services\Audio\SoundResolver;
 use App\Services\Image\PollinationsGenerator;
 use App\Services\Llm\GeminiClient;
 use App\Services\Tts\KokoroTts;
@@ -50,6 +52,22 @@ class AppServiceProvider extends ServiceProvider
                 cacheDirectory: storage_path('app/'.$tts['cache_path']),
             );
         });
+
+        $this->app->singleton(FreesoundClient::class, function (Application $app): FreesoundClient {
+            /** @var array{token: ?string, base_url: string, timeout: int, rate_limit_seconds: float, max_retries: int} $freesound */
+            $freesound = $app->make('config')->get('stories.audio.freesound');
+
+            return new FreesoundClient(
+                http: $app->make(Factory::class),
+                token: (string) ($freesound['token'] ?? ''),
+                baseUrl: (string) $freesound['base_url'],
+                timeout: (int) $freesound['timeout'],
+                rateLimitSeconds: (float) $freesound['rate_limit_seconds'],
+                maxRetries: (int) $freesound['max_retries'],
+            );
+        });
+
+        $this->app->singleton(SoundResolver::class);
 
         $this->app->singleton(ImageGenerator::class, function (Application $app): ImageGenerator {
             $provider = (string) $app->make('config')->get('stories.images.provider');

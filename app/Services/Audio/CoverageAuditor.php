@@ -19,6 +19,7 @@ final class CoverageAuditor
     public function __construct(
         private StorySoundManifest $manifest,
         private LibraryClipProcessor $processor,
+        private AmbienceBuilder $ambience,
         private Filesystem $files,
     ) {}
 
@@ -116,14 +117,15 @@ final class CoverageAuditor
         }
 
         try {
-            $masterDuration = $this->processor->duration($narrationPath);
+            $this->processor->duration($narrationPath);
         } catch (Throwable) {
             $blocking[] = 'No se pudo leer la duración del máster de narración.';
 
             return;
         }
 
-        $windows = $this->sceneWindows($narrationPath);
+        $timings = $this->readTimings($narrationPath);
+        $windows = $this->sceneWindowsFrom($timings);
 
         if ($windows === []) {
             $blocking[] = 'No hay timings.json con ventanas de escena junto al máster.';
@@ -140,21 +142,14 @@ final class CoverageAuditor
         $ordered = array_values($windows);
         usort($ordered, static fn (array $left, array $right): int => $left['start'] <=> $right['start']);
 
-        $first = $ordered[0];
         $last = $ordered[array_key_last($ordered)];
+        $expected = $this->ambience->expectedDuration($timings);
 
-        if (abs($first['start'] - 0.0) > self::TOLERANCE_SECONDS) {
+        if ($last['end'] > $expected + self::TOLERANCE_SECONDS) {
             $blocking[] = sprintf(
-                'La cama de ambiente no empieza con el máster (inicio %.3f s).',
-                $first['start'],
-            );
-        }
-
-        if (abs($last['end'] - $masterDuration) > self::TOLERANCE_SECONDS) {
-            $blocking[] = sprintf(
-                'La cama de ambiente no cubre el máster (fin %.3f s, narración %.3f s).',
+                'La última escena acaba en %.3f s y el máster previsto es %.3f s (última frase + cola).',
                 $last['end'],
-                $masterDuration,
+                $expected,
             );
         }
 
@@ -327,9 +322,9 @@ final class CoverageAuditor
     }
 
     /**
-     * @return array<int, array{order: int, start: float, end: float}>
+     * @return array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}
      */
-    private function sceneWindows(string $narrationPath): array
+    private function readTimings(string $narrationPath): array
     {
         $path = dirname($narrationPath).DIRECTORY_SEPARATOR.'timings.json';
 
@@ -344,9 +339,18 @@ final class CoverageAuditor
             return [];
         }
 
+        return $decoded;
+    }
+
+    /**
+     * @param  array{scenes?: list<array<string, mixed>>}  $timings
+     * @return array<int, array{order: int, start: float, end: float}>
+     */
+    private function sceneWindowsFrom(array $timings): array
+    {
         $windows = [];
 
-        foreach (is_array($decoded['scenes'] ?? null) ? $decoded['scenes'] : [] as $row) {
+        foreach (is_array($timings['scenes'] ?? null) ? $timings['scenes'] : [] as $row) {
             if (! is_array($row)) {
                 continue;
             }

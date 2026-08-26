@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Contracts\ImageGenerator;
+use App\Services\Image\ShotPlanner;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\Response;
@@ -58,6 +59,15 @@ final class ImageGenerationTest extends TestCase
         $file = $this->writeStory(8);
 
         $this->artisan('story:images', ['file' => $file])->assertSuccessful();
+
+        $slug = pathinfo($file, PATHINFO_FILENAME);
+        $decoded = json_decode(
+            (string) file_get_contents($this->storiesDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $this->assertSame(ShotPlanner::VERSION, $decoded['plannerVersion'] ?? null);
+
         $this->assertGreaterThan(0, $this->promptRequestCount());
 
         $this->fakePromptResponses($this->jpeg());

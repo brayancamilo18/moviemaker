@@ -243,14 +243,18 @@ final class GenerateStoryCommand extends Command
     private function renderStoryTable(Story $story, ?StoryReview $review, string $mode, ?string $loreName): void
     {
         $seconds = $story->estimatedDurationSeconds();
+        $metrics = $story->visualBeatMetrics();
+        $stages = $metrics['threatStages'];
 
         $this->table(
-            ['Título', 'Escenas', 'Palabras', 'Duración', 'Modo', 'Folclore', 'Score', 'Verdict'],
+            ['Título', 'Escenas', 'Palabras', 'Duración', 'Figuras', 'Amenaza', 'Modo', 'Folclore', 'Score', 'Verdict'],
             [[
                 $story->title,
                 (string) count($story->scenes),
                 (string) $story->wordCount(),
                 sprintf('%02d:%02d', intdiv($seconds, 60), $seconds % 60),
+                ((int) round($metrics['figureRatio'] * 100)).'%',
+                sprintf('hint %d, presence %d, reveal %d', $stages['hint'], $stages['presence'], $stages['reveal']),
                 $mode,
                 $loreName ?? '—',
                 $review instanceof StoryReview ? (string) $review->score : '—',

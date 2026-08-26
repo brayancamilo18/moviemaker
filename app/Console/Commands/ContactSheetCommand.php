@@ -103,7 +103,7 @@ final class ContactSheetCommand extends Command
     }
 
     /**
-     * @param  list<array{order: int, duration: float, path: ?string, placeholder: bool}>  $page
+     * @param  list<array{order: int, duration: float, path: ?string, placeholder: bool, subject: string, threatStage: ?string}>  $page
      */
     private function renderPage(array $page, string $output): void
     {
@@ -119,7 +119,7 @@ final class ContactSheetCommand extends Command
     }
 
     /**
-     * @param  list<array{order: int, duration: float, path: ?string, placeholder: bool}>  $page
+     * @param  list<array{order: int, duration: float, path: ?string, placeholder: bool, subject: string, threatStage: ?string}>  $page
      * @return list<string>
      */
     private function stampCells(array $page, string $workDir): array
@@ -144,7 +144,7 @@ final class ContactSheetCommand extends Command
     }
 
     /**
-     * @param  array{order: int, duration: float, path: ?string, placeholder: bool}  $shot
+     * @param  array{order: int, duration: float, path: ?string, placeholder: bool, subject: string, threatStage: ?string}  $shot
      */
     private function writeStampedCell(string $destination, array $shot): void
     {
@@ -155,9 +155,56 @@ final class ContactSheetCommand extends Command
             $this->pasteSource($canvas, $sourcePath);
         }
 
-        $label = sprintf('#%d  %.1fs', $shot['order'], $shot['duration']);
-        $this->stampLabel($canvas, $label, $shot['placeholder']);
+        $this->stampLabel($canvas, $this->cellLines($shot), $this->labelInk($shot));
         $this->saveJpeg($canvas, $destination);
+    }
+
+    /**
+     * @param  array{order: int, duration: float, path: ?string, placeholder: bool, subject: string, threatStage: ?string}  $shot
+     * @return list<string>
+     */
+    private function cellLines(array $shot): array
+    {
+        $lines = [sprintf('#%d  %.1fs', $shot['order'], $shot['duration'])];
+        $code = $this->subjectAbbrev($shot['subject']);
+
+        if ($code === '') {
+            return $lines;
+        }
+
+        $stage = $shot['threatStage'];
+        $lines[] = is_string($stage) && $stage !== '' ? $code.' '.$stage : $code;
+
+        return $lines;
+    }
+
+    private function subjectAbbrev(string $subject): string
+    {
+        return match ($subject) {
+            'protagonist' => 'P',
+            'threat' => 'T',
+            'both' => 'PT',
+            'environment' => 'E',
+            'detail' => 'D',
+            default => '',
+        };
+    }
+
+    /**
+     * @param  array{placeholder: bool, subject: string}  $shot
+     * @return array{0: int, 1: int, 2: int}
+     */
+    private function labelInk(array $shot): array
+    {
+        if ($shot['placeholder']) {
+            return [255, 210, 70];
+        }
+
+        if (in_array($shot['subject'], ['protagonist', 'threat', 'both'], true)) {
+            return [70, 220, 110];
+        }
+
+        return [170, 170, 170];
     }
 
     private function writeBlankCell(string $destination): void
@@ -207,33 +254,56 @@ final class ContactSheetCommand extends Command
 
     /**
      * @param  \GdImage  $canvas
+     * @param  list<string>  $lines
+     * @param  array{0: int, 1: int, 2: int}  $ink
      */
-    private function stampLabel(object $canvas, string $label, bool $placeholder): void
+    private function stampLabel(object $canvas, array $lines, array $ink): void
     {
-        $font = 5;
-        $textWidth = imagefontwidth($font) * strlen($label);
-        $textHeight = imagefontheight($font);
-        $tile = imagecreatetruecolor($textWidth, $textHeight);
+        if ($lines === []) {
+            return;
+        }
 
-        $ink = $placeholder
-            ? [255, 210, 70]
-            : [255, 255, 255];
+        $font = 5;
+        $charWidth = imagefontwidth($font);
+        $lineHeight = imagefontheight($font);
+        $maxChars = 0;
+
+        foreach ($lines as $line) {
+            $maxChars = max($maxChars, strlen($line));
+        }
+
+        $textWidth = $charWidth * $maxChars;
+        $textHeight = $lineHeight * count($lines);
+        $tile = imagecreatetruecolor($textWidth, $textHeight);
+        $color = imagecolorallocate($canvas, $ink[0], $ink[1], $ink[2]);
 
         if ($tile === false) {
-            imagestring(
-                $canvas,
-                $font,
-                8,
-                self::CELL_HEIGHT - 16,
-                $label,
-                imagecolorallocate($canvas, $ink[0], $ink[1], $ink[2]),
-            );
+            foreach ($lines as $index => $line) {
+                imagestring(
+                    $canvas,
+                    $font,
+                    8,
+                    self::CELL_HEIGHT - 16 - ((count($lines) - 1 - $index) * $lineHeight),
+                    $line,
+                    $color,
+                );
+            }
 
             return;
         }
 
         imagefill($tile, 0, 0, imagecolorallocate($tile, 0, 0, 0));
-        imagestring($tile, $font, 0, 0, $label, imagecolorallocate($tile, $ink[0], $ink[1], $ink[2]));
+
+        foreach ($lines as $index => $line) {
+            imagestring(
+                $tile,
+                $font,
+                0,
+                $index * $lineHeight,
+                $line,
+                imagecolorallocate($tile, $ink[0], $ink[1], $ink[2]),
+            );
+        }
 
         $scale = 2;
         $dstW = $textWidth * $scale;
@@ -314,7 +384,7 @@ final class ContactSheetCommand extends Command
     }
 
     /**
-     * @return list<array{order: int, duration: float, path: ?string, placeholder: bool}>|null
+     * @return list<array{order: int, duration: float, path: ?string, placeholder: bool, subject: string, threatStage: ?string}>|null
      */
     private function readShots(string $path): ?array
     {
@@ -353,6 +423,10 @@ final class ContactSheetCommand extends Command
                 'duration' => max(0.0, $end - $start),
                 'path' => $imagePath,
                 'placeholder' => $placeholder,
+                'subject' => is_string($row['subject'] ?? null) ? $row['subject'] : '',
+                'threatStage' => is_string($row['threatStage'] ?? null) && $row['threatStage'] !== ''
+                    ? $row['threatStage']
+                    : null,
             ];
         }
 
