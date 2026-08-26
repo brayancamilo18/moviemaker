@@ -62,7 +62,7 @@ final class StorySchema
                     'description' => 'Story scenes in narrative order. Prefer twelve to sixteen scenes. Each narration is 120 to 150 words of English. Combined narration about 1600 words.',
                     'items' => [
                         'type' => 'OBJECT',
-                        'description' => 'One scene: spoken narration plus visual beats, ambient bed, and optional sound effects.',
+                        'description' => 'One scene: spoken narration, a visual summary, and an ambient bed.',
                         'properties' => [
                             'order' => [
                                 'type' => 'INTEGER',
@@ -72,29 +72,9 @@ final class StorySchema
                                 'type' => 'STRING',
                                 'description' => 'Spoken narration in English, first person, past tense. Short sentences. No digits, acronyms, or symbols: write them as words. 120 to 150 words.',
                             ],
-                            'visualBeats' => [
-                                'type' => 'ARRAY',
-                                'description' => 'Short visual stills for this scene, in narrative order. Four to eight beats. Each beat is an object with description, subject, and threatStage.',
-                                'items' => [
-                                    'type' => 'OBJECT',
-                                    'description' => 'One still image the camera would see, in English.',
-                                    'properties' => [
-                                        'description' => [
-                                            'type' => 'STRING',
-                                            'description' => 'Visual description of the still, in English. 8 to 14 words. Static image, no recognizable faces, no proper names, no gore. Self-contained; copied into image prompts. Prefer light, weather, and objects over violence. Write blood as dark stain, a corpse as still figure.',
-                                        ],
-                                        'subject' => [
-                                            'type' => 'STRING',
-                                            'description' => 'Exactly one of: protagonist, threat, both, environment, detail.',
-                                        ],
-                                        'threatStage' => [
-                                            'type' => 'STRING',
-                                            'nullable' => true,
-                                            'description' => 'Required when subject is threat or both: hint, presence, or reveal. Null otherwise.',
-                                        ],
-                                    ],
-                                    'required' => ['description', 'subject', 'threatStage'],
-                                ],
+                            'visualSummary' => [
+                                'type' => 'STRING',
+                                'description' => 'What this scene looks like overall, in English, 10 to 15 words. Context for the shot director. Not an image prompt.',
                             ],
                             'ambience' => [
                                 'type' => 'OBJECT',
@@ -119,39 +99,8 @@ final class StorySchema
                                 ],
                                 'required' => ['query', 'tags', 'intensity'],
                             ],
-                            'soundEffects' => [
-                                'type' => 'ARRAY',
-                                'description' => 'Punctual sound effects for this scene. Zero to two. Prefer none. Overloading turns horror into comedy. Empty array if none.',
-                                'items' => [
-                                    'type' => 'OBJECT',
-                                    'description' => 'One punctual hit timed to an exact fragment of this scene narration.',
-                                    'properties' => [
-                                        'query' => [
-                                            'type' => 'STRING',
-                                            'description' => 'Two to four English words as a sound-library search, e.g. door creak slow, glass crack.',
-                                        ],
-                                        'tags' => [
-                                            'type' => 'ARRAY',
-                                            'description' => 'Two to three normalized lowercase English tags for this hit.',
-                                            'items' => [
-                                                'type' => 'STRING',
-                                                'description' => 'One normalized lowercase English tag, e.g. door, creak.',
-                                            ],
-                                        ],
-                                        'anchorText' => [
-                                            'type' => 'STRING',
-                                            'description' => 'Exact fragment from this scene narration where the sound belongs.',
-                                        ],
-                                        'importance' => [
-                                            'type' => 'STRING',
-                                            'description' => 'Exactly one of: key (story-critical hit) or texture (atmosphere spice).',
-                                        ],
-                                    ],
-                                    'required' => ['query', 'tags', 'anchorText', 'importance'],
-                                ],
-                            ],
                         ],
-                        'required' => ['order', 'narration', 'visualBeats', 'ambience', 'soundEffects'],
+                        'required' => ['order', 'narration', 'visualSummary', 'ambience'],
                     ],
                 ],
             ],

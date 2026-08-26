@@ -83,18 +83,6 @@ final class SoundResolver
             ];
         }
 
-        foreach ($story->scenes as $scene) {
-            foreach ($scene->soundEffectSpecs() as $effect) {
-                $signals[] = [
-                    'type' => 'sfx',
-                    'query' => $effect->query,
-                    'tags' => $effect->tags !== [] ? $effect->tags : SoundLibraryImporter::tagsFromQuery($effect->query),
-                    'role' => 'scene',
-                    'sceneOrder' => $scene->order,
-                ];
-            }
-        }
-
         return $signals;
     }
 

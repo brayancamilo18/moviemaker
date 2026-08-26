@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\DataObjects\Story;
 use App\Services\Audio\AudioLibrary;
+use App\Services\Audio\StoryMixer;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
@@ -56,11 +58,11 @@ final class StorySoundsAndMixTest extends TestCase
         $storyFile = $this->writeStory();
         $this->writeTimings();
         $this->writeNarration();
+        $this->fakeSilentSfxDirector();
 
         $this->artisan('story:sounds', ['file' => $storyFile])
             ->assertSuccessful()
             ->expectsOutputToContain('ambience.1')
-            ->expectsOutputToContain('sfx.1.1')
             ->expectsOutputToContain('music.hook')
             ->expectsOutputToContain('Escalera')
             ->expectsOutputToContain('Reparto por origen');
@@ -71,6 +73,7 @@ final class StorySoundsAndMixTest extends TestCase
         $manifest = json_decode((string) file_get_contents($path), true);
         $this->assertIsArray($manifest);
         $this->assertSame('ambience.1', $manifest['cues'][0]['id']);
+        $this->assertSame([], $manifest['directedSfx'] ?? null);
         $original = $manifest['cues'][0]['file'];
         $this->assertNotSame('', $original);
 
@@ -89,7 +92,6 @@ final class StorySoundsAndMixTest extends TestCase
 
         $refreshed = json_decode((string) file_get_contents($path), true);
         $this->assertSame($original, $refreshed['cues'][0]['file']);
-        Http::assertNothingSent();
     }
 
     public function test_story_mix_dry_run_prints_tracks_without_writing_mix(): void
@@ -100,6 +102,7 @@ final class StorySoundsAndMixTest extends TestCase
         $storyFile = $this->writeStory();
         $this->writeTimings();
         $this->writeNarration();
+        $this->fakeSilentSfxDirector();
 
         $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
 
@@ -111,7 +114,6 @@ final class StorySoundsAndMixTest extends TestCase
             ->assertSuccessful()
             ->expectsOutputToContain('narration')
             ->expectsOutputToContain('ambience')
-            ->expectsOutputToContain('sfx')
             ->expectsOutputToContain('Simulación')
             ->expectsOutputToContain('Duración del máster');
 
@@ -123,10 +125,11 @@ final class StorySoundsAndMixTest extends TestCase
         $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind', 'night'], 3.0);
         $this->indexClip('sfx/door-1.wav', 'sfx', ['door', 'creak'], 0.8);
         $this->indexClip('music/drone-1.wav', 'music', ['dark', 'drone'], 3.0);
-        $alt = $this->indexClip('sfx/door-alt.wav', 'sfx', ['door', 'creak'], 0.8);
+        $alt = $this->indexClip('ambience/wind-alt.wav', 'ambience', ['wind', 'night'], 3.0);
         $storyFile = $this->writeStory();
         $this->writeTimings();
         $this->writeNarration();
+        $this->fakeSilentSfxDirector();
 
         $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
 
@@ -134,21 +137,23 @@ final class StorySoundsAndMixTest extends TestCase
         $manifest = json_decode((string) file_get_contents($path), true);
 
         foreach ($manifest['cues'] as &$cue) {
-            if (($cue['id'] ?? '') === 'sfx.1.1') {
-                $cue['file'] = 'sfx/door-alt.wav';
+            if (($cue['id'] ?? '') === 'ambience.1') {
+                $cue['file'] = 'ambience/wind-alt.wav';
             }
         }
         unset($cue);
         file_put_contents($path, json_encode($manifest, JSON_PRETTY_PRINT)."\n");
 
-        $this->artisan('story:mix', [
-            'file' => $storyFile,
-            '--dry-run' => true,
-            '--no-music' => true,
-            '--no-ambience' => true,
-        ])
-            ->assertSuccessful()
-            ->expectsOutputToContain('door-alt.wav');
+        $story = Story::fromArray(json_decode((string) file_get_contents($storyFile), true));
+        $used = array_column(
+            $this->app->make(StoryMixer::class)->mix('the-house', $story, [
+                'dryRun' => true,
+                'noMusic' => true,
+                'noSfx' => true,
+            ])['usedCues'],
+            'file',
+        );
+        $this->assertContains('ambience/wind-alt.wav', $used);
 
         $this->artisan('story:mix', [
             'file' => $storyFile,
@@ -170,6 +175,7 @@ final class StorySoundsAndMixTest extends TestCase
         $storyFile = $this->writeStory();
         $this->writeTimings();
         $this->writeNarration();
+        $this->fakeSilentSfxDirector();
 
         $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
 
@@ -184,7 +190,6 @@ final class StorySoundsAndMixTest extends TestCase
             ->expectsOutputToContain('sin bloqueantes');
 
         $this->assertSame($before, (string) file_get_contents($path));
-        Http::assertNothingSent();
 
         $manifest = json_decode($before, true);
         $deleted = $this->libraryDir.DIRECTORY_SEPARATOR.str_replace(
@@ -210,6 +215,86 @@ final class StorySoundsAndMixTest extends TestCase
             ->expectsOutputToContain('No se mezcla');
     }
 
+    public function test_story_sounds_persists_directed_sfx_and_reuses_them_until_refresh(): void
+    {
+        $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind', 'night'], 3.0);
+        $this->indexClip('sfx/door-1.wav', 'sfx', ['door', 'creak'], 0.8);
+        $this->indexClip('music/drone-1.wav', 'music', ['dark', 'drone'], 3.0);
+        $storyFile = $this->writeStory();
+        $this->writeTimings();
+        $this->writeNarration();
+        $this->writeShots();
+
+        $calls = 0;
+        Http::fake(function ($request) use (&$calls) {
+            if (! str_contains($request->url(), 'generateContent')) {
+                return Http::response(['results' => []], 200);
+            }
+
+            $calls++;
+            $shotIndex = $calls % 2 === 1 ? 1 : 2;
+            $query = $calls <= 2 ? 'door creak' : 'wood creak';
+
+            return Http::response($this->geminiEnvelope([
+                'effects' => [
+                    [
+                        'shotIndex' => $shotIndex,
+                        'offsetRatio' => 0.25,
+                        'query' => $query,
+                        'tags' => ['door', 'creak'],
+                        'importance' => 'key',
+                    ],
+                    [
+                        'shotIndex' => 99,
+                        'offsetRatio' => 0.5,
+                        'query' => 'ghost choir',
+                        'tags' => ['ghost'],
+                        'importance' => 'key',
+                    ],
+                ],
+            ]), 200);
+        });
+
+        $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
+        $this->assertSame(2, $calls);
+
+        $path = storage_path('app/'.$this->storiesDir.'/the-house/sounds.json');
+        $first = json_decode((string) file_get_contents($path), true);
+        $this->assertIsArray($first);
+        $this->assertSame([
+            [
+                'shotIndex' => 1,
+                'offsetRatio' => 0.25,
+                'query' => 'door creak',
+                'tags' => ['door', 'creak'],
+                'importance' => 'key',
+            ],
+            [
+                'shotIndex' => 2,
+                'offsetRatio' => 0.25,
+                'query' => 'door creak',
+                'tags' => ['door', 'creak'],
+                'importance' => 'key',
+            ],
+        ], $first['directedSfx']);
+        $this->assertContains('sfx.1.1', array_column($first['cues'], 'id'));
+
+        $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
+        $this->assertSame(2, $calls);
+        $reused = json_decode((string) file_get_contents($path), true);
+        $this->assertSame($first['directedSfx'], $reused['directedSfx']);
+
+        $this->artisan('story:sounds', [
+            'file' => $storyFile,
+            '--refresh' => true,
+        ])->assertSuccessful();
+        $this->assertSame(4, $calls);
+
+        $refreshed = json_decode((string) file_get_contents($path), true);
+        $this->assertSame('wood creak', $refreshed['directedSfx'][0]['query']);
+        $this->assertSame('wood creak', $refreshed['directedSfx'][1]['query']);
+    }
+
     private function writeStory(): string
     {
         $directory = storage_path('app/'.$this->storiesDir);
@@ -227,24 +312,18 @@ final class StorySoundsAndMixTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door creaked open in the dark hallway.',
                     'imagePrompt' => 'hall',
-                    'soundEffect' => null,
+                    'visualSummary' => 'A dim hallway vanishing into fog at dusk',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],
                         'intensity' => 'subtle',
                     ],
-                    'soundEffects' => [[
-                        'query' => 'door creak slow',
-                        'tags' => ['door', 'creak'],
-                        'anchorText' => 'the door creaked',
-                        'kind' => 'key',
-                    ]],
                 ],
                 [
                     'order' => 2,
                     'narration' => 'The dark did not let go of the empty road.',
                     'imagePrompt' => 'road',
-                    'soundEffect' => null,
+                    'visualSummary' => 'An empty road holding still in the dark',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],
@@ -276,11 +355,82 @@ final class StorySoundsAndMixTest extends TestCase
                 ['order' => 2, 'start' => 8.0, 'end' => 16.0, 'duration' => 8.0, 'sentenceCount' => 1],
             ],
         ], JSON_PRETTY_PRINT)."\n");
+        $this->writeShots();
     }
 
     private function writeNarration(): void
     {
         $this->makeWav(storage_path('app/'.$this->storiesDir.'/the-house/narration.wav'), 16.0);
+    }
+
+    private function writeShots(): void
+    {
+        $directory = storage_path('app/'.$this->storiesDir.'/the-house');
+        (new Filesystem)->ensureDirectoryExists($directory);
+
+        file_put_contents($directory.'/shots.json', json_encode([
+            'version' => 1,
+            'plannerVersion' => 3,
+            'shots' => [
+                [
+                    'order' => 1,
+                    'sceneOrder' => 1,
+                    'start' => 1.0,
+                    'end' => 3.0,
+                    'sourceText' => 'The door creaked open in the dark hallway.',
+                    'framing' => 'medium shot',
+                    'motion' => 'static',
+                    'subject' => 'environment',
+                    'threatStage' => null,
+                    'description' => 'A dim hallway vanishing into fog at dusk',
+                    'characterSlugs' => [],
+                    'imagePath' => null,
+                ],
+                [
+                    'order' => 2,
+                    'sceneOrder' => 2,
+                    'start' => 8.0,
+                    'end' => 10.0,
+                    'sourceText' => 'The dark did not let go of the empty road.',
+                    'framing' => 'medium shot',
+                    'motion' => 'static',
+                    'subject' => 'environment',
+                    'threatStage' => null,
+                    'description' => 'An empty road holding still in the dark',
+                    'characterSlugs' => [],
+                    'imagePath' => null,
+                ],
+            ],
+        ], JSON_PRETTY_PRINT)."\n");
+    }
+
+    private function fakeSilentSfxDirector(): void
+    {
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response($this->geminiEnvelope([
+                'effects' => [],
+            ]), 200),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function geminiEnvelope(array $payload): array
+    {
+        return [
+            'candidates' => [
+                [
+                    'finishReason' => 'STOP',
+                    'content' => [
+                        'parts' => [
+                            ['text' => json_encode($payload, JSON_UNESCAPED_UNICODE)],
+                        ],
+                    ],
+                ],
+            ],
+        ];
     }
 
     /**

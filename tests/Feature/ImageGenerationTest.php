@@ -11,6 +11,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 final class ImageGenerationTest extends TestCase
@@ -67,6 +68,13 @@ final class ImageGenerationTest extends TestCase
             flags: JSON_THROW_ON_ERROR,
         );
         $this->assertSame(ShotPlanner::VERSION, $decoded['plannerVersion'] ?? null);
+        $this->assertSame(3, $decoded['plannerVersion']);
+        $this->assertSame(
+            'Directed hallway fog at dusk',
+            $decoded['shots'][0]['description'] ?? null,
+        );
+        $this->assertSame('environment', $decoded['shots'][0]['subject'] ?? null);
+        $this->assertSame([], $decoded['shots'][0]['characterSlugs'] ?? null);
 
         $this->assertGreaterThan(0, $this->promptRequestCount());
 
@@ -95,6 +103,10 @@ final class ImageGenerationTest extends TestCase
 
         $this->fakeHttp(function (Request $request) use ($jpeg) {
             static $promptHits = 0;
+
+            if (str_contains($request->url(), 'generateContent')) {
+                return Http::response($this->shotDirectorEnvelope($request), 200);
+            }
 
             if (! str_contains($request->url(), '/prompt/')) {
                 return Http::response('ok', 200);
@@ -140,6 +152,10 @@ final class ImageGenerationTest extends TestCase
     private function fakePromptResponses(string $promptBody): void
     {
         $this->fakeHttp(function (Request $request) use ($promptBody) {
+            if (str_contains($request->url(), 'generateContent')) {
+                return Http::response($this->shotDirectorEnvelope($request), 200);
+            }
+
             if (! str_contains($request->url(), '/prompt/')) {
                 return Http::response('ok', 200);
             }
@@ -221,6 +237,7 @@ final class ImageGenerationTest extends TestCase
             $storyDirectory.DIRECTORY_SEPARATOR.'timings.json',
             json_encode($timings, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n",
         );
+        $this->writeNarrationWav($storyDirectory.DIRECTORY_SEPARATOR.'narration.wav', $audioEnd);
 
         $payload = [
             'title' => 'Image generation fixture',
@@ -232,8 +249,7 @@ final class ImageGenerationTest extends TestCase
                 'order' => 1,
                 'narration' => implode(' ', array_column($sentences, 'text')),
                 'imagePrompt' => 'A dim hallway in fog',
-                'soundEffect' => null,
-                'visualBeats' => ['A dim hallway vanishing into fog'],
+                'visualSummary' => 'A dim hallway vanishing into fog at dusk',
             ]],
             'pronunciations' => [],
             'visualBible' => [
@@ -252,6 +268,61 @@ final class ImageGenerationTest extends TestCase
         file_put_contents($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n");
 
         return $path;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function shotDirectorEnvelope(Request $request): array
+    {
+        $payload = $request->data();
+        $text = is_array($payload) ? (string) ($payload['contents'][0]['parts'][0]['text'] ?? '{}') : '{}';
+        $user = json_decode($text, true);
+        $shots = [];
+
+        foreach (is_array($user['shots'] ?? null) ? $user['shots'] : [] as $shot) {
+            if (! is_array($shot) || ! isset($shot['shotIndex'])) {
+                continue;
+            }
+
+            $shots[] = [
+                'shotIndex' => (int) $shot['shotIndex'],
+                'description' => 'Directed hallway fog at dusk',
+                'subject' => 'environment',
+                'framing' => 'medium shot',
+                'threatStage' => '',
+                'characterSlugs' => [],
+            ];
+        }
+
+        return [
+            'candidates' => [
+                [
+                    'finishReason' => 'STOP',
+                    'content' => [
+                        'parts' => [
+                            ['text' => json_encode(['shots' => $shots], JSON_UNESCAPED_UNICODE)],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function writeNarrationWav(string $path, float $duration): void
+    {
+        $process = new Process([
+            'ffmpeg', '-nostdin', '-y', '-hide_banner',
+            '-f', 'lavfi',
+            '-i', sprintf('anullsrc=r=48000:cl=stereo:d=%.3f', $duration),
+            '-t', sprintf('%.3f', $duration),
+            '-ac', '2',
+            '-ar', '48000',
+            '-sample_fmt', 's16',
+            $path,
+        ]);
+        $process->setTimeout(30);
+        $process->mustRun();
     }
 
     private function jpeg(): string

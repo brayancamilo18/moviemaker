@@ -8,15 +8,17 @@ use App\Contracts\ImageGenerator;
 use App\DataObjects\Shot;
 use App\DataObjects\Story;
 use App\DataObjects\VisualBible;
+use App\Services\Audio\NarrationClock;
+use App\Services\Image\ShotDirector;
 use App\Services\Image\ShotPlanner;
 use App\Services\Image\ShotPromptBuilder;
 use App\Services\Image\VisualBibleGenerator;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
-use Symfony\Component\Process\Process;
 use Throwable;
 
 final class GenerateImagesCommand extends Command
@@ -35,15 +37,13 @@ final class GenerateImagesCommand extends Command
 
     private readonly float $rateLimitSeconds;
 
-    private readonly string $ffprobe;
-
-    private readonly float $timeout;
-
     public function __construct(
         private ImageGenerator $images,
         private ShotPlanner $planner,
+        private ShotDirector $director,
         private ShotPromptBuilder $prompts,
         private VisualBibleGenerator $bibles,
+        private NarrationClock $clock,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -52,8 +52,6 @@ final class GenerateImagesCommand extends Command
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->imageCacheDirectory = storage_path('app/'.$config->get('stories.images.cache_path', 'image-cache'));
         $this->rateLimitSeconds = (float) $config->get('stories.images.rate_limit_seconds');
-        $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
-        $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
     }
 
     public function handle(): int
@@ -88,6 +86,7 @@ final class GenerateImagesCommand extends Command
         $storyDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
         $timingsPath = $storyDirectory.DIRECTORY_SEPARATOR.'timings.json';
         $shotsPath = $storyDirectory.DIRECTORY_SEPARATOR.'shots.json';
+        $narrationPath = $storyDirectory.DIRECTORY_SEPARATOR.'narration.wav';
 
         $timings = $this->readTimings($timingsPath);
 
@@ -96,6 +95,24 @@ final class GenerateImagesCommand extends Command
         }
 
         $story = Story::fromArray($payload);
+
+        try {
+            $duration = $this->clock->narrationEnd($narrationPath);
+        } catch (InvalidArgumentException|RuntimeException $exception) {
+            $this->error($exception->getMessage());
+            $this->line('Ejecuta story:narrate primero.');
+
+            return self::FAILURE;
+        }
+
+        $shots = $this->planner->plan($timings, $story, $duration);
+
+        if ($shots === []) {
+            $this->error('El planificador no produjo ningún plano.');
+
+            return self::FAILURE;
+        }
+
         $story = $this->ensureVisualBible($storyFile, $payload, $story);
 
         if ($story === null) {
@@ -110,10 +127,15 @@ final class GenerateImagesCommand extends Command
             return self::FAILURE;
         }
 
-        $shots = $this->planner->plan($timings, $story, $this->audioDuration($storyDirectory, $timings));
+        try {
+            $shots = $this->director->direct($shots, $story, $bible);
+            $prompts = [];
 
-        if ($shots === []) {
-            $this->error('El planificador no produjo ningún plano.');
+            foreach ($shots as $shot) {
+                $prompts[] = $this->prompts->build($shot, $bible);
+            }
+        } catch (Throwable $exception) {
+            $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
@@ -123,8 +145,6 @@ final class GenerateImagesCommand extends Command
         if ($selected === []) {
             return self::FAILURE;
         }
-
-        $prompts = $this->prompts->previewAll($shots, $bible, $story);
 
         if ($dryRun) {
             $this->warn('Modo simulación: no se generarán imágenes.');
@@ -359,6 +379,8 @@ final class GenerateImagesCommand extends Command
             'motion' => $shot->motion,
             'subject' => $shot->subject,
             'threatStage' => $shot->threatStage,
+            'description' => $shot->description,
+            'characterSlugs' => $shot->characterSlugs,
             'prompt' => $prompt,
             'seed' => $seed,
             'imagePath' => $imagePath,
@@ -660,58 +682,6 @@ final class GenerateImagesCommand extends Command
         $this->line('<fg=red>Marcadores (regenerar con --only y, si hace falta, --force):</>');
         $this->line('<fg=red>  #'.implode('  #', $placeholders).'</>');
         $this->line('<fg=red>  php artisan story:images {file} --only='.implode(',', $placeholders).'</>');
-    }
-
-    /**
-     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
-     */
-    private function audioDuration(string $storyDirectory, array $timings): float
-    {
-        foreach (['narration_mix.wav', 'narration_mix.mp3', 'narration.wav'] as $name) {
-            $path = $storyDirectory.DIRECTORY_SEPARATOR.$name;
-
-            if (! $this->files->isFile($path)) {
-                continue;
-            }
-
-            $duration = $this->probeDuration($path);
-
-            if ($duration !== null) {
-                return $duration;
-            }
-        }
-
-        $scenes = $timings['scenes'] ?? [];
-
-        if ($scenes !== []) {
-            $last = $scenes[array_key_last($scenes)];
-
-            if (is_array($last) && isset($last['end'])) {
-                return (float) $last['end'];
-            }
-        }
-
-        throw new RuntimeException('No hay mix de audio ni timings de escena para teselar los planos.');
-    }
-
-    private function probeDuration(string $path): ?float
-    {
-        $process = new Process([
-            $this->ffprobe, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'csv=p=0',
-            $path,
-        ]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            return null;
-        }
-
-        $duration = (float) trim($process->getOutput());
-
-        return $duration > 0 ? round($duration, 3) : null;
     }
 
     private function truncate(string $text, int $width = 48): string

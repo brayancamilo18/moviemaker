@@ -74,28 +74,14 @@ Structure:
 - Each scene is {$minSceneWords} to 150 words. Do not write short scenes.
 - The full narration MUST be between {$minWords} and {$maxWords} words. Aim for {$this->targetWords}. Scripts under {$minWords} words are rejected.
 
-visualBeats rules:
-- Each scene must include visualBeats: four to eight stills, in the order the camera would see them.
-- Each beat is an object with description, subject, and threatStage.
-- description: 8 to 14 words of English. A static image. No recognizable faces. No proper names. No gore. Copied verbatim into later image prompts. Self-contained. No pronouns. No "the same" or "as before". Suggested terror through light, weather, and objects. Write blood as dark stain. Write a corpse as still figure.
-- subject: exactly one of protagonist, threat, both, environment, detail.
-- threatStage: hint, presence, or reveal when subject is threat or both. Null otherwise.
-- At least 60 percent of all beats across the script must include a figure (subject protagonist, threat, or both). A landscape video is not frightening.
-- environment must not appear in more than two consecutive beats.
-- threatStage follows the story: hint in the first third of the beats, presence in the second third, reveal only in the last third and never before the climax.
-- detail is for meaningful close-up objects (a lock, a photograph, mud on a hand). Use it to breathe between figure shots, not as filler.
+visualSummary:
+- Each scene must include visualSummary: what the scene looks like overall, in English, 10 to 15 words.
+- Context for the shot director. Not an image prompt.
 
 ambience (per scene):
 - query: two to four English words as a sound-library search (wind howling night, empty room tone, low drone ominous).
 - tags: two to three normalized lowercase English tags.
 - intensity: subtle (distant bed), moderate, or heavy (fills the room).
-
-soundEffects (per scene, optional):
-- Zero to two punctual hits. Prefer none. Overloading turns horror into comedy.
-- query: two to four English words as a sound-library search (door creak slow, glass crack).
-- tags: two to three normalized lowercase English tags.
-- anchorText: exact fragment from this scene's narration; the hit lands just before that phrase.
-- importance: key (story-critical, keep) or texture (spice, first to drop if too many).
 
 Title rules:
 - Maximum seventy characters.

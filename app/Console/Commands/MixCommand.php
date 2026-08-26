@@ -109,7 +109,7 @@ final class MixCommand extends Command
         $this->line(sprintf(
             'Duración del máster: %.3f s (última frase %.3f s + cola %.1f s).',
             $result['duration'],
-            $result['lastPhraseEnd'],
+            $result['lastTranscribedPhraseEnd'],
             $result['tailSeconds'],
         ));
 

@@ -47,7 +47,7 @@ final class StoryMixer
      *     wav: ?string,
      *     mp3: ?string,
      *     duration: float,
-     *     lastPhraseEnd: float,
+     *     lastTranscribedPhraseEnd: float,
      *     tailSeconds: float,
      *     measurement: ?array{lufs: float, truePeak: float, lra: float}
      * }
@@ -72,16 +72,17 @@ final class StoryMixer
             $this->manifest->sync($slug, $story, $timings);
         }
 
-        $cues = $this->manifest->load($slug)['cues'];
+        $manifest = $this->manifest->load($slug);
+        $cues = $manifest['cues'];
         $noAmbience = (bool) ($options['noAmbience'] ?? false);
         $noSfx = (bool) ($options['noSfx'] ?? false);
         $noMusic = (bool) ($options['noMusic'] ?? false) || ! $this->musicEnabled;
         $dryRun = (bool) ($options['dryRun'] ?? false);
 
         $duration = $this->processor->duration($narration);
-        $lastPhraseEnd = $this->ambience->lastPhraseEnd($timings);
+        $lastTranscribedPhraseEnd = $this->ambience->lastTranscribedPhraseEnd($timings);
         $tailSeconds = $this->ambience->tailSeconds();
-        $masterDuration = $this->ambience->expectedDuration($timings);
+        $masterDuration = $this->ambience->expectedDuration($narration);
         $rows = [[
             'role' => AudioTrack::ROLE_NARRATION,
             'startAt' => 0.0,
@@ -112,14 +113,18 @@ final class StoryMixer
             ];
 
             if (! $dryRun) {
-                $audioTracks[] = $this->ambience->build($story, $timings, $this->manifest->ambienceByScene($cues));
+                $audioTracks[] = $this->ambience->build($story, $timings, $narration, $this->manifest->ambienceByScene($cues));
             }
         }
 
         if (! $noSfx) {
-            $sfxTracks = $this->sfx->place($story, $timings, $this->manifest->overrides($cues, 'sfx'));
+            $placed = $this->sfx->place(
+                $this->manifest->loadShots($slug),
+                $manifest['directedSfx'],
+                $this->manifest->overrides($cues, 'sfx'),
+            );
 
-            foreach ($sfxTracks as $track) {
+            foreach ($placed['tracks'] as $track) {
                 $audioTracks[] = $track;
                 $rows[] = $this->rowFromTrack($track);
                 $matched = $this->cueByFile($cues, $track->path);
@@ -165,7 +170,7 @@ final class StoryMixer
                 'wav' => null,
                 'mp3' => null,
                 'duration' => $masterDuration,
-                'lastPhraseEnd' => $lastPhraseEnd,
+                'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
                 'tailSeconds' => $tailSeconds,
                 'measurement' => null,
             ];
@@ -183,7 +188,7 @@ final class StoryMixer
             'wav' => $mastered['wav'],
             'mp3' => $mastered['mp3'],
             'duration' => $masterDuration,
-            'lastPhraseEnd' => $lastPhraseEnd,
+            'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
             'tailSeconds' => $tailSeconds,
             'measurement' => $this->master->measure($mastered['wav']),
         ];

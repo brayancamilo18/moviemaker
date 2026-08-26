@@ -512,7 +512,7 @@ final class SoundResolverTest extends TestCase
         $this->assertNotNull($animal->omitReason);
     }
 
-    public function test_signals_for_story_include_ambience_and_scene_effects(): void
+    public function test_signals_for_story_include_ambience(): void
     {
         $story = Story::fromArray([
             'title' => 'The door',
@@ -525,18 +525,21 @@ final class SoundResolverTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door closed.',
                     'imagePrompt' => 'door',
-                    'soundEffect' => 'door creak slow',
+                    'visualSummary' => 'A closed door at the end of a dim hall',
+                    'ambience' => [
+                        'query' => 'empty room tone',
+                        'tags' => ['room', 'night'],
+                        'intensity' => 'subtle',
+                    ],
                 ],
             ],
         ]);
 
         $signals = $this->app->make(SoundResolver::class)->signalsFor($story);
 
+        $this->assertCount(1, $signals);
         $this->assertSame('ambience', $signals[0]['type']);
         $this->assertContains('night', $signals[0]['tags']);
-        $this->assertSame('sfx', $signals[1]['type']);
-        $this->assertSame('door creak slow', $signals[1]['query']);
-        $this->assertSame(1, $signals[1]['sceneOrder']);
     }
 
     public function test_resolve_command_never_fails_when_a_clip_is_missing(): void
@@ -650,18 +653,12 @@ final class SoundResolverTest extends TestCase
                 'order' => 1,
                 'narration' => 'The door creaked open in the dark hallway.',
                 'imagePrompt' => 'door',
-                'soundEffect' => null,
+                'visualSummary' => 'A dark hallway with a slowly opening door',
                 'ambience' => [
                     'query' => 'wind howling night',
                     'tags' => ['wind', 'night'],
                     'intensity' => 'subtle',
                 ],
-                'soundEffects' => [[
-                    'query' => 'door creak',
-                    'tags' => ['door', 'creak'],
-                    'anchorText' => 'the door creaked',
-                    'kind' => 'key',
-                ]],
             ]],
             'pronunciations' => [],
         ]);

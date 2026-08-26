@@ -111,7 +111,7 @@ return [
         'core_search_candidates' => 12,
         'resolve_budget_seconds' => 20,
         'resolve_total_budget_seconds' => 600,
-        // Ambiente que sigue sonando tras la última frase. El máster dura lastPhraseEnd + tail_seconds.
+        // Ambiente que sigue sonando tras el WAV de narración. El máster dura NarrationClock::masterDuration.
         'tail_seconds' => 10.0,
         'freesound' => [
             'token' => env('FREESOUND_TOKEN'),

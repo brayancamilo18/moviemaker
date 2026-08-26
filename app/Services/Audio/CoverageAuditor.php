@@ -6,7 +6,6 @@ namespace App\Services\Audio;
 
 use App\DataObjects\CoverageReport;
 use App\DataObjects\ResolvedSound;
-use App\DataObjects\SceneSoundEffect;
 use App\DataObjects\Story;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
@@ -143,7 +142,7 @@ final class CoverageAuditor
         usort($ordered, static fn (array $left, array $right): int => $left['start'] <=> $right['start']);
 
         $last = $ordered[array_key_last($ordered)];
-        $expected = $this->ambience->expectedDuration($timings);
+        $expected = $this->ambience->expectedDuration($narrationPath);
 
         if ($last['end'] > $expected + self::TOLERANCE_SECONDS) {
             $blocking[] = sprintf(
@@ -185,33 +184,35 @@ final class CoverageAuditor
      */
     private function auditEffects(Story $story, array $indexed, array &$blocking, array &$warnings): void
     {
-        foreach ($story->scenes as $scene) {
-            foreach ($scene->soundEffectSpecs() as $index => $effect) {
-                $id = 'sfx.'.$scene->order.'.'.($index + 1);
-                $cue = $indexed[$id] ?? null;
-                $path = $this->existingPath($cue);
-
-                if ($path !== null) {
-                    continue;
-                }
-
-                if ($effect->kind === SceneSoundEffect::KIND_TEXTURE) {
-                    $reason = $this->omitReason($cue) ?? 'efecto de textura omitido';
-                    $warnings[] = "Efecto de textura {$id} omitido: {$reason}";
-
-                    continue;
-                }
-
-                $reason = $this->omitReason($cue);
-
-                if ($reason !== null) {
-                    $warnings[] = "Efecto clave {$id} omitido: {$reason}";
-
-                    continue;
-                }
-
-                $blocking[] = "El efecto clave {$id} no está resuelto ni omitido con motivo.";
+        foreach ($indexed as $id => $cue) {
+            if (($cue['type'] ?? '') !== 'sfx') {
+                continue;
             }
+
+            $path = $this->existingPath($cue);
+
+            if ($path !== null) {
+                continue;
+            }
+
+            $kind = (string) ($cue['kind'] ?? 'key');
+
+            if ($kind === 'texture') {
+                $reason = $this->omitReason($cue) ?? 'efecto de textura omitido';
+                $warnings[] = "Efecto de textura {$id} omitido: {$reason}";
+
+                continue;
+            }
+
+            $reason = $this->omitReason($cue);
+
+            if ($reason !== null) {
+                $warnings[] = "Efecto clave {$id} omitido: {$reason}";
+
+                continue;
+            }
+
+            $blocking[] = "El efecto clave {$id} no está resuelto ni omitido con motivo.";
         }
     }
 

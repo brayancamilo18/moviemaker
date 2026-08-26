@@ -68,7 +68,7 @@ final class AmbienceBuilderTest extends TestCase
                 ['order' => 1, 'start' => 0.0, 'end' => 4.0, 'duration' => 4.0],
                 ['order' => 2, 'start' => 4.0, 'end' => 8.0, 'duration' => 4.0],
             ],
-        ]);
+        ], $this->makeNarrationWav(8.0));
 
         $this->assertSame(AudioTrack::ROLE_AMBIENCE, $track->role);
         $this->assertTrue($track->duckable);
@@ -115,7 +115,7 @@ final class AmbienceBuilderTest extends TestCase
                 ['order' => 2, 'start' => 4.0, 'end' => 8.0, 'duration' => 4.0],
                 ['order' => 3, 'start' => 8.0, 'end' => 12.0, 'duration' => 4.0],
             ],
-        ]);
+        ], $this->makeNarrationWav(12.0));
 
         $duration = $this->app->make(LibraryClipProcessor::class)->duration($track->path);
 
@@ -137,7 +137,7 @@ final class AmbienceBuilderTest extends TestCase
                 'order' => 1,
                 'narration' => 'The wind moved the fog along the empty road.',
                 'imagePrompt' => 'fog',
-                'soundEffect' => null,
+                'visualSummary' => 'Fog closing over an empty road at night',
             ]],
             'pronunciations' => [],
         ]);
@@ -146,7 +146,7 @@ final class AmbienceBuilderTest extends TestCase
             'scenes' => [
                 ['order' => 1, 'start' => 0.0, 'end' => 4.0, 'duration' => 4.0],
             ],
-        ]);
+        ], $this->makeNarrationWav(4.0));
 
         $this->assertTrue($track->duckable);
         $this->assertEqualsWithDelta(4.0, $this->app->make(LibraryClipProcessor::class)->duration($track->path), 0.2);
@@ -164,7 +164,7 @@ final class AmbienceBuilderTest extends TestCase
                 'order' => $index + 1,
                 'narration' => 'The wind kept moving through the empty trees.',
                 'imagePrompt' => 'trees',
-                'soundEffect' => null,
+                'visualSummary' => 'Empty trees moving in the night wind',
                 'ambience' => $bed,
             ];
         }
@@ -178,6 +178,27 @@ final class AmbienceBuilderTest extends TestCase
             'scenes' => $scenes,
             'pronunciations' => [],
         ]);
+    }
+
+    private function makeNarrationWav(float $duration): string
+    {
+        $path = storage_path('app/tmp/ambience-beds/narration-'.bin2hex(random_bytes(4)).'.wav');
+        (new Filesystem)->ensureDirectoryExists(dirname($path));
+
+        $process = new Process([
+            'ffmpeg', '-nostdin', '-y', '-hide_banner',
+            '-f', 'lavfi',
+            '-i', sprintf('anullsrc=r=48000:cl=stereo:d=%.3f', $duration),
+            '-t', sprintf('%.3f', $duration),
+            '-ac', '2',
+            '-ar', '48000',
+            '-sample_fmt', 's16',
+            $path,
+        ]);
+        $process->setTimeout(30);
+        $process->mustRun();
+
+        return $path;
     }
 
     /**

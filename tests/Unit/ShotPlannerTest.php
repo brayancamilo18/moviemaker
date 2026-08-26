@@ -9,6 +9,7 @@ use App\DataObjects\Story;
 use App\DataObjects\VisualBible;
 use App\Services\Image\ShotPlanner;
 use App\Services\Image\ShotPromptBuilder;
+use InvalidArgumentException;
 use Tests\TestCase;
 
 final class ShotPlannerTest extends TestCase
@@ -138,20 +139,16 @@ final class ShotPlannerTest extends TestCase
         }
     }
 
-    public function test_split_beat_keeps_original_subject_then_alternates_detail_and_environment(): void
+    public function test_split_window_keeps_environment_then_alternates_detail_and_environment(): void
     {
         $planner = $this->app->make(ShotPlanner::class);
         $timings = $this->fixtures()['longSentence'];
-        $story = $this->storyWithScenes(1, [[
-            'description' => 'A hunched figure seen from behind in fog',
-            'subject' => 'protagonist',
-            'threatStage' => null,
-        ]]);
+        $story = $this->storyWithScenes(1);
 
         $shots = $planner->plan($timings, $story, $this->audioEnd($timings));
 
         $this->assertGreaterThan(1, count($shots));
-        $this->assertSame('protagonist', $shots[0]->subject);
+        $this->assertSame('environment', $shots[0]->subject);
         $this->assertNull($shots[0]->threatStage);
 
         $expected = ['detail', 'environment'];
@@ -166,7 +163,7 @@ final class ShotPlannerTest extends TestCase
         }
     }
 
-    public function test_long_beat_split_into_three_shots_does_not_repeat_the_same_subject(): void
+    public function test_long_window_split_into_three_shots_alternates_environment_and_detail(): void
     {
         $planner = $this->app->make(ShotPlanner::class);
         $timings = [
@@ -187,30 +184,20 @@ final class ShotPlannerTest extends TestCase
                 'sentenceCount' => 1,
             ]],
         ];
-        $story = $this->storyWithScenes(1, [[
-            'description' => 'A hunched figure seen from behind in fog',
-            'subject' => 'protagonist',
-            'threatStage' => null,
-        ]]);
+        $story = $this->storyWithScenes(1);
 
         $shots = $planner->plan($timings, $story, $this->audioEnd($timings));
 
         $this->assertCount(3, $shots);
-        $this->assertSame('protagonist', $shots[0]->subject);
-        $this->assertNotSame($shots[0]->subject, $shots[1]->subject);
-        $this->assertNotSame($shots[0]->subject, $shots[2]->subject);
-        $this->assertNotSame($shots[1]->subject, $shots[2]->subject);
+        $this->assertSame('environment', $shots[0]->subject);
+        $this->assertSame('detail', $shots[1]->subject);
+        $this->assertSame('environment', $shots[2]->subject);
     }
 
     public function test_threat_prompt_uses_the_matching_stage_descriptor(): void
     {
         $builder = $this->app->make(ShotPromptBuilder::class);
         $bible = $this->bible();
-        $story = $this->storyWithScenes(1, [[
-            'description' => 'A blurred shape among the distant trees',
-            'subject' => 'threat',
-            'threatStage' => 'presence',
-        ]])->withVisualBible($bible);
 
         $descriptors = [];
 
@@ -222,7 +209,6 @@ final class ShotPlannerTest extends TestCase
             $prompt = $builder->build(
                 $this->shot(subject: 'threat', threatStage: $stage),
                 $bible,
-                $story,
             );
 
             $this->assertStringContainsString($descriptors[$stage], $prompt, "Falta el descriptor de {$stage}.");
@@ -245,23 +231,6 @@ final class ShotPlannerTest extends TestCase
     {
         $builder = $this->app->make(ShotPromptBuilder::class);
         $bible = $this->bible();
-        $story = $this->storyWithScenes(3, [
-            [
-                'description' => 'A hunched figure seen from behind in fog',
-                'subject' => 'protagonist',
-                'threatStage' => null,
-            ],
-            [
-                'description' => 'A blurred shape among the distant trees',
-                'subject' => 'threat',
-                'threatStage' => 'hint',
-            ],
-            [
-                'description' => 'Fog hanging over an empty field at dusk',
-                'subject' => 'environment',
-                'threatStage' => null,
-            ],
-        ])->withVisualBible($bible);
 
         $shots = [
             $this->shot(order: 1, sceneOrder: 1, subject: 'protagonist', threatStage: null),
@@ -269,7 +238,7 @@ final class ShotPlannerTest extends TestCase
             $this->shot(order: 3, sceneOrder: 3, subject: 'environment', threatStage: null),
         ];
 
-        foreach ($builder->previewAll($shots, $bible, $story) as $index => $prompt) {
+        foreach ($builder->previewAll($shots, $bible) as $index => $prompt) {
             $this->assertDoesNotMatchRegularExpression(
                 '/no faces/i',
                 $prompt,
@@ -279,82 +248,44 @@ final class ShotPlannerTest extends TestCase
         }
     }
 
-    public function test_threat_hint_shots_use_only_distant_framing(): void
+    public function test_prompt_build_throws_when_description_is_empty(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('El plano 4 no tiene description.');
+
+        $this->app->make(ShotPromptBuilder::class)->build(
+            $this->shot(order: 4, description: '   '),
+            $this->bible(),
+        );
+    }
+
+    public function test_planned_shots_are_environment_until_a_shot_director_exists(): void
     {
         $planner = $this->app->make(ShotPlanner::class);
         $timings = $this->fixtures()['singleShotScenes'];
-        $hintBeat = [
-            'description' => 'A blurred shape among the distant trees',
-            'subject' => 'threat',
-            'threatStage' => 'hint',
-        ];
-        $story = $this->storyWithScenes(3, [$hintBeat, $hintBeat, $hintBeat]);
+        $story = $this->storyWithScenes(3);
 
         $shots = $planner->plan($timings, $story, $this->audioEnd($timings));
 
         $this->assertCount(3, $shots);
 
         foreach ($shots as $shot) {
-            $this->assertSame('threat', $shot->subject);
-            $this->assertSame('hint', $shot->threatStage);
-            $this->assertContains($shot->framing, ['wide establishing', 'medium shot']);
+            $this->assertSame('environment', $shot->subject);
+            $this->assertNull($shot->threatStage);
         }
     }
 
-    public function test_reveal_shots_may_use_close_detail_or_low_angle(): void
+    public function test_stats_count_environment_subjects_when_the_story_has_no_beats(): void
     {
         $planner = $this->app->make(ShotPlanner::class);
         $timings = $this->fixtures()['singleShotScenes'];
-        $revealBeat = [
-            'description' => 'A covered figure filling the center of the frame',
-            'subject' => 'threat',
-            'threatStage' => 'reveal',
-        ];
-        $story = $this->storyWithScenes(3, [$revealBeat, $revealBeat, $revealBeat]);
+        $stats = $planner->stats($planner->plan($timings, $this->storyWithScenes(3), $this->audioEnd($timings)));
 
-        $shots = $planner->plan($timings, $story, $this->audioEnd($timings));
-        $framings = array_map(static fn (Shot $shot): string => $shot->framing, $shots);
-
-        $this->assertCount(3, $shots);
-        $this->assertNotEmpty(array_intersect($framings, ['close detail', 'low angle']));
-
-        foreach ($shots as $shot) {
-            $this->assertSame('reveal', $shot->threatStage);
-            $this->assertContains(
-                $shot->framing,
-                ['close detail', 'low angle', 'extreme close up', 'over the shoulder'],
-            );
-        }
-    }
-
-    public function test_stats_include_subject_and_threat_stage_counts(): void
-    {
-        $planner = $this->app->make(ShotPlanner::class);
-        $timings = $this->fixtures()['singleShotScenes'];
-        $story = $this->storyWithScenes(3, [
-            [
-                'description' => 'A hunched figure seen from behind in fog',
-                'subject' => 'protagonist',
-                'threatStage' => null,
-            ],
-            [
-                'description' => 'A blurred shape among the distant trees',
-                'subject' => 'threat',
-                'threatStage' => 'hint',
-            ],
-            [
-                'description' => 'A covered figure filling the center of the frame',
-                'subject' => 'threat',
-                'threatStage' => 'reveal',
-            ],
-        ]);
-
-        $stats = $planner->stats($planner->plan($timings, $story, $this->audioEnd($timings)));
-
-        $this->assertSame(1, $stats['subject']['protagonist']);
-        $this->assertSame(2, $stats['subject']['threat']);
-        $this->assertSame(1, $stats['threatStage']['hint']);
-        $this->assertSame(1, $stats['threatStage']['reveal']);
+        $this->assertSame(3, $stats['subject']['environment']);
+        $this->assertSame(0, $stats['subject']['protagonist']);
+        $this->assertSame(0, $stats['subject']['threat']);
+        $this->assertSame(0, $stats['threatStage']['hint']);
+        $this->assertSame(0, $stats['threatStage']['reveal']);
         $this->assertSame(0, $stats['threatStage']['presence']);
     }
 
@@ -454,25 +385,18 @@ final class ShotPlannerTest extends TestCase
     }
 
     /**
-     * @param  list<array{description: string, subject: string, threatStage: ?string}>  $beatsByScene
+     * @param  list<string>  $summaries
      */
-    private function storyWithScenes(int $count, array $beatsByScene = []): Story
+    private function storyWithScenes(int $count, array $summaries = []): Story
     {
         $scenes = [];
 
         for ($order = 1; $order <= $count; $order++) {
-            $beat = $beatsByScene[$order - 1] ?? [
-                'description' => 'A dim hallway vanishing into fog',
-                'subject' => 'environment',
-                'threatStage' => null,
-            ];
-
             $scenes[] = [
                 'order' => $order,
                 'narration' => 'The door closed behind me in the empty hall and I kept walking.',
                 'imagePrompt' => 'A dim hallway in fog',
-                'soundEffect' => null,
-                'visualBeats' => [$beat],
+                'visualSummary' => $summaries[$order - 1] ?? 'A dim hallway vanishing into fog at dusk',
             ];
         }
 
@@ -518,6 +442,7 @@ final class ShotPlannerTest extends TestCase
         int $sceneOrder = 1,
         string $subject = 'environment',
         ?string $threatStage = null,
+        string $description = 'A dim hallway vanishing into fog at dusk',
     ): Shot {
         return new Shot(
             order: $order,
@@ -529,6 +454,8 @@ final class ShotPlannerTest extends TestCase
             motion: 'static',
             subject: $subject,
             threatStage: $threatStage,
+            description: $description,
+            characterSlugs: [],
             imagePath: null,
         );
     }

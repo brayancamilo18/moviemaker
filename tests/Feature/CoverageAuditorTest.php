@@ -178,24 +178,18 @@ final class CoverageAuditorTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door creaked.',
                     'imagePrompt' => 'hall',
-                    'soundEffect' => null,
+                    'visualSummary' => 'A dim hallway vanishing into fog at dusk',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],
                         'intensity' => 'subtle',
                     ],
-                    'soundEffects' => [[
-                        'query' => 'dog barking distant',
-                        'tags' => ['dog', 'bark', 'animal'],
-                        'anchorText' => 'a dog',
-                        'kind' => 'key',
-                    ]],
                 ],
                 [
                     'order' => 2,
                     'narration' => 'The road waited.',
                     'imagePrompt' => 'road',
-                    'soundEffect' => null,
+                    'visualSummary' => 'An empty road holding still in the dark',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],

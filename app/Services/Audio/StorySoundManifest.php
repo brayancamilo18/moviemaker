@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\DataObjects\DirectedSfx;
 use App\DataObjects\ResolvedSound;
+use App\DataObjects\Shot;
 use App\DataObjects\Story;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
@@ -19,6 +21,7 @@ final class StorySoundManifest
     public function __construct(
         private SoundCuePlanner $planner,
         private SoundResolver $resolver,
+        private SfxDirector $sfxDirector,
         private AudioLibrary $library,
         private LibraryClipProcessor $processor,
         private Filesystem $files,
@@ -38,50 +41,62 @@ final class StorySoundManifest
     }
 
     /**
-     * @return array{version: int, slug: string, cues: list<array<string, mixed>>}
+     * @return array{version: int, slug: string, cues: list<array<string, mixed>>, directedSfx: list<DirectedSfx>}
      */
     public function load(string $slug): array
     {
-        $path = $this->pathFor($slug);
+        $decoded = $this->readDecoded($slug);
+
+        return [
+            'version' => (int) ($decoded['version'] ?? 1),
+            'slug' => (string) ($decoded['slug'] ?? $slug),
+            'cues' => $this->cuesFrom($decoded),
+            'directedSfx' => $this->directedFrom($decoded),
+        ];
+    }
+
+    /**
+     * @return list<Shot>
+     */
+    public function loadShots(string $slug): array
+    {
+        $path = $this->directory($slug).DIRECTORY_SEPARATOR.'shots.json';
 
         if (! $this->files->isFile($path)) {
-            return [
-                'version' => 1,
-                'slug' => $slug,
-                'cues' => [],
-            ];
+            return [];
         }
 
         try {
             /** @var array<string, mixed> $decoded */
             $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException $exception) {
-            throw new RuntimeException('sounds.json no es un JSON válido.', previous: $exception);
+        } catch (JsonException) {
+            return [];
         }
 
-        $cues = [];
+        $shots = [];
 
-        foreach (is_array($decoded['cues'] ?? null) ? $decoded['cues'] : [] as $cue) {
-            if (is_array($cue) && trim((string) ($cue['id'] ?? '')) !== '') {
-                $cues[] = $cue;
+        foreach (is_array($decoded['shots'] ?? null) ? $decoded['shots'] : [] as $row) {
+            if (! is_array($row) || ! isset($row['order'], $row['sceneOrder'])) {
+                continue;
             }
+
+            $shots[] = Shot::fromArray($row);
         }
 
-        return [
-            'version' => (int) ($decoded['version'] ?? 1),
-            'slug' => (string) ($decoded['slug'] ?? $slug),
-            'cues' => $cues,
-        ];
+        return $shots;
     }
 
     /**
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
-     * @return array{version: int, slug: string, cues: list<array<string, mixed>>}
+     * @return array{version: int, slug: string, cues: list<array<string, mixed>>, directedSfx: list<DirectedSfx>}
      */
     public function sync(string $slug, Story $story, array $timings = [], bool $refresh = false, ?string $refreshCue = null): array
     {
-        $planned = $this->planner->cues($story, $timings);
-        $existing = $this->indexed($this->load($slug)['cues']);
+        $existingPayload = $this->readDecoded($slug);
+        $shots = $this->loadShots($slug);
+        $directed = $this->resolveDirected($story, $shots, $existingPayload, $refresh);
+        $planned = array_merge($this->planner->cues($story, $timings), $this->sfxCues($directed, $shots));
+        $existing = $this->indexed($this->cuesFrom($existingPayload));
         $refreshCue = $this->normalizeCueId($refreshCue, $planned);
         $used = [];
         $cues = [];
@@ -124,9 +139,22 @@ final class StorySoundManifest
             'slug' => $slug,
             'cues' => $cues,
         ];
+
+        if ($this->shouldPersistDirected($shots, $existingPayload)) {
+            $manifest['directedSfx'] = array_map(
+                static fn (DirectedSfx $effect): array => $effect->toArray(),
+                $directed,
+            );
+        }
+
         $this->write($slug, $manifest);
 
-        return $manifest;
+        return [
+            'version' => 1,
+            'slug' => $slug,
+            'cues' => $cues,
+            'directedSfx' => $directed,
+        ];
     }
 
     /**
@@ -214,7 +242,7 @@ final class StorySoundManifest
     }
 
     /**
-     * @param  array{version: int, slug: string, cues: list<array<string, mixed>>}  $manifest
+     * @param  array{version: int, slug: string, cues: list<array<string, mixed>>, directedSfx?: list<array<string, mixed>>}  $manifest
      */
     public function write(string $slug, array $manifest): void
     {
@@ -398,5 +426,123 @@ final class StorySoundManifest
         }
 
         return $absolute;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function readDecoded(string $slug): array
+    {
+        $path = $this->pathFor($slug);
+
+        if (! $this->files->isFile($path)) {
+            return [];
+        }
+
+        try {
+            /** @var array<string, mixed> $decoded */
+            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new RuntimeException('sounds.json no es un JSON válido.', previous: $exception);
+        }
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $decoded
+     * @return list<array<string, mixed>>
+     */
+    private function cuesFrom(array $decoded): array
+    {
+        $cues = [];
+
+        foreach (is_array($decoded['cues'] ?? null) ? $decoded['cues'] : [] as $cue) {
+            if (is_array($cue) && trim((string) ($cue['id'] ?? '')) !== '') {
+                $cues[] = $cue;
+            }
+        }
+
+        return $cues;
+    }
+
+    /**
+     * @param  array<string, mixed>  $decoded
+     * @return list<DirectedSfx>
+     */
+    private function directedFrom(array $decoded): array
+    {
+        $effects = [];
+
+        foreach (is_array($decoded['directedSfx'] ?? null) ? $decoded['directedSfx'] : [] as $row) {
+            if (is_array($row)) {
+                $effects[] = DirectedSfx::fromArray($row);
+            }
+        }
+
+        return $effects;
+    }
+
+    /**
+     * @param  list<Shot>  $shots
+     * @param  array<string, mixed>  $existing
+     * @return list<DirectedSfx>
+     */
+    private function resolveDirected(Story $story, array $shots, array $existing, bool $refresh): array
+    {
+        $hasDirected = array_key_exists('directedSfx', $existing);
+
+        if ($shots !== []) {
+            if ($hasDirected && ! $refresh) {
+                return $this->directedFrom($existing);
+            }
+
+            return $this->sfxDirector->direct($shots, $story);
+        }
+
+        return $hasDirected ? $this->directedFrom($existing) : [];
+    }
+
+    /**
+     * @param  list<Shot>  $shots
+     * @param  array<string, mixed>  $existing
+     */
+    private function shouldPersistDirected(array $shots, array $existing): bool
+    {
+        return $shots !== [] || array_key_exists('directedSfx', $existing);
+    }
+
+    /**
+     * @param  list<DirectedSfx>  $directed
+     * @param  list<Shot>  $shots
+     * @return list<array{id: string, type: string, role: string, sceneOrder: ?int, query: string, tags: list<string>, minDuration: float, intensity: ?string, kind: ?string}>
+     */
+    private function sfxCues(array $directed, array $shots): array
+    {
+        $sceneByShot = [];
+
+        foreach ($shots as $shot) {
+            $sceneByShot[$shot->order] = $shot->sceneOrder;
+        }
+
+        $cues = [];
+        $indexByShot = [];
+
+        foreach ($directed as $effect) {
+            $indexByShot[$effect->shotIndex] = ($indexByShot[$effect->shotIndex] ?? 0) + 1;
+            $cues[] = [
+                'id' => 'sfx.'.$effect->shotIndex.'.'.$indexByShot[$effect->shotIndex],
+                'type' => 'sfx',
+                'role' => 'scene',
+                'sceneOrder' => $sceneByShot[$effect->shotIndex] ?? null,
+                'query' => $effect->query,
+                'tags' => $effect->tags,
+                'minDuration' => 0.0,
+                'intensity' => null,
+                'kind' => $effect->importance,
+            ];
+        }
+
+        return $cues;
     }
 }

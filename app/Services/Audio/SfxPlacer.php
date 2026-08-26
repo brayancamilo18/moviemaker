@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
-use App\DataObjects\SceneSoundEffect;
-use App\DataObjects\Story;
-use App\DataObjects\StoryScene;
+use App\DataObjects\DirectedSfx;
+use App\DataObjects\Shot;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use Psr\Log\LoggerInterface;
@@ -30,18 +29,20 @@ final class SfxPlacer
     }
 
     /**
-     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
+     * @param  list<Shot>  $shots
+     * @param  list<DirectedSfx>  $effects
      * @param  array<string, array{path: string, gainDb?: float}>  $resolved
-     * @return list<AudioTrack>
+     * @return array{tracks: list<AudioTrack>, skipped: list<array<string, mixed>>}
      */
-    public function place(Story $story, array $timings, array $resolved = []): array
+    public function place(array $shots, array $effects, array $resolved = []): array
     {
-        $placements = $this->thin($this->placements($story, $timings));
+        $plan = $this->plan($shots, $effects);
+        $placements = $this->thin($plan['placements']);
         $tracks = [];
         $used = [];
 
         foreach ($placements as $placement) {
-            $spec = $placement['spec'];
+            $effect = $placement['effect'];
             $override = $resolved[$placement['cueId']] ?? null;
             $overridePath = is_array($override) ? (string) ($override['path'] ?? '') : '';
 
@@ -50,8 +51,8 @@ final class SfxPlacer
                 $gainDb = (float) ($override['gainDb'] ?? 0.0);
             } else {
                 $found = $this->resolver->resolve(
-                    $spec->tags,
-                    $spec->query,
+                    $effect->tags,
+                    $effect->query,
                     'sfx',
                     0.0,
                     $used,
@@ -62,8 +63,8 @@ final class SfxPlacer
 
             if ($path === '' || ! $this->files->isFile($path)) {
                 $this->logger->warning('SFX sin archivo usable; no se puede colocar.', [
-                    'scene' => $placement['sceneOrder'],
-                    'query' => $spec->query,
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
                 ]);
 
                 continue;
@@ -73,8 +74,8 @@ final class SfxPlacer
 
             if (! $audible->passed) {
                 $this->logger->warning('SFX inaudible; se omite el golpe.', [
-                    'scene' => $placement['sceneOrder'],
-                    'query' => $spec->query,
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
                     'path' => $path,
                     'failures' => $audible->failures,
                 ]);
@@ -88,8 +89,8 @@ final class SfxPlacer
 
             if ($endAt <= $startAt) {
                 $this->logger->warning('SFX con duración nula; no se puede colocar.', [
-                    'scene' => $placement['sceneOrder'],
-                    'query' => $spec->query,
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
                     'path' => $path,
                 ]);
 
@@ -109,55 +110,68 @@ final class SfxPlacer
             );
         }
 
-        return $tracks;
+        return [
+            'tracks' => $tracks,
+            'skipped' => $plan['skipped'],
+        ];
     }
 
     /**
-     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
-     * @return list<array{cueId: string, sceneOrder: int, spec: SceneSoundEffect, startAt: float}>
+     * @param  list<Shot>  $shots
+     * @param  list<DirectedSfx>  $effects
+     * @return array{
+     *     placements: list<array{cueId: string, shotIndex: int, effect: DirectedSfx, startAt: float}>,
+     *     skipped: list<array<string, mixed>>
+     * }
      */
-    private function placements(Story $story, array $timings): array
+    private function plan(array $shots, array $effects): array
     {
-        $placements = [];
+        $byOrder = [];
 
-        foreach ($story->scenes as $scene) {
-            $sceneStart = $this->sceneStart($timings, $scene->order);
-
-            foreach ($scene->soundEffectSpecs() as $index => $spec) {
-                $anchor = $this->locate($spec->anchorText, $scene, $timings);
-
-                if ($spec->anchorText !== '' && ! $anchor['found']) {
-                    $this->logger->warning(
-                        'Ancla de SFX no encontrada; se coloca al inicio de la escena.',
-                        [
-                            'scene' => $scene->order,
-                            'anchor' => $spec->anchorText,
-                            'query' => $spec->query,
-                        ],
-                    );
-                }
-
-                $startAt = $anchor['found']
-                    ? round(max(0.0, $anchor['start'] - $this->lead), 3)
-                    : $sceneStart;
-
-                $placements[] = [
-                    'cueId' => 'sfx.'.$scene->order.'.'.($index + 1),
-                    'sceneOrder' => $scene->order,
-                    'spec' => $spec,
-                    'startAt' => $startAt,
-                ];
-            }
+        foreach ($shots as $shot) {
+            $byOrder[$shot->order] = $shot;
         }
 
-        return $placements;
+        $placements = [];
+        $skipped = [];
+        $indexByShot = [];
+
+        foreach ($effects as $effect) {
+            $shot = $byOrder[$effect->shotIndex] ?? null;
+            $indexByShot[$effect->shotIndex] = ($indexByShot[$effect->shotIndex] ?? 0) + 1;
+
+            if (! $shot instanceof Shot) {
+                $skipped[] = [
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
+                    'reason' => 'shot_not_found',
+                ];
+
+                continue;
+            }
+
+            $span = $shot->end - $shot->start;
+            $startAt = round(max(0.0, $shot->start + $effect->offsetRatio * $span - $this->lead), 3);
+
+            $placements[] = [
+                'cueId' => 'sfx.'.$effect->shotIndex.'.'.$indexByShot[$effect->shotIndex],
+                'shotIndex' => $effect->shotIndex,
+                'effect' => $effect,
+                'startAt' => $startAt,
+            ];
+        }
+
+        return [
+            'placements' => $placements,
+            'skipped' => $skipped,
+        ];
     }
 
     /**
      * Un golpe cada 4 s. Al recortar caen primero los texture; los key se conservan.
      *
-     * @param  list<array{sceneOrder: int, spec: SceneSoundEffect, startAt: float}>  $placements
-     * @return list<array{cueId: string, sceneOrder: int, spec: SceneSoundEffect, startAt: float}>
+     * @param  list<array{cueId: string, shotIndex: int, effect: DirectedSfx, startAt: float}>  $placements
+     * @return list<array{cueId: string, shotIndex: int, effect: DirectedSfx, startAt: float}>
      */
     private function thin(array $placements): array
     {
@@ -170,8 +184,8 @@ final class SfxPlacer
                     return $byTime;
                 }
 
-                $leftKey = $left['spec']->kind === SceneSoundEffect::KIND_KEY ? 0 : 1;
-                $rightKey = $right['spec']->kind === SceneSoundEffect::KIND_KEY ? 0 : 1;
+                $leftKey = $left['effect']->importance === DirectedSfx::IMPORTANCE_KEY ? 0 : 1;
+                $rightKey = $right['effect']->importance === DirectedSfx::IMPORTANCE_KEY ? 0 : 1;
 
                 return $leftKey <=> $rightKey;
             },
@@ -194,13 +208,13 @@ final class SfxPlacer
                 continue;
             }
 
-            if ($candidate['spec']->kind === SceneSoundEffect::KIND_KEY) {
+            if ($candidate['effect']->importance === DirectedSfx::IMPORTANCE_KEY) {
                 foreach (array_reverse($conflicts) as $index) {
-                    if ($kept[$index]['spec']->kind === SceneSoundEffect::KIND_TEXTURE) {
+                    if ($kept[$index]['effect']->importance === DirectedSfx::IMPORTANCE_TEXTURE) {
                         $this->logger->info('SFX texture recortado por densidad (un efecto cada 4 s).', [
-                            'query' => $kept[$index]['spec']->query,
+                            'query' => $kept[$index]['effect']->query,
                             'startAt' => $kept[$index]['startAt'],
-                            'keptQuery' => $candidate['spec']->query,
+                            'keptQuery' => $candidate['effect']->query,
                         ]);
                         unset($kept[$index]);
                     }
@@ -224,8 +238,8 @@ final class SfxPlacer
             }
 
             $this->logger->info('SFX recortado por densidad (un efecto cada 4 s).', [
-                'query' => $candidate['spec']->query,
-                'kind' => $candidate['spec']->kind,
+                'query' => $candidate['effect']->query,
+                'kind' => $candidate['effect']->importance,
                 'startAt' => $candidate['startAt'],
             ]);
         }
@@ -236,92 +250,5 @@ final class SfxPlacer
         );
 
         return $kept;
-    }
-
-    /**
-     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
-     * @return array{start: float, found: bool}
-     */
-    private function locate(string $anchorText, StoryScene $scene, array $timings): array
-    {
-        $needle = $this->normalize($anchorText);
-        $sceneStart = $this->sceneStart($timings, $scene->order);
-
-        if ($needle === '') {
-            return ['start' => $sceneStart, 'found' => false];
-        }
-
-        $sceneMatch = null;
-        $anyMatch = null;
-
-        foreach ($timings['sentences'] ?? [] as $sentence) {
-            if (! is_array($sentence)) {
-                continue;
-            }
-
-            $haystack = $this->normalize((string) ($sentence['text'] ?? ''));
-
-            if ($haystack === '' || ! $this->textMatches($haystack, $needle)) {
-                continue;
-            }
-
-            $start = round((float) ($sentence['start'] ?? 0), 3);
-            $order = (int) ($sentence['sceneOrder'] ?? 0);
-
-            if ($order === $scene->order && $sceneMatch === null) {
-                $sceneMatch = $start;
-            }
-
-            if ($anyMatch === null) {
-                $anyMatch = $start;
-            }
-        }
-
-        if ($sceneMatch !== null) {
-            return ['start' => $sceneMatch, 'found' => true];
-        }
-
-        if ($anyMatch !== null) {
-            return ['start' => $anyMatch, 'found' => true];
-        }
-
-        return ['start' => $sceneStart, 'found' => false];
-    }
-
-    /**
-     * @param  array{scenes?: list<array<string, mixed>>, sentences?: list<array<string, mixed>>}  $timings
-     */
-    private function sceneStart(array $timings, int $order): float
-    {
-        foreach ($timings['scenes'] ?? [] as $row) {
-            if (is_array($row) && (int) ($row['order'] ?? 0) === $order) {
-                return round((float) ($row['start'] ?? 0), 3);
-            }
-        }
-
-        foreach ($timings['sentences'] ?? [] as $sentence) {
-            if (is_array($sentence) && (int) ($sentence['sceneOrder'] ?? 0) === $order) {
-                return round((float) ($sentence['start'] ?? 0), 3);
-            }
-        }
-
-        return 0.0;
-    }
-
-    private function textMatches(string $haystack, string $needle): bool
-    {
-        return $haystack === $needle
-            || str_contains($haystack, $needle)
-            || str_contains($needle, $haystack);
-    }
-
-    private function normalize(string $text): string
-    {
-        $text = mb_strtolower($text);
-        $text = str_replace(["'", '’', '‘'], '', $text);
-        $text = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $text) ?? $text;
-        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-
-        return trim($text);
     }
 }

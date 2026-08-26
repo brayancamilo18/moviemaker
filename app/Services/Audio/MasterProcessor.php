@@ -72,6 +72,18 @@ final class MasterProcessor
         $fitted = rtrim($outputDirectory, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.'.mix-target.wav';
 
         try {
+            $sourceDuration = $this->duration($mixPath);
+
+            if ($sourceDuration - $targetDuration > 0.5) {
+                throw new RuntimeException(sprintf(
+                    'El recorte eliminaría %.3f s de audio: mezcla %.3f s, objetivo %.3f s. '
+                    .'Revisa NarrationClock: nunca se trunca narración en silencio.',
+                    $sourceDuration - $targetDuration,
+                    $sourceDuration,
+                    $targetDuration,
+                ));
+            }
+
             $this->fitToDuration($mixPath, $fitted, $targetDuration);
 
             $measured = $this->run([
@@ -178,6 +190,11 @@ final class MasterProcessor
             '-f', 'wav',
             $destination,
         ]);
+    }
+
+    private function duration(string $path): float
+    {
+        return $this->probeDuration($path);
     }
 
     private function probeDuration(string $path): float

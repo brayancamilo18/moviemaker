@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Services\Image\ShotPlanner;
+use App\Services\Story\StoryValidator;
 use Illuminate\Filesystem\Filesystem;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
@@ -30,7 +31,9 @@ final class RenderTest extends TestCase
             'stories.video.preset' => 'ultrafast',
             'stories.video.outro_seconds' => 0.4,
             'stories.video.scene_fade_duration' => 0.1,
+            'stories.audio.tail_seconds' => 0.0,
         ]);
+        $this->app->forgetInstance(StoryValidator::class);
 
         $files = $this->app->make(Filesystem::class);
         $files->ensureDirectoryExists($this->storyDirectory());
@@ -123,12 +126,12 @@ final class RenderTest extends TestCase
             '--dry-run' => true,
         ])
             ->expectsOutputToContain('Los planos cubren 7.500 s')
-            ->expectsOutputToContain('Regenera el plan con story:images')
+            ->expectsOutputToContain('hay bloqueantes')
             ->doesntExpectOutputToContain('Modo simulación')
             ->assertFailed();
     }
 
-    public function test_dry_run_warns_when_planner_version_is_stale(): void
+    public function test_dry_run_fails_when_planner_version_is_stale(): void
     {
         $dir = $this->storyDirectory();
         $this->writeShotsJson([
@@ -142,8 +145,9 @@ final class RenderTest extends TestCase
             '--dry-run' => true,
         ])
             ->expectsOutputToContain('Plan de plannerVersion ausente; el actual es '.ShotPlanner::VERSION)
-            ->expectsOutputToContain('Modo simulación')
-            ->assertSuccessful();
+            ->expectsOutputToContain('hay bloqueantes')
+            ->doesntExpectOutputToContain('Modo simulación')
+            ->assertFailed();
     }
 
     private function writeFixture(): void
@@ -156,6 +160,7 @@ final class RenderTest extends TestCase
         $this->writeJpeg($red, 'red');
         $this->writeJpeg($blue, 'blue');
         $this->writeJpeg($green, 'green');
+        $this->writeWav($dir.DIRECTORY_SEPARATOR.'narration.wav', 8.0);
         $this->writeWav($dir.DIRECTORY_SEPARATOR.'narration_mix.wav', 8.0);
 
         $shots = [
@@ -190,13 +195,13 @@ final class RenderTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door closed behind me. The hallway stayed empty.',
                     'imagePrompt' => 'A dim hallway',
-                    'soundEffect' => null,
+                    'visualSummary' => 'A dim hallway vanishing into fog at dusk',
                 ],
                 [
                     'order' => 2,
                     'narration' => 'Then the whistle came closer.',
                     'imagePrompt' => 'Fog over a dirt road',
-                    'soundEffect' => null,
+                    'visualSummary' => 'Fog hanging over a dirt road at dusk',
                 ],
             ],
             'pronunciations' => [],
@@ -236,8 +241,10 @@ final class RenderTest extends TestCase
             'sourceText' => 'Fixture shot '.$order,
             'framing' => 'wide',
             'motion' => $motion,
-            'subject' => 'hallway',
+            'subject' => 'environment',
             'threatStage' => null,
+            'description' => 'Fixture hallway '.$order,
+            'characterSlugs' => [],
             'imagePath' => $image,
             'placeholder' => false,
         ];

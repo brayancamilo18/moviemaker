@@ -100,7 +100,7 @@ final class CoverageAuditorTest extends TestCase
         ]);
 
         $report = $this->app->make(CoverageAuditor::class)->audit(
-            $this->storyWithTexture(),
+            $this->story(),
             [
                 $this->cue('ambience.1', 'ambience', $ambience, 1),
                 $this->cue('ambience.2', 'ambience', $ambience, 2),
@@ -117,24 +117,6 @@ final class CoverageAuditorTest extends TestCase
 
     private function story(): Story
     {
-        return $this->storyFromEffects([]);
-    }
-
-    private function storyWithTexture(): Story
-    {
-        return $this->storyFromEffects([[
-            'query' => 'cloth rustle fabric',
-            'tags' => ['cloth', 'fabric'],
-            'anchorText' => 'the coat',
-            'kind' => 'texture',
-        ]]);
-    }
-
-    /**
-     * @param  list<array<string, mixed>>  $effects
-     */
-    private function storyFromEffects(array $effects): Story
-    {
         return Story::fromArray([
             'title' => 'The house',
             'hook' => 'The house waited.',
@@ -146,19 +128,18 @@ final class CoverageAuditorTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door creaked.',
                     'imagePrompt' => 'hall',
-                    'soundEffect' => null,
+                    'visualSummary' => 'A dim hallway vanishing into fog at dusk',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],
                         'intensity' => 'subtle',
                     ],
-                    'soundEffects' => $effects,
                 ],
                 [
                     'order' => 2,
                     'narration' => 'The road waited.',
                     'imagePrompt' => 'road',
-                    'soundEffect' => null,
+                    'visualSummary' => 'An empty road holding still in the dark',
                     'ambience' => [
                         'query' => 'wind howling night',
                         'tags' => ['wind', 'night'],

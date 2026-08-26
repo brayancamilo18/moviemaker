@@ -37,6 +37,7 @@ final class TranscriptTimer
     public function __construct(
         private Filesystem $files,
         private LoggerInterface $logger,
+        private NarrationClock $clock,
         Repository $config,
     ) {
         $this->binary = (string) $config->get('stories.whisper.binary');
@@ -85,7 +86,10 @@ final class TranscriptTimer
                 throw new RuntimeException('whisper.cpp no escribió el JSON de salida.');
             }
 
-            return $this->parseWhisperJson($this->files->get($jsonPath));
+            $segments = $this->parseWhisperJson($this->files->get($jsonPath));
+            $this->warnIfWhisperDisagreesWithWav($audioPath, $segments);
+
+            return $segments;
         } finally {
             $this->files->deleteDirectory($workDir);
         }
@@ -543,6 +547,31 @@ final class TranscriptTimer
     private function seconds(float $value): float
     {
         return round($value, 3);
+    }
+
+    /**
+     * @param  list<array{start: float, end: float, text: string}>  $segments
+     */
+    private function warnIfWhisperDisagreesWithWav(string $audioPath, array $segments): void
+    {
+        $whisperEnd = 0.0;
+
+        foreach ($segments as $segment) {
+            $whisperEnd = max($whisperEnd, (float) ($segment['end'] ?? 0));
+        }
+
+        $narrationEnd = $this->clock->narrationEnd($audioPath);
+
+        if (abs($narrationEnd - $whisperEnd) <= 1.0) {
+            return;
+        }
+
+        $this->logger->warning(sprintf(
+            'Whisper y el WAV de narración no coinciden: último end %.3f s, %s dura %.3f s.',
+            $whisperEnd,
+            basename($audioPath),
+            $narrationEnd,
+        ));
     }
 
     /**

@@ -55,22 +55,6 @@ final class SoundCuePlanner
             ];
         }
 
-        foreach ($story->scenes as $scene) {
-            foreach ($scene->soundEffectSpecs() as $index => $effect) {
-                $cues[] = [
-                    'id' => 'sfx.'.$scene->order.'.'.($index + 1),
-                    'type' => 'sfx',
-                    'role' => 'scene',
-                    'sceneOrder' => $scene->order,
-                    'query' => $effect->query,
-                    'tags' => $effect->tags,
-                    'minDuration' => 0.0,
-                    'intensity' => null,
-                    'kind' => $effect->kind,
-                ];
-            }
-        }
-
         $musicQuery = $this->musicQuery($story);
         $musicTags = SoundLibraryImporter::tagsFromQuery($musicQuery);
 

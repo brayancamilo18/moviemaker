@@ -70,7 +70,7 @@ final class MixTest extends TestCase
             'scenes' => [
                 ['order' => 1, 'start' => 0.0, 'end' => 47.3, 'duration' => 47.3],
             ],
-        ]);
+        ], $this->makeWav($this->workDir.'/narration.wav', 47.3));
 
         $duration = $this->app->make(LibraryClipProcessor::class)->duration($track->path);
 
@@ -172,18 +172,12 @@ final class MixTest extends TestCase
                 'order' => 1,
                 'narration' => 'The door creaked open in the dark hallway.',
                 'imagePrompt' => 'hall',
-                'soundEffect' => null,
+                'visualSummary' => 'A dim hallway vanishing into fog at dusk',
                 'ambience' => [
                     'query' => 'wind howling night',
                     'tags' => ['wind', 'night'],
                     'intensity' => 'subtle',
                 ],
-                'soundEffects' => [[
-                    'query' => 'door creak slow',
-                    'tags' => ['door', 'creak'],
-                    'anchorText' => 'the door creaked',
-                    'kind' => 'key',
-                ]],
             ]],
             'pronunciations' => [],
         ];

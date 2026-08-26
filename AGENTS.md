@@ -6,6 +6,13 @@ Pipeline: guion (LLM) → narración (TTS) → imágenes (IA) → render (FFmpeg
 Estamos en la FASE 1: solo el generador de guiones. Sin base de datos, sin colas, sin UI.
 Todo se ejecuta con comandos artisan y escribe en `storage/app/stories/`.
 
+## Orden del pipeline (no alterar)
+guion → narración → timings → planos → dirección visual y sonora → imágenes y sonidos → mezcla → render
+
+La duración de la línea de tiempo la fija SIEMPRE NarrationClock sobre narration.wav.
+Los timestamps de whisper son orientativos: nunca se usan para recortar audio.
+Cada imagen y cada efecto pertenecen a un plano concreto, con su narración literal.
+
 ## timings.json (entrada de la Fase 3)
 
 El generador de imágenes de la Fase 3 **no transcribe ni estima duraciones**. Lee `storage/app/stories/{slug}/timings.json`, escrito por `App\Services\Audio\TranscriptTimer` tras alinear el máster (`narration.wav`) con las frases originales.

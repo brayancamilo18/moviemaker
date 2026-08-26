@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\DataObjects\Shot;
-use App\Services\Image\ShotPlanner;
+use App\Services\Story\StoryValidator;
 use App\Services\Video\FinalEncoder;
 use App\Services\Video\SceneComposer;
 use App\Services\Video\ShotClipRenderer;
@@ -24,8 +24,6 @@ final class RenderVideoCommand extends Command
     private const STEPS = ['clips', 'scenes', 'assemble', 'encode'];
 
     private const SYNC_TOLERANCE = 0.1;
-
-    private const PLAN_TOLERANCE = 0.01;
 
     protected $signature = 'story:render
         {file : JSON del guion}
@@ -54,6 +52,7 @@ final class RenderVideoCommand extends Command
         private VideoAssembler $assembler,
         private FinalEncoder $encoder,
         private SubtitleGenerator $subtitles,
+        private StoryValidator $validator,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -96,12 +95,18 @@ final class RenderVideoCommand extends Command
             return self::FAILURE;
         }
 
-        [$shots, $placeholderOrders, $plannerVersion] = $loaded;
+        [$shots] = $loaded;
 
         $audioPath = $this->mixPath($storyDirectory);
-        $preflight = $this->preflight($shots, $placeholderOrders, $audioPath, (bool) $this->option('dry-run'));
+        $preflight = $this->preflight($shots, $audioPath);
 
         if ($preflight === false) {
+            return self::FAILURE;
+        }
+
+        $report = $this->validator->validate($slug);
+
+        if (! $this->renderValidation($report)) {
             return self::FAILURE;
         }
 
@@ -110,12 +115,6 @@ final class RenderVideoCommand extends Command
         if ($audioDuration === null) {
             $this->error('ffprobe no pudo leer la duración del mix de audio.');
 
-            return self::FAILURE;
-        }
-
-        $this->warnStalePlanner($plannerVersion);
-
-        if (! $this->shotsCoverAudio($shots, $audioDuration)) {
             return self::FAILURE;
         }
 
@@ -197,9 +196,8 @@ final class RenderVideoCommand extends Command
 
     /**
      * @param  list<Shot>  $shots
-     * @param  list<int>  $placeholderOrders
      */
-    private function preflight(array $shots, array $placeholderOrders, ?string $audioPath, bool $dryRun): bool
+    private function preflight(array $shots, ?string $audioPath): bool
     {
         if ($audioPath === null) {
             $this->error('No hay mix de audio. Ejecuta story:mix primero.');
@@ -224,30 +222,40 @@ final class RenderVideoCommand extends Command
             return false;
         }
 
-        if ($placeholderOrders === []) {
-            return true;
-        }
-
-        $file = basename((string) $this->argument('file'));
-
-        $this->newLine();
-        $this->line('<fg=red>Hay marcadores de Pollinations. Esos planos saldrán negros o con el aviso de error:</>');
-        $this->line('<fg=red>  #'.implode('  #', $placeholderOrders).'</>');
-        $this->line('<fg=red>  php artisan story:images '.$file.' --only='.implode(',', $placeholderOrders).'</>');
-
-        if ($dryRun) {
-            $this->warn('Simulación: el render se detendría aquí a falta de confirmación.');
-
-            return true;
-        }
-
-        if (! $this->confirm('¿Renderizar igual?', false)) {
-            $this->comment('Cancelado. Regenera los marcadores y vuelve a lanzar story:render.');
-
-            return false;
-        }
-
         return true;
+    }
+
+    /**
+     * @param  array{passed: bool, checks: list<array{id: string, label: string, status: string, detail: string, blocking: bool}>}  $report
+     */
+    private function renderValidation(array $report): bool
+    {
+        $rows = [];
+
+        foreach ($report['checks'] as $check) {
+            $status = match ($check['status']) {
+                'fail' => $check['blocking'] ? '<fg=red>FALLO</>' : 'FALLO',
+                'warn' => '<fg=yellow>AVISO</>',
+                default => 'OK',
+            };
+            $rows[] = [$check['label'], $status, $check['detail']];
+        }
+
+        $this->table(['Comprobación', 'Estado', 'Detalle'], $rows);
+
+        if ($report['passed']) {
+            return true;
+        }
+
+        $this->error('Validación: hay bloqueantes. No se renderiza.');
+
+        foreach ($report['checks'] as $check) {
+            if ($check['blocking'] && $check['status'] === 'fail') {
+                $this->error('FALLO  '.$check['detail']);
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -779,50 +787,6 @@ final class RenderVideoCommand extends Command
         }
 
         return [$shots, $placeholders, $plannerVersion];
-    }
-
-    /**
-     * @param  list<Shot>  $shots
-     */
-    private function shotsCoverAudio(array $shots, float $audioDuration): bool
-    {
-        $sum = 0.0;
-
-        foreach ($shots as $shot) {
-            $sum += max(0.0, $shot->end - $shot->start);
-        }
-
-        $sum = round($sum, 3);
-        $delta = round($sum - $audioDuration, 3);
-
-        if (abs($delta) <= self::PLAN_TOLERANCE) {
-            return true;
-        }
-
-        $this->error(sprintf(
-            'Los planos cubren %.3f s y el audio dura %.3f s (desfase %+.3f s).',
-            $sum,
-            $audioDuration,
-            $delta,
-        ));
-        $this->line('Regenera el plan con story:images para teselar los silencios sobre el máster.');
-
-        return false;
-    }
-
-    private function warnStalePlanner(?int $plannerVersion): void
-    {
-        if ($plannerVersion !== null && $plannerVersion >= ShotPlanner::VERSION) {
-            return;
-        }
-
-        $seen = $plannerVersion === null ? 'ausente' : (string) $plannerVersion;
-
-        $this->warn(sprintf(
-            'Plan de plannerVersion %s; el actual es %d. Regenera con story:images.',
-            $seen,
-            ShotPlanner::VERSION,
-        ));
     }
 
     private function resolveStoryFile(string $file): ?string

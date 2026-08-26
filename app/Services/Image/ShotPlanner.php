@@ -30,7 +30,7 @@ final class ShotPlanner
     ];
 
     /** Versión del algoritmo de planificación persistida en shots.json. */
-    public const VERSION = 2;
+    public const VERSION = 3;
 
     private const ACTION_VERBS = [
         'burst', 'chase', 'crack', 'crash', 'dash', 'flee', 'grab', 'hit', 'jump',
@@ -81,7 +81,7 @@ final class ShotPlanner
             }
         }
 
-        return $this->tile($this->toShots($units), $audioDuration);
+        return $this->tile($this->toShots($units, $story), $audioDuration);
     }
 
     /**
@@ -387,7 +387,7 @@ final class ShotPlanner
      * @param  list<array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}>  $units
      * @return list<Shot>
      */
-    private function toShots(array $units): array
+    private function toShots(array $units, Story $story): array
     {
         $shots = [];
         $framingIndex = 0;
@@ -434,6 +434,8 @@ final class ShotPlanner
                 motion: $motion,
                 subject: $subject,
                 threatStage: $threatStage,
+                description: trim($this->scene($story, $unit['sceneOrder'])?->visualSummary ?? ''),
+                characterSlugs: [],
                 imagePath: null,
             );
 
@@ -558,6 +560,8 @@ final class ShotPlanner
                 motion: $motion,
                 subject: $subject,
                 threatStage: $threatStage,
+                description: $source->description,
+                characterSlugs: $source->characterSlugs,
                 imagePath: $source->imagePath,
             );
 
@@ -860,58 +864,11 @@ final class ShotPlanner
      */
     private function beatForWindow(string $text, int $sentenceIndex, int $sentenceCount, ?StoryScene $scene): array
     {
-        $beats = $scene?->visualBeats ?? [];
-
-        if ($scene === null || $beats === []) {
-            return [
-                'index' => 0,
-                'subject' => 'environment',
-                'threatStage' => null,
-            ];
-        }
-
-        $index = $this->beatIndexByNarration($text, $scene->narration, count($beats));
-
-        if ($index === null) {
-            $index = (int) min(
-                count($beats) - 1,
-                floor($sentenceIndex * count($beats) / max($sentenceCount, 1)),
-            );
-        }
-
-        $beat = $beats[$index];
-
         return [
-            'index' => $index,
-            'subject' => $beat['subject'],
-            'threatStage' => $beat['threatStage'],
+            'index' => 0,
+            'subject' => 'environment',
+            'threatStage' => null,
         ];
-    }
-
-    private function beatIndexByNarration(string $sourceText, string $narration, int $beatCount): ?int
-    {
-        $haystack = mb_strtolower($narration);
-        $needle = mb_strtolower($sourceText);
-
-        if ($haystack === '' || $needle === '' || $beatCount < 1) {
-            return null;
-        }
-
-        $pos = mb_strpos($haystack, $needle);
-
-        if ($pos === false) {
-            $snippet = mb_substr($needle, 0, 48);
-            $pos = $snippet === '' ? false : mb_strpos($haystack, $snippet);
-        }
-
-        if ($pos === false) {
-            return null;
-        }
-
-        $span = max(1, mb_strlen($haystack) - mb_strlen($needle));
-        $ratio = min(1.0, $pos / $span);
-
-        return min($beatCount - 1, (int) floor($ratio * $beatCount));
     }
 
     /**

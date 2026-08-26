@@ -242,7 +242,7 @@ final class NarrationTest extends TestCase
                     'order' => 1,
                     'narration' => 'The door closed. Then the whistle came. Who was there?',
                     'imagePrompt' => 'A closed wooden door',
-                    'soundEffect' => null,
+                    'visualSummary' => 'A closed wooden door in a dim hallway',
                 ],
             ],
             'pronunciations' => [],

@@ -98,72 +98,9 @@ final class StoryGenerator
             $errors[] = "El título tiene {$titleLength} caracteres; el máximo es 70.";
         }
 
-        $errors = [...$errors, ...$this->validateVisualBeats($story)];
-
         if ($errors !== []) {
             throw new InvalidStoryException(implode(' ', $errors));
         }
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function validateVisualBeats(Story $story): array
-    {
-        $beats = $story->visualBeatsInOrder();
-        $metrics = $story->visualBeatMetrics();
-        $total = $metrics['total'];
-        $ratioLabel = $this->figureRatioLabel($metrics);
-        $errors = [];
-
-        if ($total === 0 || $metrics['figureRatio'] < 0.55) {
-            $errors[] = "El ratio de figuras es {$ratioLabel} ({$metrics['figureCount']} de {$total} beats); el mínimo es 55%.";
-        }
-
-        if ($total === 0) {
-            return $errors;
-        }
-
-        foreach ($beats as $index => $beat) {
-            if ($beat['threatStage'] !== 'reveal') {
-                continue;
-            }
-
-            $progress = $index / $total;
-
-            if ($progress < 0.7) {
-                $percent = (int) round($progress * 100);
-                $position = $index + 1;
-                $errors[] = "Hay un reveal al {$percent}% de la historia (beat {$position} de {$total}); no puede aparecer antes del 70%. Ratio de figuras: {$ratioLabel}.";
-                break;
-            }
-        }
-
-        $streak = 0;
-        $longest = 0;
-
-        foreach ($beats as $beat) {
-            if ($beat['subject'] === 'environment') {
-                $streak++;
-                $longest = max($longest, $streak);
-            } else {
-                $streak = 0;
-            }
-        }
-
-        if ($longest > 2) {
-            $errors[] = "Hay {$longest} beats de environment consecutivos; el máximo es 2. Ratio de figuras: {$ratioLabel}.";
-        }
-
-        return $errors;
-    }
-
-    /**
-     * @param  array{total: int, figureCount: int, figureRatio: float, threatStages: array{hint: int, presence: int, reveal: int}}  $metrics
-     */
-    private function figureRatioLabel(array $metrics): string
-    {
-        return ((int) round($metrics['figureRatio'] * 100)).'%';
     }
 
     private function narrationWordCount(StoryScene $scene): int

@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Services\Audio\MasterProcessor;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
+use RuntimeException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -81,22 +82,26 @@ final class MasterProcessorTest extends TestCase
         );
     }
 
-    public function test_process_trims_or_pads_the_mix_to_the_target_duration(): void
+    public function test_process_rejects_trimming_more_than_half_a_second_of_audio(): void
     {
-        $processor = $this->app->make(MasterProcessor::class);
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('El recorte eliminaría');
 
-        $trimmed = $processor->process(
+        $this->app->make(MasterProcessor::class)->process(
             $this->makeWav('long.wav', 5.0),
             $this->workDir.DIRECTORY_SEPARATOR.'trim',
             3.0,
         );
-        $this->assertEqualsWithDelta(3.0, $this->probe($trimmed['wav'])['duration'], 0.05);
+    }
 
-        $padded = $processor->process(
+    public function test_process_pads_a_short_mix_to_the_target_duration(): void
+    {
+        $padded = $this->app->make(MasterProcessor::class)->process(
             $this->makeWav('short.wav', 2.0),
             $this->workDir.DIRECTORY_SEPARATOR.'pad',
             3.5,
         );
+
         $this->assertEqualsWithDelta(3.5, $this->probe($padded['wav'])['duration'], 0.05);
     }
 

@@ -36,6 +36,7 @@ final class AmbienceBuilder
         private SyntheticSound $synth,
         private LibraryClipProcessor $processor,
         private Filesystem $files,
+        private NarrationClock $clock,
         Repository $config,
     ) {
         $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
@@ -54,7 +55,7 @@ final class AmbienceBuilder
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
      * @param  array<int, array{path: string, gainDb?: float}>  $resolvedScenes
      */
-    public function build(Story $story, array $timings, array $resolvedScenes = []): AudioTrack
+    public function build(Story $story, array $timings, string $narrationWavPath, array $resolvedScenes = []): AudioTrack
     {
         $windows = $this->sceneWindows($timings);
 
@@ -62,7 +63,7 @@ final class AmbienceBuilder
             throw new InvalidArgumentException('timings.json no tiene escenas con duración.');
         }
 
-        $expected = $this->expectedDuration($timings);
+        $expected = $this->expectedDuration($narrationWavPath);
         $windows = $this->pinTimeline($windows, $expected);
         $start = $windows[array_key_first($windows)]['start'];
 
@@ -182,19 +183,19 @@ final class AmbienceBuilder
     }
 
     /**
-     * Duración absoluta del máster: fin de la última frase + cola de ambiente.
-     *
-     * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
+     * Duración absoluta del máster: fin del WAV de narración + cola de ambiente.
      */
-    public function expectedDuration(array $timings): float
+    public function expectedDuration(string $narrationWavPath): float
     {
-        return round($this->lastPhraseEnd($timings) + $this->tailSeconds, 3);
+        return $this->clock->masterDuration($narrationWavPath, $this->tailSeconds);
     }
 
     /**
+     * Último end de whisper. Diagnóstico; no manda la línea de tiempo.
+     *
      * @param  array{sentences?: list<array<string, mixed>>, scenes?: list<array<string, mixed>>}  $timings
      */
-    public function lastPhraseEnd(array $timings): float
+    public function lastTranscribedPhraseEnd(array $timings): float
     {
         $end = 0.0;
 

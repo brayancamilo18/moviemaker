@@ -4,18 +4,16 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
-use App\DataObjects\Story;
+use App\DataObjects\DirectedSfx;
+use App\DataObjects\Shot;
 use App\Services\Audio\AudioLibrary;
 use App\Services\Audio\AudioTrack;
 use App\Services\Audio\SfxPlacer;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
-use Psr\Log\AbstractLogger;
-use Psr\Log\LoggerInterface;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
-use Throwable;
 
 final class SfxPlacerTest extends TestCase
 {
@@ -46,23 +44,15 @@ final class SfxPlacerTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_places_a_hit_one_hundred_fifty_ms_before_the_anchor(): void
+    public function test_places_a_hit_lead_seconds_before_offset_ratio_zero(): void
     {
         $this->indexClip('sfx/door-slam-1.wav', ['door', 'slam'], 0.8);
 
-        $tracks = $this->app->make(SfxPlacer::class)->place(
-            $this->story([[
-                'query' => 'door slam',
-                'tags' => ['door', 'slam'],
-                'anchorText' => 'the door slammed',
-                'kind' => 'key',
-            ]]),
-            $this->timings([
-                ['order' => 1, 'sceneOrder' => 1, 'text' => 'The door slammed shut.', 'start' => 2.0, 'end' => 3.2],
-            ], [
-                ['order' => 1, 'start' => 0.0, 'end' => 8.0, 'duration' => 8.0],
-            ]),
+        $placed = $this->placeEffects(
+            [$this->shot(1, 1, 2.0, 3.2)],
+            [$this->effect(1, 0.0, 'door slam', ['door', 'slam'], DirectedSfx::IMPORTANCE_KEY)],
         );
+        $tracks = $placed['tracks'];
 
         $this->assertCount(1, $tracks);
         $this->assertSame(AudioTrack::ROLE_SFX, $tracks[0]->role);
@@ -72,33 +62,36 @@ final class SfxPlacerTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_missing_anchor_falls_to_scene_start_and_warns_without_throwing(): void
+    public function test_offset_ratio_one_lands_at_the_end_of_the_shot_minus_lead(): void
     {
-        $logger = $this->spyLogger();
         $this->indexClip('sfx/door-slam-1.wav', ['door', 'slam'], 0.8);
 
-        try {
-            $tracks = $this->app->make(SfxPlacer::class)->place(
-                $this->story([[
-                    'query' => 'door slam',
-                    'tags' => ['door', 'slam'],
-                    'anchorText' => 'a phrase that never appears',
-                    'kind' => 'key',
-                ]]),
-                $this->timings([
-                    ['order' => 1, 'sceneOrder' => 1, 'text' => 'The door slammed shut.', 'start' => 6.0, 'end' => 7.2],
-                ], [
-                    ['order' => 1, 'start' => 5.0, 'end' => 12.0, 'duration' => 7.0],
-                ]),
-            );
-        } catch (Throwable $exception) {
-            $this->fail('Un ancla ausente no debe lanzar: '.$exception->getMessage());
-        }
+        $placed = $this->placeEffects(
+            [$this->shot(1, 1, 2.0, 6.0)],
+            [$this->effect(1, 1.0, 'door slam', ['door', 'slam'], DirectedSfx::IMPORTANCE_KEY)],
+        );
 
-        $this->assertCount(1, $tracks);
-        $this->assertEqualsWithDelta(5.0, $tracks[0]->startAt, 0.001);
-        $this->assertFalse($tracks[0]->duckable);
-        $this->assertTrue($logger->hasWarning('Ancla de SFX no encontrada'));
+        $this->assertCount(1, $placed['tracks']);
+        $this->assertEqualsWithDelta(5.85, $placed['tracks'][0]->startAt, 0.001);
+    }
+
+    public function test_unknown_shot_is_skipped_without_throwing(): void
+    {
+        $this->indexClip('sfx/door-slam-1.wav', ['door', 'slam'], 0.8);
+
+        $placed = $this->placeEffects(
+            [$this->shot(1, 1, 2.0, 4.0)],
+            [$this->effect(99, 0.0, 'door slam', ['door', 'slam'], DirectedSfx::IMPORTANCE_KEY)],
+        );
+
+        $this->assertSame([], $placed['tracks']);
+        $this->assertSame([
+            [
+                'shot' => 99,
+                'query' => 'door slam',
+                'reason' => 'shot_not_found',
+            ],
+        ], $placed['skipped']);
     }
 
     public function test_six_hits_in_five_seconds_are_thinned_and_keys_survive(): void
@@ -110,56 +103,24 @@ final class SfxPlacerTest extends TestCase
         $this->indexClip('sfx/metal-clink-1.wav', ['metal', 'clink'], 0.8);
         $this->indexClip('sfx/glass-crack-1.wav', ['glass', 'crack'], 0.8);
 
-        $tracks = $this->app->make(SfxPlacer::class)->place(
-            $this->story([
-                [
-                    'query' => 'door slam',
-                    'tags' => ['door', 'slam'],
-                    'anchorText' => 'the door slammed',
-                    'kind' => 'key',
-                ],
-                [
-                    'query' => 'floor creak',
-                    'tags' => ['floor', 'creak'],
-                    'anchorText' => 'the floor creaked',
-                    'kind' => 'texture',
-                ],
-                [
-                    'query' => 'cloth rustle',
-                    'tags' => ['cloth', 'rustle'],
-                    'anchorText' => 'the cloth rustled',
-                    'kind' => 'texture',
-                ],
-                [
-                    'query' => 'wood tap',
-                    'tags' => ['wood', 'tap'],
-                    'anchorText' => 'the wood tapped',
-                    'kind' => 'texture',
-                ],
-                [
-                    'query' => 'metal clink',
-                    'tags' => ['metal', 'clink'],
-                    'anchorText' => 'the metal clinked',
-                    'kind' => 'texture',
-                ],
-                [
-                    'query' => 'glass crack',
-                    'tags' => ['glass', 'crack'],
-                    'anchorText' => 'the glass cracked',
-                    'kind' => 'key',
-                ],
-            ]),
-            $this->timings([
-                ['order' => 1, 'sceneOrder' => 1, 'text' => 'The door slammed.', 'start' => 0.15, 'end' => 0.8],
-                ['order' => 2, 'sceneOrder' => 1, 'text' => 'The floor creaked.', 'start' => 0.7, 'end' => 1.2],
-                ['order' => 3, 'sceneOrder' => 1, 'text' => 'The cloth rustled.', 'start' => 1.3, 'end' => 1.8],
-                ['order' => 4, 'sceneOrder' => 1, 'text' => 'The wood tapped.', 'start' => 1.9, 'end' => 2.4],
-                ['order' => 5, 'sceneOrder' => 1, 'text' => 'The metal clinked.', 'start' => 2.5, 'end' => 3.0],
-                ['order' => 6, 'sceneOrder' => 1, 'text' => 'The glass cracked.', 'start' => 4.65, 'end' => 5.0],
-            ], [
-                ['order' => 1, 'start' => 0.0, 'end' => 5.0, 'duration' => 5.0],
-            ]),
-        );
+        $tracks = $this->placeEffects(
+            [
+                $this->shot(1, 1, 0.15, 0.8),
+                $this->shot(2, 1, 0.7, 1.2),
+                $this->shot(3, 1, 1.3, 1.8),
+                $this->shot(4, 1, 1.9, 2.4),
+                $this->shot(5, 1, 2.5, 3.0),
+                $this->shot(6, 1, 4.65, 5.0),
+            ],
+            [
+                $this->effect(1, 0.0, 'door slam', ['door', 'slam'], DirectedSfx::IMPORTANCE_KEY),
+                $this->effect(2, 0.0, 'floor creak', ['floor', 'creak'], DirectedSfx::IMPORTANCE_TEXTURE),
+                $this->effect(3, 0.0, 'cloth rustle', ['cloth', 'rustle'], DirectedSfx::IMPORTANCE_TEXTURE),
+                $this->effect(4, 0.0, 'wood tap', ['wood', 'tap'], DirectedSfx::IMPORTANCE_TEXTURE),
+                $this->effect(5, 0.0, 'metal clink', ['metal', 'clink'], DirectedSfx::IMPORTANCE_TEXTURE),
+                $this->effect(6, 0.0, 'glass crack', ['glass', 'crack'], DirectedSfx::IMPORTANCE_KEY),
+            ],
+        )['tracks'];
 
         $this->assertCount(2, $tracks);
         $this->assertEqualsWithDelta(0.0, $tracks[0]->startAt, 0.001);
@@ -169,56 +130,21 @@ final class SfxPlacerTest extends TestCase
         $this->assertLessThanOrEqual(5.0, $tracks[1]->startAt);
     }
 
-    public function test_rotates_the_file_when_two_scenes_share_a_query(): void
+    public function test_rotates_the_file_when_two_shots_share_a_query(): void
     {
         $this->indexClip('sfx/door-creak-1.wav', ['door', 'creak'], 0.8);
         $this->indexClip('sfx/door-creak-2.wav', ['door', 'creak'], 0.8);
 
-        $story = Story::fromArray([
-            'title' => 'The door',
-            'hook' => 'A door.',
-            'description' => 'A door.',
-            'tags' => ['night'],
-            'thumbnailPrompt' => 'door',
-            'scenes' => [
-                [
-                    'order' => 1,
-                    'narration' => 'The door creaked open in the dark hallway.',
-                    'imagePrompt' => 'door',
-                    'soundEffect' => null,
-                    'soundEffects' => [[
-                        'query' => 'door creak slow',
-                        'tags' => ['door', 'creak'],
-                        'anchorText' => 'the door creaked',
-                        'kind' => 'key',
-                    ]],
-                ],
-                [
-                    'order' => 2,
-                    'narration' => 'The door creaked again behind my back.',
-                    'imagePrompt' => 'door',
-                    'soundEffect' => null,
-                    'soundEffects' => [[
-                        'query' => 'door creak slow',
-                        'tags' => ['door', 'creak'],
-                        'anchorText' => 'the door creaked again',
-                        'kind' => 'key',
-                    ]],
-                ],
-            ],
-            'pronunciations' => [],
-        ]);
-
-        $tracks = $this->app->make(SfxPlacer::class)->place($story, $this->timings(
+        $tracks = $this->placeEffects(
             [
-                ['order' => 1, 'sceneOrder' => 1, 'text' => 'The door creaked open in the dark hallway.', 'start' => 1.0, 'end' => 3.0],
-                ['order' => 2, 'sceneOrder' => 2, 'text' => 'The door creaked again behind my back.', 'start' => 10.0, 'end' => 12.0],
+                $this->shot(1, 1, 1.0, 3.0, 'The door creaked open in the dark hallway.'),
+                $this->shot(2, 2, 10.0, 12.0, 'The door creaked again behind my back.'),
             ],
             [
-                ['order' => 1, 'start' => 0.0, 'end' => 8.0, 'duration' => 8.0],
-                ['order' => 2, 'start' => 8.0, 'end' => 16.0, 'duration' => 8.0],
+                $this->effect(1, 0.0, 'door creak slow', ['door', 'creak'], DirectedSfx::IMPORTANCE_KEY),
+                $this->effect(2, 0.0, 'door creak slow', ['door', 'creak'], DirectedSfx::IMPORTANCE_KEY),
             ],
-        ));
+        )['tracks'];
 
         $this->assertCount(2, $tracks);
         $this->assertNotSame($tracks[0]->path, $tracks[1]->path);
@@ -228,38 +154,42 @@ final class SfxPlacerTest extends TestCase
     }
 
     /**
-     * @param  list<array{query: string, tags: list<string>, anchorText: string, kind: string}>  $effects
+     * @param  list<Shot>  $shots
+     * @param  list<DirectedSfx>  $effects
+     * @return array{tracks: list<AudioTrack>, skipped: list<array<string, mixed>>}
      */
-    private function story(array $effects): Story
+    private function placeEffects(array $shots, array $effects): array
     {
-        return Story::fromArray([
-            'title' => 'The house',
-            'hook' => 'The house waited.',
-            'description' => 'House.',
-            'tags' => ['night'],
-            'thumbnailPrompt' => 'house',
-            'scenes' => [[
-                'order' => 1,
-                'narration' => 'The door slammed. The floor creaked. The glass cracked.',
-                'imagePrompt' => 'house',
-                'soundEffect' => null,
-                'soundEffects' => $effects,
-            ]],
-            'pronunciations' => [],
-        ]);
+        return $this->app->make(SfxPlacer::class)->place($shots, $effects);
+    }
+
+    private function shot(int $order, int $sceneOrder, float $start, float $end, string $sourceText = ''): Shot
+    {
+        return new Shot(
+            order: $order,
+            sceneOrder: $sceneOrder,
+            start: $start,
+            end: $end,
+            sourceText: $sourceText,
+            framing: 'medium shot',
+            motion: 'static',
+            subject: 'environment',
+            threatStage: null,
+        );
     }
 
     /**
-     * @param  list<array<string, mixed>>  $sentences
-     * @param  list<array<string, mixed>>  $scenes
-     * @return array{sentences: list<array<string, mixed>>, scenes: list<array<string, mixed>>}
+     * @param  list<string>  $tags
      */
-    private function timings(array $sentences, array $scenes): array
+    private function effect(int $shotIndex, float $offsetRatio, string $query, array $tags, string $importance): DirectedSfx
     {
-        return [
-            'sentences' => $sentences,
-            'scenes' => $scenes,
-        ];
+        return new DirectedSfx(
+            shotIndex: $shotIndex,
+            offsetRatio: $offsetRatio,
+            query: $query,
+            tags: $tags,
+            importance: $importance,
+        );
     }
 
     /**
@@ -297,37 +227,5 @@ final class SfxPlacerTest extends TestCase
             'lufs' => -20.0,
             'sha1' => sha1($file),
         ]);
-    }
-
-    private function spyLogger(): object
-    {
-        $logger = new class extends AbstractLogger
-        {
-            /** @var list<array{level: string, message: string}> */
-            public array $records = [];
-
-            public function log($level, $message, array $context = []): void
-            {
-                $this->records[] = [
-                    'level' => (string) $level,
-                    'message' => (string) $message,
-                ];
-            }
-
-            public function hasWarning(string $needle): bool
-            {
-                foreach ($this->records as $record) {
-                    if ($record['level'] === 'warning' && str_contains($record['message'], $needle)) {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-        };
-
-        $this->app->instance(LoggerInterface::class, $logger);
-
-        return $logger;
     }
 }

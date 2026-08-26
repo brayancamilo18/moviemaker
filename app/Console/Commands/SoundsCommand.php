@@ -9,6 +9,7 @@ use App\DataObjects\ResolvedSound;
 use App\DataObjects\Story;
 use App\Services\Audio\CoverageAuditor;
 use App\Services\Audio\StorySoundManifest;
+use App\Services\Image\ShotPlanner;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
@@ -59,6 +60,10 @@ final class SoundsCommand extends Command
         $refresh = (bool) $this->option('refresh');
         $refreshCue = trim((string) $this->option('refresh-cue'));
         $auditOnly = (bool) $this->option('audit');
+
+        if (! $auditOnly && ! $this->assertDirectedShots($slug)) {
+            return self::FAILURE;
+        }
 
         try {
             if ($auditOnly) {
@@ -212,6 +217,47 @@ final class SoundsCommand extends Command
         }
 
         return $decoded;
+    }
+
+    private function assertDirectedShots(string $slug): bool
+    {
+        $path = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json';
+
+        if (! $this->files->isFile($path)) {
+            $this->error('No hay shots.json. Ejecuta story:images primero.');
+
+            return false;
+        }
+
+        try {
+            /** @var array<string, mixed> $decoded */
+            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            $this->error('shots.json no es un JSON válido.');
+
+            return false;
+        }
+
+        if (! isset($decoded['shots']) || ! is_array($decoded['shots']) || $decoded['shots'] === []) {
+            $this->error('shots.json no contiene planos.');
+
+            return false;
+        }
+
+        $version = array_key_exists('plannerVersion', $decoded) ? (int) $decoded['plannerVersion'] : 0;
+
+        if ($version < ShotPlanner::VERSION) {
+            $seen = array_key_exists('plannerVersion', $decoded) ? (string) $version : 'ausente';
+            $this->error(sprintf(
+                'shots.json tiene plannerVersion %s; hace falta %d. Regenera con story:images.',
+                $seen,
+                ShotPlanner::VERSION,
+            ));
+
+            return false;
+        }
+
+        return true;
     }
 
     private function resolveStoryFile(string $file): ?string
