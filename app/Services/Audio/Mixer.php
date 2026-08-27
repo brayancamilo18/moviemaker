@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Audio;
 
 use App\Exceptions\FfmpegException;
+use App\Services\Ffmpeg\FfmpegFilterScript;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
@@ -15,6 +16,10 @@ use Throwable;
 
 final class Mixer
 {
+    // Threshold 0.03 (≈ -30.5 dBFS) y ratio 6 son los valores reales del ducking. La reducción que
+    // producen depende del nivel instantáneo de la narración, no es una cifra fija: con la voz a
+    // -14 LUFS hunden la cama bastante más de los 6-9 dB que declaraban audio.mix.duck_db_min/max,
+    // que se han borrado de config por eso mismo. Release 400 ms: uno más corto bombea entre palabras.
     private const SIDECHAIN = 'threshold=0.03:ratio=6:attack=20:release=400:makeup=1';
 
     private readonly string $ffmpeg;
@@ -27,6 +32,7 @@ final class Mixer
         private Filesystem $files,
         private LibraryClipProcessor $processor,
         private LoggerInterface $logger,
+        private FfmpegFilterScript $filterScript,
         Repository $config,
     ) {
         $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
@@ -57,12 +63,16 @@ final class Mixer
             $arguments[] = $track->path;
         }
 
-        $arguments[] = '-filter_complex_script';
-        $arguments[] = $scriptPath;
+        foreach ($this->filterScript->arguments($scriptPath) as $argument) {
+            $arguments[] = $argument;
+        }
+
         $arguments[] = '-map';
         $arguments[] = '[out]';
         $arguments[] = '-c:a';
-        $arguments[] = 'pcm_s16le';
+        // f32le: la suma es pura (normalize=0) y puede pasar de 0 dBFS. En s16 el recorte sería
+        // irreversible y ocurriría antes de que loudnorm y alimiter vieran nada.
+        $arguments[] = 'pcm_f32le';
         $arguments[] = '-ar';
         $arguments[] = '48000';
         $arguments[] = '-ac';
@@ -125,7 +135,6 @@ final class Mixer
         if ($narrLabel !== null && $duckable !== []) {
             $chains[] = '['.$narrLabel.']asplit=2[narr_mix][narr_sc]';
             $duckBus = $this->mixLabels($duckable, 'duck_bus', $chains) ?? $duckable[0];
-            // Release 400 ms: un release corto bombea la mezcla entre palabras.
             $chains[] = '['.$duckBus.'][narr_sc]sidechaincompress='.self::SIDECHAIN.'[ducked]';
             $final[] = 'ducked';
             $final[] = 'narr_mix';

@@ -5,23 +5,15 @@ declare(strict_types=1);
 namespace App\Services\Video;
 
 use App\DataObjects\Shot;
-use App\Exceptions\FfmpegException;
+use App\Services\Ffmpeg\FfmpegRunner;
+use App\Services\Ffmpeg\MediaProbe;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
 use RuntimeException;
-use Symfony\Component\Process\Process;
 
 final class SceneComposer
 {
-    private readonly string $ffmpeg;
-
-    private readonly string $ffprobe;
-
-    private readonly int $nice;
-
-    private readonly float $timeout;
-
     private readonly int $fps;
 
     private readonly float $transitionDuration;
@@ -30,12 +22,10 @@ final class SceneComposer
 
     public function __construct(
         private Filesystem $files,
+        private FfmpegRunner $ffmpeg,
+        private MediaProbe $probe,
         Repository $config,
     ) {
-        $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
-        $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
-        $this->nice = (int) $config->get('stories.ffmpeg.nice');
-        $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
         $this->fps = (int) $config->get('stories.video.fps');
         $this->transitionDuration = (float) $config->get('stories.video.transition_duration');
         $this->intermediateCrf = (int) $config->get('stories.video.intermediate_crf');
@@ -69,8 +59,8 @@ final class SceneComposer
         $this->files->ensureDirectoryExists(dirname($outputPath));
 
         if (count($clips) === 1) {
-            $this->run([
-                $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
+            $this->ffmpeg->run([
+                '-nostdin', '-y', '-hide_banner',
                 '-i', $clips[0]['path'],
                 '-an',
                 '-c:v', 'libx264',
@@ -80,7 +70,7 @@ final class SceneComposer
                 $outputPath,
             ]);
         } else {
-            $arguments = [$this->ffmpeg, '-nostdin', '-y', '-hide_banner'];
+            $arguments = ['-nostdin', '-y', '-hide_banner'];
 
             foreach ($clips as $clip) {
                 $arguments[] = '-i';
@@ -102,7 +92,7 @@ final class SceneComposer
             $arguments[] = 'yuv420p';
             $arguments[] = $outputPath;
 
-            $this->run($arguments);
+            $this->ffmpeg->run($arguments);
         }
 
         if (! $this->files->isFile($outputPath) || $this->files->size($outputPath) < 1) {
@@ -111,7 +101,7 @@ final class SceneComposer
 
         $this->fitToDuration($outputPath, $plan['duration']);
 
-        $actual = $this->probeDuration($outputPath);
+        $actual = $this->probe->duration($outputPath);
         $tolerance = 1 / max(1, $this->fps);
 
         if (abs($actual - $plan['duration']) > $tolerance) {
@@ -174,7 +164,7 @@ final class SceneComposer
      */
     private function filterGraph(array $offsets): string
     {
-        $fade = $this->formatNumber($this->transitionDuration);
+        $fade = $this->ffmpeg->formatNumber($this->transitionDuration);
         $last = '0';
         $filters = [];
         $joins = count($offsets);
@@ -191,7 +181,7 @@ final class SceneComposer
                     $last,
                     $incoming,
                     $fade,
-                    $this->formatNumber($offset),
+                    $this->ffmpeg->formatNumber($offset),
                     $label,
                 );
             }
@@ -233,69 +223,29 @@ final class SceneComposer
         $frames = max(1, (int) round($duration * $this->fps));
         $fitted = $path.'.fit.mp4';
 
-        $this->run([
-            $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
-            '-i', $path,
-            '-vf', sprintf(
-                'tpad=stop_mode=clone:stop_duration=1,trim=duration=%.3f,fps=%d,setpts=PTS-STARTPTS,format=yuv420p',
-                $duration,
-                $this->fps,
-            ),
-            '-frames:v', (string) $frames,
-            '-an',
-            '-c:v', 'libx264',
-            '-crf', (string) $this->intermediateCrf,
-            '-preset', 'ultrafast',
-            '-pix_fmt', 'yuv420p',
-            $fitted,
-        ]);
+        try {
+            $this->ffmpeg->run([
+                '-nostdin', '-y', '-hide_banner',
+                '-i', $path,
+                '-vf', sprintf(
+                    'tpad=stop_mode=clone:stop_duration=1,trim=duration=%.3f,fps=%d,setpts=PTS-STARTPTS,format=yuv420p',
+                    $duration,
+                    $this->fps,
+                ),
+                '-frames:v', (string) $frames,
+                '-an',
+                '-c:v', 'libx264',
+                '-crf', (string) $this->intermediateCrf,
+                '-preset', 'ultrafast',
+                '-pix_fmt', 'yuv420p',
+                $fitted,
+            ]);
 
-        $this->files->delete($path);
-        $this->files->move($fitted, $path);
-    }
-
-    private function probeDuration(string $path): float
-    {
-        $process = new Process([
-            $this->ffprobe, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'csv=p=0',
-            $path,
-        ]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            throw FfmpegException::fromProcess($process);
-        }
-
-        $duration = (float) trim($process->getOutput());
-
-        if ($duration <= 0) {
-            throw new RuntimeException('ffprobe no pudo leer la duración de '.$path.'.');
-        }
-
-        return round($duration, 3);
-    }
-
-    private function formatNumber(float $value): string
-    {
-        $formatted = rtrim(rtrim(sprintf('%.4f', $value), '0'), '.');
-
-        return $formatted === '' || $formatted === '-' ? '0' : $formatted;
-    }
-
-    /**
-     * @param  list<string>  $arguments
-     */
-    private function run(array $arguments): void
-    {
-        $process = new Process(['nice', '-n', (string) $this->nice, ...$arguments]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            throw FfmpegException::fromProcess($process);
+            $this->files->delete($path);
+            $this->files->move($fitted, $path);
+        } finally {
+            // Si ffmpeg falló o el move no llegó a ocurrir, el .fit.mp4 parcial no se queda ahí.
+            $this->files->delete($fitted);
         }
     }
 }

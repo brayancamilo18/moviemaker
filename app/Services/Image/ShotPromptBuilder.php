@@ -11,12 +11,19 @@ use InvalidArgumentException;
 
 final class ShotPromptBuilder
 {
-    private const MAX_WORDS = 75;
-
     /**
      * @var list<string>
      */
     private const FIGURE_SUBJECTS = ['protagonist', 'threat', 'both'];
+
+    // Prioridad de la parte descriptiva: cuando no cabe todo, se cae primero el rango más alto.
+    private const RANK_DESCRIPTION = 1;
+
+    private const RANK_CHARACTERS = 2;
+
+    private const RANK_SETTING = 3;
+
+    private const RANK_REST = 4;
 
     /**
      * @var array<string, string>
@@ -39,9 +46,15 @@ final class ShotPromptBuilder
 
     private readonly string $styleSuffix;
 
+    private readonly int $maxWords;
+
+    private readonly int $minDescriptiveWords;
+
     public function __construct(Repository $config)
     {
-        $this->styleSuffix = (string) $config->get('stories.image_style_suffix');
+        $this->styleSuffix = trim((string) $config->get('stories.image_style_suffix'));
+        $this->maxWords = (int) $config->get('stories.images.max_prompt_words');
+        $this->minDescriptiveWords = (int) $config->get('stories.images.min_prompt_description_words');
     }
 
     public function build(Shot $shot, VisualBible $bible): string
@@ -62,34 +75,43 @@ final class ShotPromptBuilder
                     continue;
                 }
 
-                $parts[] = $this->sanitize($character['bodyDescriptor']);
+                $parts[] = $this->part(self::RANK_CHARACTERS, $this->sanitize($character['bodyDescriptor']));
                 $options = $character['framingOptions'];
 
                 if ($options !== []) {
-                    $parts[] = $this->sanitize($options[$shot->order % count($options)]);
+                    $parts[] = $this->part(self::RANK_CHARACTERS, $this->sanitize($options[$shot->order % count($options)]));
                 }
             }
         }
 
         if (in_array($shot->subject, ['threat', 'both'], true)) {
-            $parts[] = $this->sanitize($this->threatStageDescriptor($bible, $shot->threatStage));
+            $parts[] = $this->part(self::RANK_REST, $this->sanitize($this->threatStageDescriptor($bible, $shot->threatStage)));
         }
 
-        $parts[] = $this->sanitize($description);
-        $parts[] = $this->sanitize($shot->framing);
-        $parts[] = $this->sanitize($bible->setting);
-        $parts[] = $this->sanitize($bible->timeOfDay);
-        $parts[] = $this->sanitize($bible->weather);
-        $parts[] = $this->sanitize(implode(' ', $bible->palette));
-        $parts[] = $this->styleSuffix;
-        $parts[] = $this->negatives($bible);
+        $parts[] = $this->part(self::RANK_DESCRIPTION, $this->sanitize($description));
+        $parts[] = $this->part(self::RANK_REST, $this->sanitize($shot->framing));
+        $parts[] = $this->part(self::RANK_SETTING, $this->sanitize($bible->setting));
+        $parts[] = $this->part(self::RANK_REST, $this->sanitize($bible->timeOfDay));
+        $parts[] = $this->part(self::RANK_REST, $this->sanitize($bible->weather));
+        $parts[] = $this->part(self::RANK_REST, $this->sanitize(implode(' ', $bible->palette)));
 
-        $parts = array_values(array_filter(
-            $parts,
-            static fn (string $part): bool => trim($part) !== '',
+        $negatives = $this->negatives($bible);
+        $suffix = $this->styleSuffix;
+        $budget = $this->maxWords - $this->wordCount($negatives) - $this->wordCount($suffix);
+
+        // Los negativos son la única defensa contra caras resueltas y marcas de agua: si el
+        // presupuesto descriptivo se queda sin aire, el que cede el sitio es el sufijo de estilo.
+        if ($budget < $this->minDescriptiveWords) {
+            $suffix = '';
+            $budget = $this->maxWords - $this->wordCount($negatives);
+        }
+
+        $prompt = array_values(array_filter(
+            [$this->descriptive($parts, $budget), $suffix, $negatives],
+            static fn (string $part): bool => $part !== '',
         ));
 
-        return $this->limitWords($this->soften(implode(', ', $parts)));
+        return implode(', ', $prompt);
     }
 
     /**
@@ -105,6 +127,67 @@ final class ShotPromptBuilder
         }
 
         return $prompts;
+    }
+
+    /**
+     * @return array{rank: int, text: string}
+     */
+    private function part(int $rank, string $text): array
+    {
+        return [
+            'rank' => $rank,
+            'text' => trim($text),
+        ];
+    }
+
+    /**
+     * Reparte el presupuesto de palabras entre los bloques descriptivos: cada bloque elige antes
+     * que los de menor prioridad, y el que no quepa se descarta entero. Solo el primero (la
+     * description del plano) se recorta, porque un prompt sin él no describe nada. El prompt se
+     * devuelve en orden semántico, no en orden de prioridad.
+     *
+     * @param  list<array{rank: int, text: string}>  $parts
+     */
+    private function descriptive(array $parts, int $budget): string
+    {
+        if ($budget <= 0) {
+            return '';
+        }
+
+        $order = array_keys($parts);
+        usort(
+            $order,
+            static fn (int $left, int $right): int => [$parts[$left]['rank'], $left] <=> [$parts[$right]['rank'], $right],
+        );
+
+        $kept = [];
+        $spent = 0;
+
+        foreach ($order as $index) {
+            $text = $parts[$index]['text'];
+
+            if ($text === '') {
+                continue;
+            }
+
+            $cost = $this->wordCount($text);
+
+            if ($spent + $cost > $budget) {
+                if ($kept !== []) {
+                    continue;
+                }
+
+                $text = $this->limitWords($text, $budget);
+                $cost = $budget;
+            }
+
+            $kept[$index] = $text;
+            $spent += $cost;
+        }
+
+        ksort($kept);
+
+        return implode(', ', $kept);
     }
 
     /**
@@ -203,15 +286,20 @@ final class ShotPromptBuilder
         return implode(' ', $kept);
     }
 
-    private function limitWords(string $prompt): string
+    private function limitWords(string $prompt, int $max): string
     {
         $words = $this->words($prompt);
 
-        if (count($words) <= self::MAX_WORDS) {
+        if (count($words) <= $max) {
             return $prompt;
         }
 
-        return implode(' ', array_slice($words, 0, self::MAX_WORDS));
+        return implode(' ', array_slice($words, 0, $max));
+    }
+
+    private function wordCount(string $text): int
+    {
+        return count($this->words($text));
     }
 
     /**

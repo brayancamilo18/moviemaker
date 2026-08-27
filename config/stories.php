@@ -16,7 +16,7 @@ return [
         'target_words' => 1600,
         'min_scenes' => 8,
         'max_scenes' => 20,
-        'language' => 'en',
+        'language' => env('STORY_LANGUAGE', 'en'),
         'default_mode' => 'folklore',
         'accent' => 'neutral_american',
     ],
@@ -92,6 +92,12 @@ return [
         'concurrency' => 1,
         'timeout' => 120,
         'cache_path' => 'image-cache',
+        // Tope de palabras del prompt. El sufijo de estilo y los negativos quedan fuera del
+        // recorte: el presupuesto de la parte descriptiva es este tope menos lo que ocupan ellos.
+        'max_prompt_words' => 75,
+        // Suelo del presupuesto descriptivo (description del plano más un par de bloques cortos).
+        // Si el sufijo de estilo lo hunde por debajo, se cae el sufijo antes que los negativos.
+        'min_prompt_description_words' => 20,
         'pollinations' => [
             'base_url' => 'https://image.pollinations.ai/prompt',
             'model' => 'flux',
@@ -102,9 +108,26 @@ return [
 
     'output_path' => 'stories',
 
+    // Intermedios que un Ctrl-C, un OOM o un SIGKILL dejan huérfanos. Los buckets son una lista
+    // explícita relativa a storage/app: nunca un glob sobre todo tmp, y nunca fuera de storage/app.
+    'temp' => [
+        'max_age_seconds' => 86400,
+        'buckets' => [
+            'tmp/ambience-beds/*',
+            'tmp/music-beds/*',
+            'tmp/mixer-*',
+            'tmp/ambience-*',
+            'tmp/audio-core-*',
+            'render/assemble-*',
+        ],
+    ],
+
     // La narración manda. El resto se sienta por debajo; el ducking se engancha a su cadena lateral.
     'audio' => [
         'library_path' => 'audio',
+        // Índice local, fuera de git: clips descargados o sintetizados en esta máquina.
+        // resources/audio/manifest.json solo lleva el core kit versionado.
+        'local_index_path' => 'audio/library.json',
         'cache_match_threshold' => 0.6,
         'category_threshold' => 0.3,
         'categories_path' => 'audio/categories.json',
@@ -120,18 +143,17 @@ return [
             'rate_limit_seconds' => 1.0,
             'max_retries' => 4,
         ],
+        // Solo niveles que alguien lee. Los de la narración y del máster están en ffmpeg.loudnorm;
+        // los de la cama, en ambience.intensity_lufs. Duplicarlos aquí era config que mentía.
         'mix' => [
-            'narration_lufs' => -14.0,
-            'ambience_lufs_min' => -32.0,
-            'ambience_lufs_max' => -28.0,
+            // Techo de cada efecto al entrar en la suma: gainDb = este valor − true peak del clip.
             'sfx_true_peak_dbtp' => -20.0,
             'music_lufs' => -30.0,
-            'duck_db_min' => 6.0,
-            'duck_db_max' => 9.0,
         ],
         'resolve' => [
             'search_candidates' => 8,
             'verify_attempts' => 3,
+            // Único umbral de mudez: lo aplica SoundVerifier a camas y a golpes por igual.
             'silent_rms_db' => -50.0,
             'synth_path' => 'tmp/audio-synth',
         ],
@@ -203,7 +225,22 @@ return [
             'contrast' => 1.06,
         ],
         'outro_seconds' => 20,
+        // Único desfase admitido entre la duración de un artefacto de vídeo y la que se esperaba.
+        // Vale tanto para verificar lo que se acaba de escribir como para aceptar lo cacheado.
+        'sync_tolerance' => 0.1,
         'work_path' => 'render',
+    ],
+
+    // Reglas de legibilidad del SRT. Longitudes en caracteres, duraciones y hueco en segundos.
+    // gap es la separación mínima entre dos cues: por debajo de ella el reproductor los superpone.
+    'subtitles' => [
+        'max_line_chars' => 42,
+        'max_lines' => 2,
+        'min_duration' => 1.2,
+        'max_duration' => 6.0,
+        'gap' => 0.08,
+        // Relativo a resources/. Listas de corte de línea por idioma, no un selector de idioma.
+        'lexicon_path' => 'subtitles/lexicon.json',
     ],
 
 ];

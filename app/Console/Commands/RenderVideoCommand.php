@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\DataObjects\Shot;
+use App\Services\Ffmpeg\MediaProbe;
+use App\Services\Storage\TempSweeper;
 use App\Services\Story\StoryValidator;
 use App\Services\Video\FinalEncoder;
 use App\Services\Video\SceneComposer;
@@ -16,14 +18,11 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
 use RuntimeException;
-use Symfony\Component\Process\Process;
 use Throwable;
 
 final class RenderVideoCommand extends Command
 {
     private const STEPS = ['clips', 'scenes', 'assemble', 'encode'];
-
-    private const SYNC_TOLERANCE = 0.1;
 
     protected $signature = 'story:render
         {file : JSON del guion}
@@ -38,11 +37,9 @@ final class RenderVideoCommand extends Command
 
     private readonly string $workRoot;
 
-    private readonly string $ffprobe;
-
     private readonly float $outroSeconds;
 
-    private readonly float $timeout;
+    private readonly float $syncTolerance;
 
     private ?string $fromStep = null;
 
@@ -53,20 +50,23 @@ final class RenderVideoCommand extends Command
         private FinalEncoder $encoder,
         private SubtitleGenerator $subtitles,
         private StoryValidator $validator,
+        private TempSweeper $sweeper,
         private Filesystem $files,
+        private MediaProbe $probe,
         Repository $config,
     ) {
         parent::__construct();
 
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->workRoot = storage_path('app/'.$config->get('stories.video.work_path'));
-        $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
         $this->outroSeconds = (float) $config->get('stories.video.outro_seconds');
-        $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
+        $this->syncTolerance = (float) $config->get('stories.video.sync_tolerance');
     }
 
     public function handle(): int
     {
+        $this->sweepOrphans();
+
         $from = $this->resolveFrom();
 
         if ($from === false) {
@@ -110,7 +110,7 @@ final class RenderVideoCommand extends Command
             return self::FAILURE;
         }
 
-        $audioDuration = $this->probeDuration((string) $audioPath);
+        $audioDuration = $this->probe->tryDuration((string) $audioPath);
 
         if ($audioDuration === null) {
             $this->error('ffprobe no pudo leer la duración del mix de audio.');
@@ -126,9 +126,10 @@ final class RenderVideoCommand extends Command
             return self::SUCCESS;
         }
 
+        $graded = ! (bool) $this->option('no-grade');
         $workDir = $this->workRoot.DIRECTORY_SEPARATOR.$slug;
         $silentPath = $workDir.DIRECTORY_SEPARATOR.'silent.mp4';
-        $videoPath = $storyDirectory.DIRECTORY_SEPARATOR.((bool) $this->option('no-grade') ? 'video-nograde.mp4' : 'video.mp4');
+        $videoPath = $storyDirectory.DIRECTORY_SEPARATOR.($graded ? 'video.mp4' : 'video-nograde.mp4');
         $subtitlesPath = $storyDirectory.DIRECTORY_SEPARATOR.'subtitles.srt';
         $started = hrtime(true);
 
@@ -137,7 +138,6 @@ final class RenderVideoCommand extends Command
             $scenePaths = $this->composeScenes($grouped, $clipPaths, $workDir);
             $this->assembleVideo($scenePaths, $audioDuration, $silentPath);
             $this->encodeVideo($silentPath, (string) $audioPath, $videoPath);
-            $this->writeSubtitles($storyDirectory.DIRECTORY_SEPARATOR.'timings.json', $subtitlesPath);
         } catch (Throwable $exception) {
             $this->newLine();
             $this->error($exception->getMessage());
@@ -146,7 +146,16 @@ final class RenderVideoCommand extends Command
         }
 
         $elapsed = (hrtime(true) - $started) / 1e9;
-        $videoDuration = $this->probeDuration($videoPath) ?? 0.0;
+
+        // Los subtítulos son un sidecar: si fallan, el render sigue siendo válido y hay que
+        // apuntarlo en el guion igualmente. Media hora de codificación no se tira por un SRT.
+        try {
+            $this->writeSubtitles($storyDirectory.DIRECTORY_SEPARATOR.'timings.json', $subtitlesPath);
+        } catch (Throwable $exception) {
+            $this->warn('No se pudieron generar los subtítulos: '.$exception->getMessage());
+        }
+
+        $videoDuration = $this->probe->tryDuration($videoPath) ?? 0.0;
         $bytes = $this->files->isFile($videoPath) ? $this->files->size($videoPath) : 0;
 
         if (! (bool) $this->option('keep-intermediates')) {
@@ -157,7 +166,10 @@ final class RenderVideoCommand extends Command
         $this->printSummary($videoDuration, $audioDuration, $bytes, $elapsed, $videoPath);
         $expected = round($audioDuration + $this->outroSeconds, 3);
         $this->updateStoryPayload($storyFile, $payload, [
-            'mp4' => $videoPath,
+            // Un render sin gradar no es publicable: apunta a su propia clave y deja intacto el
+            // puntero al máster gradado.
+            'mp4' => $graded ? $videoPath : $this->previousVideoPath($payload, 'mp4'),
+            'mp4_nograde' => $graded ? $this->previousVideoPath($payload, 'mp4_nograde') : $videoPath,
             'subtitles' => $this->files->isFile($subtitlesPath) ? $subtitlesPath : null,
             'durationSeconds' => round($videoDuration, 3),
             'audioDurationSeconds' => round($audioDuration, 3),
@@ -165,11 +177,26 @@ final class RenderVideoCommand extends Command
             'bytes' => $bytes,
             'elapsedSeconds' => round($elapsed, 1),
             'realtimeFactor' => round($elapsed / max($videoDuration, 0.001), 2),
-            'grade' => ! (bool) $this->option('no-grade'),
+            'grade' => $graded,
             'keptIntermediates' => (bool) $this->option('keep-intermediates'),
         ]);
 
         return self::SUCCESS;
+    }
+
+    private function sweepOrphans(): void
+    {
+        $swept = $this->sweeper->sweep();
+
+        if ($swept['entries'] === 0) {
+            return;
+        }
+
+        $this->comment(sprintf(
+            'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
+            $swept['entries'],
+            $swept['bytes'] / 1048576,
+        ));
     }
 
     /**
@@ -382,7 +409,12 @@ final class RenderVideoCommand extends Command
         $bar->start();
 
         try {
-            $this->assembler->assemble($scenePaths, $audioDuration, $silentPath);
+            $this->assembler->assemble(
+                $scenePaths,
+                $audioDuration,
+                $silentPath,
+                (bool) $this->option('keep-intermediates'),
+            );
         } finally {
             $bar->advance();
             $bar->finish();
@@ -398,7 +430,7 @@ final class RenderVideoCommand extends Command
             throw new RuntimeException('No hay vídeo mudo válido. Ejecuta sin --from o con --from=assemble.');
         }
 
-        $audioDuration = $this->probeDuration($audioPath) ?? 0.0;
+        $audioDuration = $this->probe->tryDuration($audioPath) ?? 0.0;
         $grade = ! (bool) $this->option('no-grade');
         $expected = round($audioDuration + $this->outroSeconds, 3);
 
@@ -570,11 +602,29 @@ final class RenderVideoCommand extends Command
     {
         $text = sprintf('Desfase %s: %+.3f s', $label, $delta);
 
-        if (abs($delta) > self::SYNC_TOLERANCE) {
+        if (abs($delta) > $this->syncTolerance) {
             return '<fg=red>'.$text.'</>';
         }
 
         return $text;
+    }
+
+    /**
+     * La ruta que un render anterior dejó en el guion, para no perderla al escribir la de este.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function previousVideoPath(array $payload, string $key): ?string
+    {
+        $video = $payload['video'] ?? null;
+
+        if (! is_array($video)) {
+            return null;
+        }
+
+        $path = $video[$key] ?? null;
+
+        return is_string($path) && $path !== '' ? $path : null;
     }
 
     /**
@@ -664,37 +714,19 @@ final class RenderVideoCommand extends Command
             return false;
         }
 
-        $duration = $this->probeDuration($path);
+        $duration = $this->probe->tryDuration($path);
 
         if ($duration === null) {
             return false;
         }
 
-        if ($expected !== null && abs($duration - $expected) > 0.15) {
+        // Aceptar lo cacheado nunca puede ser más laxo que verificarlo: si lo fuera, un artefacto
+        // desfasado se daría por bueno aquí y el paso siguiente lo rechazaría en cada reejecución.
+        if ($expected !== null && abs($duration - $expected) > $this->syncTolerance) {
             return false;
         }
 
         return true;
-    }
-
-    private function probeDuration(string $path): ?float
-    {
-        $process = new Process([
-            $this->ffprobe, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'csv=p=0',
-            $path,
-        ]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            return null;
-        }
-
-        $duration = (float) trim($process->getOutput());
-
-        return $duration > 0 ? round($duration, 3) : null;
     }
 
     private function formatClock(float $seconds): string

@@ -12,10 +12,6 @@ final class SoundVerifier
 {
     private const MIN_BYTES = 5 * 1024;
 
-    private const BED_MUTE_RMS_DB = -42.0;
-
-    private const SFX_MUTE_RMS_DB = -45.0;
-
     private const SFX_MIN_PEAK_DBFS = -35.0;
 
     private const CLIP_PEAK_DBFS = 0.0;
@@ -30,6 +26,8 @@ final class SoundVerifier
 
     private readonly float $timeout;
 
+    private readonly float $muteRmsDb;
+
     public function __construct(
         private Filesystem $files,
         Repository $config,
@@ -38,6 +36,7 @@ final class SoundVerifier
         $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
         $this->nice = (int) $config->get('stories.ffmpeg.nice');
         $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
+        $this->muteRmsDb = (float) $config->get('stories.audio.resolve.silent_rms_db', -50.0);
     }
 
     public function verify(string $path, string $type, float $minDuration): VerificationResult
@@ -72,13 +71,11 @@ final class SoundVerifier
             return VerificationResult::fail('No se pudo medir el RMS con volumedetect.');
         }
 
-        $muteRms = $type === 'sfx' ? self::SFX_MUTE_RMS_DB : self::BED_MUTE_RMS_DB;
-
-        if ($loudness['mean'] <= $muteRms) {
+        if ($loudness['mean'] <= $this->muteRmsDb) {
             return VerificationResult::fail(sprintf(
                 'Está mudo: RMS medio %.1f dB (umbral %.1f dB).',
                 $loudness['mean'],
-                $muteRms,
+                $this->muteRmsDb,
             ));
         }
 

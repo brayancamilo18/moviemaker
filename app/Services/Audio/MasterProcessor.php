@@ -184,7 +184,8 @@ final class MasterProcessor
                 $duration,
                 $duration,
             ),
-            '-c:a', 'pcm_s16le',
+            // Intermedio en f32le: el máster no puede limitar lo que ya llegue recortado.
+            '-c:a', 'pcm_f32le',
             '-ar', '48000',
             '-ac', '2',
             '-f', 'wav',

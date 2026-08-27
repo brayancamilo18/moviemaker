@@ -7,6 +7,7 @@ namespace App\Services\Audio;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Throwable;
 
@@ -21,6 +22,7 @@ final class CoreKitInstaller
         private LibraryClipProcessor $processor,
         private SoundVerifier $verifier,
         private Filesystem $files,
+        private LoggerInterface $logger,
         Repository $config,
     ) {
         $this->searchCandidates = max(1, (int) $config->get('stories.audio.core_search_candidates', 12));
@@ -221,7 +223,7 @@ final class CoreKitInstaller
             ...SoundLibraryImporter::tagsFromQuery($category['curatedQuery']),
         ]);
 
-        $this->library->add([
+        $this->library->addCore([
             'file' => $this->relativeFile($category),
             'type' => $category['type'],
             'tags' => $tags,
@@ -234,17 +236,22 @@ final class CoreKitInstaller
             'attribution_required' => $sound['license'] === FreesoundClient::LICENSE_ATTRIBUTION,
             'lufs' => $lufs,
             'sha1' => $sha1,
-            'is_core' => true,
         ]);
     }
 
     /**
+     * Indexa un WAV que ya estaba en disco. Su procedencia no consta en ninguna parte, así que
+     * NO se declara interno: se marca como licencia desconocida con atribución obligatoria.
+     * Este índice se comitea, y una licencia falsa comiteada es peor que un crédito de sobra.
+     *
      * @param  array{slug: string, keywords: list<string>, type: string, curatedQuery: string, coreFile: string, synthProfile: string}  $category
      */
     private function indexExisting(array $category, string $path): void
     {
+        $relative = $this->relativeFile($category);
+
         foreach ($this->library->clips() as $clip) {
-            if ((string) ($clip['file'] ?? '') === $this->relativeFile($category)) {
+            if ((string) ($clip['file'] ?? '') === $relative) {
                 return;
             }
         }
@@ -258,20 +265,27 @@ final class CoreKitInstaller
         $duration = $this->processor->duration($path);
         $lufs = $this->processor->integratedLufs($path);
 
-        $this->library->add([
-            'file' => $this->relativeFile($category),
+        $this->logger->warning(
+            'Clip del core en disco sin entrada en el manifiesto: se indexa con licencia desconocida y atribución obligatoria.',
+            [
+                'file' => $relative,
+                'category' => $category['slug'],
+            ],
+        );
+
+        $this->library->addCore([
+            'file' => $relative,
             'type' => $category['type'],
             'tags' => $this->mergeTags([...$category['keywords'], $category['slug']]),
             'duration' => $duration,
             'loopable' => $this->processor->isLoopable($path, $duration),
             'source_id' => 'core-'.$category['slug'],
-            'source_url' => 'internal://core/'.$category['slug'],
-            'author' => 'horror-studio',
-            'license' => 'internal',
-            'attribution_required' => false,
+            'source_url' => '',
+            'author' => AudioLibrary::AUTHOR_UNKNOWN,
+            'license' => AudioLibrary::LICENSE_UNKNOWN,
+            'attribution_required' => true,
             'lufs' => $lufs,
             'sha1' => $sha1,
-            'is_core' => true,
         ]);
     }
 

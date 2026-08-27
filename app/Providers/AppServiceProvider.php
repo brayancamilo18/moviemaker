@@ -8,6 +8,9 @@ use App\Contracts\ImageGenerator;
 use App\Contracts\TextToSpeech;
 use App\Services\Audio\FreesoundClient;
 use App\Services\Audio\SoundResolver;
+use App\Services\Ffmpeg\FfmpegFilterScript;
+use App\Services\Ffmpeg\FfmpegRunner;
+use App\Services\Ffmpeg\MediaProbe;
 use App\Services\Image\PollinationsGenerator;
 use App\Services\Llm\GeminiClient;
 use App\Services\Tts\KokoroTts;
@@ -68,6 +71,12 @@ class AppServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(SoundResolver::class);
+
+        // Singleton para que la detección de la opción de filter_complex se pague una sola vez.
+        $this->app->singleton(FfmpegFilterScript::class);
+
+        $this->app->singleton(FfmpegRunner::class);
+        $this->app->singleton(MediaProbe::class);
 
         $this->app->singleton(ImageGenerator::class, function (Application $app): ImageGenerator {
             $provider = (string) $app->make('config')->get('stories.images.provider');

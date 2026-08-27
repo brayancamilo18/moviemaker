@@ -16,6 +16,9 @@ use Symfony\Component\Process\Process;
 
 final class TranscriptTimer
 {
+    public const MODEL_HINT = 'Arréglalo de una de estas dos formas: define WHISPER_MODEL con la ruta absoluta '
+        .'a un ggml-*.bin, o déjala vacía y coloca el modelo en storage/app/whisper/ggml-base.en.bin.';
+
     private readonly string $binary;
 
     private readonly string $model;
@@ -54,7 +57,28 @@ final class TranscriptTimer
 
     public function isConfigured(): bool
     {
-        return $this->model !== '' && $this->files->isFile($this->model);
+        return $this->modelProblem() === null;
+    }
+
+    /**
+     * Describe por qué el modelo no sirve, o null si está en su sitio.
+     */
+    public function modelProblem(): ?string
+    {
+        if ($this->model === '') {
+            return 'La ruta del modelo de whisper.cpp está vacía. '.self::MODEL_HINT;
+        }
+
+        if ($this->files->isFile($this->model)) {
+            return null;
+        }
+
+        return sprintf(
+            'El modelo de whisper.cpp no existe en %s (%s). %s',
+            $this->model,
+            $this->files->exists($this->model) ? 'la ruta existe pero no es un fichero' : 'la ruta no existe',
+            self::MODEL_HINT,
+        );
     }
 
     /**
@@ -68,10 +92,10 @@ final class TranscriptTimer
             throw new InvalidArgumentException('No existe el audio '.$audioPath.'.');
         }
 
-        if ($this->model === '' || ! $this->files->isFile($this->model)) {
-            throw new RuntimeException(
-                'No hay un modelo de whisper.cpp. Define WHISPER_MODEL con la ruta a un ggml-*.bin.',
-            );
+        $problem = $this->modelProblem();
+
+        if ($problem !== null) {
+            throw new RuntimeException('No se puede transcribir sin modelo de whisper.cpp. '.$problem);
         }
 
         $workDir = $this->makeWorkDirectory();

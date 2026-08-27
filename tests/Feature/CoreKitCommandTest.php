@@ -107,6 +107,27 @@ final class CoreKitCommandTest extends TestCase
         $this->assertTrue($clip['is_core']);
     }
 
+    public function test_an_existing_core_file_absent_from_the_index_is_indexed_as_unknown_license(): void
+    {
+        $existing = $this->wav('existing.wav', 1.0, mute: false);
+        $destination = $this->libraryDir.'/core/impact-dull.wav';
+
+        (new Filesystem)->ensureDirectoryExists(dirname($destination));
+        (new Filesystem)->copy($existing, $destination);
+
+        $this->artisan('audio:core-kit', ['--only' => 'impact_dull'])
+            ->assertSuccessful()
+            ->expectsOutputToContain('conservado');
+
+        $clip = $this->app->make(AudioLibrary::class)->clips()[0];
+
+        $this->assertSame('core/impact-dull.wav', $clip['file']);
+        $this->assertSame(AudioLibrary::LICENSE_UNKNOWN, $clip['license']);
+        $this->assertSame(AudioLibrary::AUTHOR_UNKNOWN, $clip['author']);
+        $this->assertTrue($clip['attribution_required']);
+        Http::assertNothingSent();
+    }
+
     public function test_verify_passes_when_the_core_file_is_audible(): void
     {
         $audible = $this->wav('ok.wav', 1.0, mute: false);

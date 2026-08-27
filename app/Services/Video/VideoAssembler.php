@@ -4,25 +4,15 @@ declare(strict_types=1);
 
 namespace App\Services\Video;
 
-use App\Exceptions\FfmpegException;
+use App\Services\Ffmpeg\FfmpegRunner;
+use App\Services\Ffmpeg\MediaProbe;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
 use RuntimeException;
-use Symfony\Component\Process\Process;
 
 final class VideoAssembler
 {
-    private const SYNC_TOLERANCE = 0.1;
-
-    private readonly string $ffmpeg;
-
-    private readonly string $ffprobe;
-
-    private readonly int $nice;
-
-    private readonly float $timeout;
-
     private readonly int $fps;
 
     private readonly float $sceneFadeDuration;
@@ -31,35 +21,37 @@ final class VideoAssembler
 
     private readonly float $outroSeconds;
 
-    private readonly string $workRoot;
+    private readonly float $syncTolerance;
 
     public function __construct(
         private Filesystem $files,
+        private FfmpegRunner $ffmpeg,
+        private MediaProbe $probe,
         Repository $config,
     ) {
-        $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
-        $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
-        $this->nice = (int) $config->get('stories.ffmpeg.nice');
-        $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
         $this->fps = (int) $config->get('stories.video.fps');
         $this->sceneFadeDuration = (float) $config->get('stories.video.scene_fade_duration');
         $this->intermediateCrf = (int) $config->get('stories.video.intermediate_crf');
         $this->outroSeconds = (float) $config->get('stories.video.outro_seconds');
-        $this->workRoot = storage_path('app/'.$config->get('stories.video.work_path'));
+        $this->syncTolerance = (float) $config->get('stories.video.sync_tolerance');
     }
 
     /**
      * @param  list<string>  $sceneClips
      */
-    public function assemble(array $sceneClips, float $targetDuration, string $outputPath): string
-    {
+    public function assemble(
+        array $sceneClips,
+        float $targetDuration,
+        string $outputPath,
+        bool $keepIntermediates = false,
+    ): string {
         $paths = $this->assertClips($sceneClips);
 
         if ($targetDuration <= 0) {
             throw new InvalidArgumentException('La duración del mix de audio tiene que ser mayor que 0.');
         }
 
-        $workDir = $this->makeWorkDirectory();
+        $workDir = $this->makeWorkDirectory($outputPath);
 
         try {
             $prepared = [];
@@ -67,7 +59,7 @@ final class VideoAssembler
             $last = count($paths) - 1;
 
             foreach ($paths as $index => $path) {
-                $duration = $this->probeDuration($path);
+                $duration = $this->probe->duration($path);
                 $durations[] = $duration;
                 $prepared[] = $this->applySceneFades(
                     $path,
@@ -81,7 +73,7 @@ final class VideoAssembler
             $bodyPath = $workDir.DIRECTORY_SEPARATOR.'body.mp4';
             $this->concat($prepared, $bodyPath);
 
-            $this->assertSync($durations, $this->probeDuration($bodyPath), $targetDuration);
+            $this->assertSync($durations, $this->probe->duration($bodyPath), $targetDuration);
 
             $outroPath = $this->renderOutro(
                 $prepared[$last],
@@ -97,7 +89,9 @@ final class VideoAssembler
 
             return $outputPath;
         } finally {
-            $this->files->deleteDirectory($workDir);
+            if (! $keepIntermediates) {
+                $this->files->deleteDirectory($workDir);
+            }
         }
     }
 
@@ -137,18 +131,18 @@ final class VideoAssembler
         $filters = [];
 
         if ($fadeIn) {
-            $filters[] = 'fade=t=in:d='.$this->formatNumber($fade);
+            $filters[] = 'fade=t=in:d='.$this->ffmpeg->formatNumber($fade);
         }
 
         if ($fadeOut) {
             $start = max(0.0, round($duration - $fade, 3));
-            $filters[] = 'fade=t=out:st='.$this->formatNumber($start).':d='.$this->formatNumber($fade);
+            $filters[] = 'fade=t=out:st='.$this->ffmpeg->formatNumber($start).':d='.$this->ffmpeg->formatNumber($fade);
         }
 
         $filters[] = 'setsar=1';
 
-        $this->run([
-            $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
+        $this->ffmpeg->run([
+            '-nostdin', '-y', '-hide_banner',
             '-i', $inputPath,
             '-vf', implode(',', $filters),
             ...$this->videoEncodeArguments(),
@@ -166,8 +160,8 @@ final class VideoAssembler
     {
         $framePath = dirname($outputPath).DIRECTORY_SEPARATOR.'last-frame.png';
 
-        $this->run([
-            $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
+        $this->ffmpeg->run([
+            '-nostdin', '-y', '-hide_banner',
             '-sseof', '-0.1',
             '-i', $lastClipPath,
             '-frames:v', '1',
@@ -179,10 +173,10 @@ final class VideoAssembler
         }
 
         $frames = max(1, (int) round($this->outroSeconds * $this->fps));
-        $fade = $this->formatNumber($this->outroSeconds);
+        $fade = $this->ffmpeg->formatNumber($this->outroSeconds);
 
-        $this->run([
-            $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
+        $this->ffmpeg->run([
+            '-nostdin', '-y', '-hide_banner',
             '-loop', '1',
             '-framerate', (string) $this->fps,
             '-i', $framePath,
@@ -208,8 +202,8 @@ final class VideoAssembler
         $lines = array_map(fn (string $path): string => $this->concatFileLine($path), $paths);
         $this->files->put($listPath, implode("\n", $lines)."\n");
 
-        $this->run([
-            $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
+        $this->ffmpeg->run([
+            '-nostdin', '-y', '-hide_banner',
             '-fflags', '+genpts',
             '-f', 'concat', '-safe', '0',
             '-i', $listPath,
@@ -225,7 +219,7 @@ final class VideoAssembler
     {
         $delta = round($actual - $target, 3);
 
-        if (abs($delta) <= self::SYNC_TOLERANCE) {
+        if (abs($delta) <= $this->syncTolerance) {
             return;
         }
 
@@ -236,7 +230,7 @@ final class VideoAssembler
             $running = round($running + $duration, 3);
             $at = $index + 1;
 
-            if ($delta > 0 && $running > $target + self::SYNC_TOLERANCE) {
+            if ($delta > 0 && $running > $target + $this->syncTolerance) {
                 break;
             }
         }
@@ -248,10 +242,11 @@ final class VideoAssembler
         }
 
         throw new RuntimeException(sprintf(
-            'El vídeo mudo dura %.3f s y el mix de audio %.3f s (desfase %+.3f s). El desfase se acumuló en la escena %d (acumulado %.3f s). Duraciones: %s. No se estira el vídeo: hay un bug aguas arriba.',
+            'El vídeo mudo dura %.3f s y el mix de audio %.3f s (desfase %+.3f s, tolerancia %.3f s). El desfase se acumuló en la escena %d (acumulado %.3f s). Duraciones: %s. No se estira el vídeo: hay un bug aguas arriba. Rehaz el vídeo mudo con: php artisan story:render {file} --from=assemble',
             $actual,
             $target,
             $delta,
+            $this->syncTolerance,
             $at,
             $running,
             implode(', ', $breakdown),
@@ -279,30 +274,6 @@ final class VideoAssembler
         return min($this->sceneFadeDuration, max($frame, $duration - $frame));
     }
 
-    private function probeDuration(string $path): float
-    {
-        $process = new Process([
-            $this->ffprobe, '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'csv=p=0',
-            $path,
-        ]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            throw FfmpegException::fromProcess($process);
-        }
-
-        $duration = (float) trim($process->getOutput());
-
-        if ($duration <= 0) {
-            throw new RuntimeException('ffprobe no pudo leer la duración de '.$path.'.');
-        }
-
-        return round($duration, 3);
-    }
-
     private function concatFileLine(string $path): string
     {
         $absolute = realpath($path);
@@ -314,32 +285,15 @@ final class VideoAssembler
         return "file '".str_replace("'", "'\\''", $absolute)."'";
     }
 
-    private function makeWorkDirectory(): string
+    /**
+     * Cuelga del árbol del slug, junto al vídeo mudo: fuera de él, la limpieza del comando nunca lo
+     * alcanza y cada huérfano son varios GB.
+     */
+    private function makeWorkDirectory(string $outputPath): string
     {
-        $directory = $this->workRoot.DIRECTORY_SEPARATOR.'assemble-'.bin2hex(random_bytes(8));
+        $directory = dirname($outputPath).DIRECTORY_SEPARATOR.'assemble';
         $this->files->ensureDirectoryExists($directory);
 
         return $directory;
-    }
-
-    private function formatNumber(float $value): string
-    {
-        $formatted = rtrim(rtrim(sprintf('%.4f', $value), '0'), '.');
-
-        return $formatted === '' || $formatted === '-' ? '0' : $formatted;
-    }
-
-    /**
-     * @param  list<string>  $arguments
-     */
-    private function run(array $arguments): void
-    {
-        $process = new Process(['nice', '-n', (string) $this->nice, ...$arguments]);
-        $process->setTimeout($this->timeout);
-        $process->run();
-
-        if (! $process->isSuccessful()) {
-            throw FfmpegException::fromProcess($process);
-        }
     }
 }

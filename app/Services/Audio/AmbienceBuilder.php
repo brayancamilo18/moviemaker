@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Services\Audio;
 
 use App\DataObjects\SceneAmbience;
+use App\DataObjects\SoundCredit;
 use App\DataObjects\Story;
 use App\DataObjects\StoryScene;
 use App\Exceptions\FfmpegException;
+use App\Services\Ffmpeg\FfmpegFilterScript;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
@@ -37,6 +39,7 @@ final class AmbienceBuilder
         private LibraryClipProcessor $processor,
         private Filesystem $files,
         private NarrationClock $clock,
+        private FfmpegFilterScript $filterScript,
         Repository $config,
     ) {
         $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
@@ -52,6 +55,10 @@ final class AmbienceBuilder
     }
 
     /**
+     * La pista devuelta lleva en `credits` un clip por escena: lo que de verdad ha entrado en la
+     * cama, venga del override del cue o de la resolución en tiempo de mezcla. No se puede indexar
+     * por la ruta de la pista porque el join funde todas las escenas en un único WAV.
+     *
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
      * @param  array<int, array{path: string, gainDb?: float}>  $resolvedScenes
      */
@@ -70,6 +77,7 @@ final class AmbienceBuilder
         $workDir = storage_path('app/tmp/ambience-'.bin2hex(random_bytes(6)));
         $this->files->ensureDirectoryExists($workDir);
         $segments = [];
+        $credits = [];
 
         try {
             $lastIndex = count($windows) - 1;
@@ -82,12 +90,14 @@ final class AmbienceBuilder
                 $minDuration = max(0.05, $window['duration'] / 4.0);
                 $override = $resolvedScenes[$window['order']] ?? null;
                 $overridePath = is_array($override) ? (string) ($override['path'] ?? '') : '';
+                $cueId = 'ambience.'.$window['order'];
 
                 if ($overridePath !== '' && $this->files->isFile($overridePath)) {
                     $source = $overridePath;
                     $gainDb = array_key_exists('gainDb', $override)
                         ? (float) $override['gainDb']
                         : $this->targetLufs($spec->intensity) - $this->processor->integratedLufs($source);
+                    $credits[] = SoundCredit::fromOverride($cueId, 'ambience', 'bed', $source);
                 } else {
                     $resolved = $this->resolver->resolve(
                         $spec->tags,
@@ -100,6 +110,7 @@ final class AmbienceBuilder
                         ? $resolved->lufs
                         : $this->processor->integratedLufs($source);
                     $gainDb = $this->targetLufs($spec->intensity) - $lufs;
+                    $credits[] = SoundCredit::fromResolved($cueId, 'ambience', 'bed', $resolved, $source);
                 }
 
                 $segment = $workDir.DIRECTORY_SEPARATOR.sprintf('scene-%02d.wav', $window['order']);
@@ -135,6 +146,7 @@ final class AmbienceBuilder
                 duckable: true,
                 fadeIn: 0.0,
                 fadeOut: 0.0,
+                credits: $credits,
             );
         } finally {
             $this->files->deleteDirectory($workDir);
@@ -371,8 +383,10 @@ final class AmbienceBuilder
             $arguments[] = $segment;
         }
 
-        $arguments[] = '-filter_complex_script';
-        $arguments[] = $scriptPath;
+        foreach ($this->filterScript->arguments($scriptPath) as $argument) {
+            $arguments[] = $argument;
+        }
+
         $arguments[] = '-map';
         $arguments[] = '[out]';
         $arguments[] = '-c:a';

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\DataObjects\ResolvedSound;
+use App\DataObjects\SoundCredit;
 use App\DataObjects\Story;
 use App\Exceptions\FfmpegException;
 use Illuminate\Contracts\Config\Repository;
@@ -53,6 +55,9 @@ final class MusicPlacer
     }
 
     /**
+     * Cada pista devuelta lleva en `credits` el clip de origen que suena en ella, con su ruta: la
+     * ruta de la pista es el WAV ya ajustado a la ventana y no sirve para acreditar nada.
+     *
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
      * @param  array<string, array{path: string, gainDb?: float}>  $resolved
      * @return list<AudioTrack>
@@ -80,6 +85,8 @@ final class MusicPlacer
                 fadeIn: 0.0,
                 fadeOut: $this->hookFadeOut,
                 label: 'gancho',
+                cueId: 'music.hook',
+                role: 'hook',
                 override: $resolved['music.hook'] ?? null,
             );
 
@@ -101,6 +108,8 @@ final class MusicPlacer
                 fadeIn: $this->climaxFadeIn,
                 fadeOut: $this->climaxFadeOut,
                 label: 'clímax',
+                cueId: 'music.climax',
+                role: 'climax',
                 override: $resolved['music.climax'] ?? null,
             );
 
@@ -126,6 +135,8 @@ final class MusicPlacer
         float $fadeIn,
         float $fadeOut,
         string $label,
+        string $cueId,
+        string $role,
         ?array $override = null,
     ): ?AudioTrack {
         $window = round($endAt - $startAt, 3);
@@ -136,16 +147,17 @@ final class MusicPlacer
 
         $overridePath = is_array($override) ? (string) ($override['path'] ?? '') : '';
         $gainDb = null;
+        $found = null;
 
         if ($overridePath !== '' && $this->files->isFile($overridePath)) {
             $source = $overridePath;
             $gainDb = array_key_exists('gainDb', $override) ? (float) $override['gainDb'] : null;
         } else {
-            $resolved = $this->resolver->resolve($tags, $query, 'music', 0.0, $exclude);
-            $source = $resolved->path;
+            $found = $this->resolver->resolve($tags, $query, 'music', 0.0, $exclude);
+            $source = $found->path;
 
-            if ($source !== '' && $this->files->isFile($source) && $resolved->lufs !== 0.0) {
-                $gainDb = $this->targetLufs - $resolved->lufs;
+            if ($source !== '' && $this->files->isFile($source) && $found->lufs !== 0.0) {
+                $gainDb = $this->targetLufs - $found->lufs;
             }
         }
 
@@ -157,6 +169,10 @@ final class MusicPlacer
 
             return null;
         }
+
+        $credit = $found instanceof ResolvedSound
+            ? SoundCredit::fromResolved($cueId, 'music', $role, $found, $source)
+            : SoundCredit::fromOverride($cueId, 'music', $role, $source);
 
         $exclude[] = $source;
         $path = $this->fitToWindow($source, $window);
@@ -174,6 +190,7 @@ final class MusicPlacer
             duckable: true,
             fadeIn: $fadeIn,
             fadeOut: $fadeOut,
+            credits: [$credit],
         );
     }
 

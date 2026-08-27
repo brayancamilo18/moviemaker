@@ -86,10 +86,15 @@ final class NarrateStoryCommand extends Command
             return self::FAILURE;
         }
 
-        if (! $skipTimings && ! $this->timer->isConfigured()) {
-            $this->error('No hay un modelo de whisper.cpp. Define WHISPER_MODEL o usa --skip-timings.');
+        if (! $skipTimings) {
+            $problem = $this->timer->modelProblem();
 
-            return self::FAILURE;
+            if ($problem !== null) {
+                $this->error($problem);
+                $this->line('También puedes saltarte la alineación con --skip-timings.');
+
+                return self::FAILURE;
+            }
         }
 
         $story = Story::fromArray($payload);
@@ -155,8 +160,10 @@ final class NarrateStoryCommand extends Command
      */
     private function alignExistingMaster(string $storyFile, array $payload): int
     {
-        if (! $this->timer->isConfigured()) {
-            $this->error('No hay un modelo de whisper.cpp. Define WHISPER_MODEL con la ruta a un ggml-*.bin.');
+        $problem = $this->timer->modelProblem();
+
+        if ($problem !== null) {
+            $this->error($problem);
 
             return self::FAILURE;
         }

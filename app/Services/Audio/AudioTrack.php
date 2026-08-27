@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\DataObjects\SoundCredit;
 use InvalidArgumentException;
 
 final readonly class AudioTrack
@@ -26,6 +27,13 @@ final readonly class AudioTrack
         self::ROLE_MUSIC,
     ];
 
+    /**
+     * `credits` es la procedencia de lo que suena en esta pista. Es una lista porque una sola
+     * pista puede venir de varios clips: la cama de ambiente funde uno por escena en un único WAV
+     * y ahí ya no se puede deducir el origen a partir de `path`.
+     *
+     * @param  list<SoundCredit>  $credits
+     */
     public function __construct(
         public string $path,
         public string $role,
@@ -35,7 +43,14 @@ final readonly class AudioTrack
         public bool $duckable,
         public float $fadeIn,
         public float $fadeOut,
+        public array $credits = [],
     ) {
+        foreach ($this->credits as $credit) {
+            if (! $credit instanceof SoundCredit) {
+                throw new InvalidArgumentException('credits solo acepta instancias de SoundCredit.');
+            }
+        }
+
         if (! in_array($this->role, self::ROLES, true)) {
             throw new InvalidArgumentException(
                 "El rol '{$this->role}' no es válido. Usa narration, ambience, sfx o music.",

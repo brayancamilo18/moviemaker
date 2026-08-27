@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Contracts\ImageGenerator;
+use App\DataObjects\PlannedShot;
 use App\DataObjects\Shot;
+use App\DataObjects\ShotPlan;
 use App\DataObjects\Story;
 use App\DataObjects\VisualBible;
 use App\Services\Audio\NarrationClock;
 use App\Services\Image\ShotDirector;
 use App\Services\Image\ShotPlanner;
+use App\Services\Image\ShotPlanRepository;
 use App\Services\Image\ShotPromptBuilder;
 use App\Services\Image\VisualBibleGenerator;
 use Illuminate\Console\Command;
@@ -27,13 +30,12 @@ final class GenerateImagesCommand extends Command
         {file : Ruta al JSON del guion generado en la Fase 1}
         {--only= : Planos a regenerar: 12, 40-45, 3,7,19}
         {--force : Ignora la caché y suma un offset al seed}
+        {--redirect : Vuelve a dirigir los planos aunque el plan no haya cambiado}
         {--dry-run : Planifica e imprime los prompts sin generar imágenes}';
 
     protected $description = 'Planifica planos y genera las imágenes de un guion a partir de timings.json';
 
     private readonly string $outputDirectory;
-
-    private readonly string $imageCacheDirectory;
 
     private readonly float $rateLimitSeconds;
 
@@ -43,6 +45,7 @@ final class GenerateImagesCommand extends Command
         private ShotDirector $director,
         private ShotPromptBuilder $prompts,
         private VisualBibleGenerator $bibles,
+        private ShotPlanRepository $plans,
         private NarrationClock $clock,
         private Filesystem $files,
         Repository $config,
@@ -50,7 +53,6 @@ final class GenerateImagesCommand extends Command
         parent::__construct();
 
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
-        $this->imageCacheDirectory = storage_path('app/'.$config->get('stories.images.cache_path', 'image-cache'));
         $this->rateLimitSeconds = (float) $config->get('stories.images.rate_limit_seconds');
     }
 
@@ -81,11 +83,11 @@ final class GenerateImagesCommand extends Command
         }
 
         $force = (bool) $this->option('force');
+        $redirect = (bool) $this->option('redirect');
         $dryRun = (bool) $this->option('dry-run');
         $slug = pathinfo($storyFile, PATHINFO_FILENAME);
         $storyDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
         $timingsPath = $storyDirectory.DIRECTORY_SEPARATOR.'timings.json';
-        $shotsPath = $storyDirectory.DIRECTORY_SEPARATOR.'shots.json';
         $narrationPath = $storyDirectory.DIRECTORY_SEPARATOR.'narration.wav';
 
         $timings = $this->readTimings($timingsPath);
@@ -113,6 +115,9 @@ final class GenerateImagesCommand extends Command
             return self::FAILURE;
         }
 
+        $persisted = $this->plans->read($slug);
+        $samePlan = $persisted instanceof ShotPlan && $persisted->describes($shots) ? $persisted : null;
+
         $story = $this->ensureVisualBible($storyFile, $payload, $story);
 
         if ($story === null) {
@@ -128,7 +133,7 @@ final class GenerateImagesCommand extends Command
         }
 
         try {
-            $shots = $this->director->direct($shots, $story, $bible);
+            $shots = $this->directShots($shots, $story, $bible, $samePlan, $redirect);
             $prompts = [];
 
             foreach ($shots as $shot) {
@@ -159,26 +164,77 @@ final class GenerateImagesCommand extends Command
 
         $this->printEstimate(count($selected));
 
-        $previous = $this->readPreviousShots($shotsPath);
+        $rows = $this->baselineRows($shots, $prompts, $samePlan, $slug);
 
         try {
-            $rows = $this->generateShots($shots, $selected, $previous, $prompts, $slug, $force);
+            $rows = $this->generateShots($shots, $selected, $rows, $prompts, $slug, $force);
         } catch (Throwable $exception) {
             $this->newLine();
             $this->error($exception->getMessage());
+            $this->line('Los planos ya generados quedan guardados en '.$this->plans->pathFor($slug).'.');
 
             return self::FAILURE;
         }
 
-        $this->writeJson($shotsPath, [
-            'version' => 1,
-            'plannerVersion' => ShotPlanner::VERSION,
-            'shots' => $rows,
-        ]);
-
-        $this->renderSummary($this->planner->stats($shots), $rows, $shotsPath);
+        $this->plans->write($slug, $this->planFrom($rows));
+        $this->renderSummary($this->planner->stats($shots), $rows, $this->plans->pathFor($slug));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Con un plan equivalente ya dirigido, rehidrata la dirección persistida en lugar de volver
+     * a llamar al director: si la description cambiara, cambiaría el prompt y con él la caché.
+     *
+     * @param  list<Shot>  $shots
+     * @return list<Shot>
+     */
+    private function directShots(
+        array $shots,
+        Story $story,
+        VisualBible $bible,
+        ?ShotPlan $samePlan,
+        bool $redirect,
+    ): array {
+        if ($samePlan instanceof ShotPlan && $samePlan->plannerVersion !== ShotPlanner::VERSION) {
+            $this->warn(sprintf(
+                'shots.json viene del planificador v%d y ahora es v%d: se vuelve a dirigir.',
+                $samePlan->plannerVersion,
+                ShotPlanner::VERSION,
+            ));
+
+            $samePlan = null;
+        }
+
+        if ($redirect || ! $samePlan instanceof ShotPlan || ! $samePlan->isDirected()) {
+            return $this->director->direct($shots, $story, $bible);
+        }
+
+        $this->line('El plan no ha cambiado: se reutiliza la dirección de shots.json (--redirect para volver a dirigir).');
+
+        $stored = $samePlan->byOrder();
+        $directed = [];
+
+        foreach ($shots as $shot) {
+            $row = $stored[$shot->order];
+
+            $directed[] = new Shot(
+                order: $shot->order,
+                sceneOrder: $shot->sceneOrder,
+                start: $shot->start,
+                end: $shot->end,
+                sourceText: $shot->sourceText,
+                framing: $row->shot->framing,
+                motion: $shot->motion,
+                subject: $row->shot->subject,
+                threatStage: $row->shot->threatStage,
+                description: $row->shot->description,
+                characterSlugs: $row->shot->characterSlugs,
+                imagePath: $shot->imagePath,
+            );
+        }
+
+        return $directed;
     }
 
     /**
@@ -252,16 +308,40 @@ final class GenerateImagesCommand extends Command
     }
 
     /**
+     * Punto de partida de shots.json: las filas ya persistidas se conservan tal cual (una fila que
+     * --only no toca debe seguir describiendo la imagen a la que apunta) y el resto nace sin imagen.
+     *
+     * @param  list<Shot>  $shots
+     * @param  list<string>  $prompts
+     * @return list<PlannedShot>
+     */
+    private function baselineRows(array $shots, array $prompts, ?ShotPlan $samePlan, string $slug): array
+    {
+        $stored = $samePlan?->byOrder() ?? [];
+        $rows = [];
+
+        foreach ($shots as $index => $shot) {
+            $rows[] = $stored[$shot->order] ?? PlannedShot::fromShot(
+                $shot,
+                $prompts[$index] ?? '',
+                $this->baseSeed($slug, $shot->order),
+            );
+        }
+
+        return $rows;
+    }
+
+    /**
      * @param  list<Shot>  $shots
      * @param  list<Shot>  $selected
-     * @param  array<int, array<string, mixed>>  $previous
+     * @param  list<PlannedShot>  $rows
      * @param  list<string>  $prompts
-     * @return list<array<string, mixed>>
+     * @return list<PlannedShot>
      */
     private function generateShots(
         array $shots,
         array $selected,
-        array $previous,
+        array $rows,
         array $prompts,
         string $slug,
         bool $force,
@@ -277,30 +357,21 @@ final class GenerateImagesCommand extends Command
         $bar->setMessage('');
         $bar->start();
 
-        $rows = [];
-
         try {
             foreach ($shots as $index => $shot) {
-                $prompt = $prompts[$index] ?? '';
-
                 if (! isset($generateOrders[$shot->order])) {
-                    $rows[] = $this->rowFromPrevious($shot, $prompt, $previous, $slug);
-
                     continue;
                 }
 
                 $bar->setMessage($this->truncate('#'.$shot->order.' '.$shot->framing));
 
-                $seed = $this->seedFor($slug, $shot, $previous, $force);
-
-                if ($force) {
-                    $this->forgetCachedImage($prompt, $seed);
-                }
-
+                $prompt = $prompts[$index] ?? '';
+                $seed = $this->seedFor($slug, $shot, $rows[$index] ?? null, $force);
                 $path = $this->images->generate($prompt, $seed);
-                $placeholder = str_starts_with(basename($path), 'placeholder-');
 
-                $rows[] = $this->shotRow($shot, $prompt, $seed, $path, $placeholder);
+                $rows[$index] = PlannedShot::fromShot($shot, $prompt, $seed, $path);
+                $this->plans->write($slug, $this->planFrom($rows));
+
                 $bar->advance();
             }
         } finally {
@@ -309,6 +380,18 @@ final class GenerateImagesCommand extends Command
         }
 
         return $rows;
+    }
+
+    /**
+     * @param  list<PlannedShot>  $rows
+     */
+    private function planFrom(array $rows): ShotPlan
+    {
+        return new ShotPlan(
+            version: ShotPlan::VERSION,
+            plannerVersion: ShotPlanner::VERSION,
+            shots: $rows,
+        );
     }
 
     /**
@@ -346,52 +429,7 @@ final class GenerateImagesCommand extends Command
         }
     }
 
-    /**
-     * @param  array<int, array<string, mixed>>  $previous
-     * @return array<string, mixed>
-     */
-    private function rowFromPrevious(Shot $shot, string $prompt, array $previous, string $slug): array
-    {
-        $row = $previous[$shot->order] ?? [];
-        $path = isset($row['imagePath']) && is_string($row['imagePath']) ? $row['imagePath'] : null;
-        $seed = isset($row['seed']) ? (int) $row['seed'] : $this->baseSeed($slug, $shot->order);
-        $placeholder = (bool) ($row['placeholder'] ?? false);
-
-        if (is_string($path) && str_starts_with(basename($path), 'placeholder-')) {
-            $placeholder = true;
-        }
-
-        return $this->shotRow($shot, $prompt, $seed, $path, $placeholder);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function shotRow(Shot $shot, string $prompt, int $seed, ?string $imagePath, bool $placeholder): array
-    {
-        return [
-            'order' => $shot->order,
-            'sceneOrder' => $shot->sceneOrder,
-            'start' => $shot->start,
-            'end' => $shot->end,
-            'sourceText' => $shot->sourceText,
-            'framing' => $shot->framing,
-            'motion' => $shot->motion,
-            'subject' => $shot->subject,
-            'threatStage' => $shot->threatStage,
-            'description' => $shot->description,
-            'characterSlugs' => $shot->characterSlugs,
-            'prompt' => $prompt,
-            'seed' => $seed,
-            'imagePath' => $imagePath,
-            'placeholder' => $placeholder,
-        ];
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $previous
-     */
-    private function seedFor(string $slug, Shot $shot, array $previous, bool $force): int
+    private function seedFor(string $slug, Shot $shot, ?PlannedShot $previous, bool $force): int
     {
         $base = $this->baseSeed($slug, $shot->order);
 
@@ -399,8 +437,8 @@ final class GenerateImagesCommand extends Command
             return $base;
         }
 
-        $previousSeed = isset($previous[$shot->order]['seed'])
-            ? (int) $previous[$shot->order]['seed']
+        $previousSeed = $previous instanceof PlannedShot && $previous->seed > 0
+            ? $previous->seed
             : $base;
 
         $seed = ($previousSeed + 1) & 0x7FFFFFFF;
@@ -414,15 +452,6 @@ final class GenerateImagesCommand extends Command
         $seed = $crc & 0x7FFFFFFF;
 
         return $seed === 0 ? 1 : $seed;
-    }
-
-    private function forgetCachedImage(string $prompt, int $seed): void
-    {
-        $path = $this->imageCacheDirectory.DIRECTORY_SEPARATOR.sha1($prompt.(string) $seed).'.jpg';
-
-        if ($this->files->exists($path)) {
-            $this->files->delete($path);
-        }
     }
 
     /**
@@ -514,34 +543,6 @@ final class GenerateImagesCommand extends Command
         return $timings;
     }
 
-    /**
-     * @return array<int, array<string, mixed>>
-     */
-    private function readPreviousShots(string $path): array
-    {
-        if (! $this->files->isFile($path)) {
-            return [];
-        }
-
-        $decoded = $this->readJson($path, 'shots.json no es un JSON válido.');
-
-        if ($decoded === null || ! isset($decoded['shots']) || ! is_array($decoded['shots'])) {
-            return [];
-        }
-
-        $rows = [];
-
-        foreach ($decoded['shots'] as $row) {
-            if (! is_array($row) || ! isset($row['order'])) {
-                continue;
-            }
-
-            $rows[(int) $row['order']] = $row;
-        }
-
-        return $rows;
-    }
-
     private function resolveStoryFile(string $file): ?string
     {
         $candidates = [
@@ -616,7 +617,7 @@ final class GenerateImagesCommand extends Command
 
     /**
      * @param  array{count: int, meanDuration: float, minDuration: float, maxDuration: float, framing: array<string, int>, subject: array<string, int>, threatStage: array<string, int>}  $stats
-     * @param  list<array<string, mixed>>  $rows
+     * @param  list<PlannedShot>  $rows
      */
     private function renderSummary(array $stats, array $rows, string $shotsPath): void
     {
@@ -661,12 +662,12 @@ final class GenerateImagesCommand extends Command
         $placeholders = [];
 
         foreach ($rows as $row) {
-            if (($row['placeholder'] ?? false) === true) {
-                $placeholders[] = (int) $row['order'];
+            if ($row->placeholder) {
+                $placeholders[] = $row->shot->order;
             }
 
-            if (($row['imagePath'] ?? null) === null) {
-                $withoutImage[] = (int) $row['order'];
+            if ($row->shot->imagePath === null) {
+                $withoutImage[] = $row->shot->order;
             }
         }
 

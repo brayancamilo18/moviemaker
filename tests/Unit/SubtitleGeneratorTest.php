@@ -110,6 +110,151 @@ final class SubtitleGeneratorTest extends TestCase
         $this->assertStringNotContainsString('oo-SYEH-dah', $body);
     }
 
+    public function test_every_pair_of_cues_keeps_the_minimum_gap(): void
+    {
+        $cues = $this->cues([
+            ['order' => 1, 'text' => 'The door closed.', 'start' => 0.0, 'end' => 0.0],
+            ['order' => 2, 'text' => 'Nobody had touched it in years, and the dust proved it.', 'start' => 0.3, 'end' => 2.4],
+            ['order' => 3, 'text' => 'Hi.', 'start' => 2.5, 'end' => 2.6],
+            ['order' => 4, 'text' => 'The whistle came closer than before, and the fog swallowed the road behind me.', 'start' => 2.7, 'end' => 26.0],
+            ['order' => 5, 'text' => 'Then nothing.', 'start' => 26.0, 'end' => 26.4],
+        ]);
+
+        $this->assertGreaterThanOrEqual(5, count($cues));
+        $this->assertGapInvariant($cues);
+    }
+
+    public function test_sentences_that_overlap_are_pulled_apart_completely(): void
+    {
+        $cues = $this->cues([
+            ['order' => 1, 'text' => 'The door closed.', 'start' => 0.0, 'end' => 0.0],
+            ['order' => 2, 'text' => 'Nobody had touched it.', 'start' => 0.3, 'end' => 2.0],
+        ]);
+
+        $this->assertCount(2, $cues);
+        $this->assertStringContainsString('door', $this->plain($cues[0]['text']));
+        $this->assertStringContainsString('touched', $this->plain($cues[1]['text']));
+        $this->assertGapInvariant($cues);
+    }
+
+    public function test_sentences_out_of_order_produce_a_monotonic_srt(): void
+    {
+        $cues = $this->cues([
+            ['order' => 2, 'text' => 'The lamp went out.', 'start' => 6.0, 'end' => 8.0],
+            ['order' => 1, 'text' => 'He heard the gate.', 'start' => 0.0, 'end' => 2.0],
+            ['order' => 3, 'text' => 'Then the dog stopped barking.', 'start' => 9.0, 'end' => 11.5],
+        ]);
+
+        $this->assertCount(3, $cues);
+        $this->assertStringContainsString('gate', $this->plain($cues[0]['text']));
+        $this->assertStringContainsString('lamp', $this->plain($cues[1]['text']));
+        $this->assertStringContainsString('barking', $this->plain($cues[2]['text']));
+        $this->assertGapInvariant($cues);
+    }
+
+    public function test_word_longer_than_the_line_limit_is_broken_into_pieces(): void
+    {
+        $word = str_repeat('n', 60);
+
+        $cues = $this->cues([
+            ['order' => 1, 'text' => 'The '.$word.' waited.', 'start' => 0.0, 'end' => 5.0],
+        ]);
+
+        $lines = [];
+
+        foreach ($cues as $cue) {
+            foreach (preg_split("/\n/", $cue['text']) ?: [] as $line) {
+                $this->assertLessThanOrEqual(42, mb_strlen($line), $line);
+                $lines[] = $line;
+            }
+        }
+
+        $this->assertStringContainsString($word, str_replace(' ', '', implode('', $lines)));
+        $this->assertContains(str_repeat('n', 42), $lines);
+        $this->assertGapInvariant($cues);
+    }
+
+    public function test_cue_longer_than_the_maximum_duration_is_split_until_it_fits(): void
+    {
+        $cues = $this->cues([
+            [
+                'order' => 1,
+                'text' => 'The whistle came closer than before, and the fog swallowed the road behind me.',
+                'start' => 0.0,
+                'end' => 23.0,
+            ],
+        ]);
+
+        $this->assertGreaterThanOrEqual(4, count($cues));
+
+        foreach ($cues as $cue) {
+            $this->assertLessThanOrEqual(6.0, $cue['end'] - $cue['start'] - 0.001, $cue['text']);
+        }
+
+        $this->assertGapInvariant($cues);
+    }
+
+    public function test_multibyte_text_is_measured_in_characters_not_bytes(): void
+    {
+        $cues = $this->cues([
+            [
+                'order' => 1,
+                'text' => '¡Aún oíamos súplicas ahogadas más allá del río! ¿Y también más acá?',
+                'start' => 0.0,
+                'end' => 4.0,
+            ],
+        ]);
+
+        $this->assertCount(1, $cues);
+
+        $lines = preg_split("/\n/", $cues[0]['text']) ?: [];
+        $this->assertCount(2, $lines);
+
+        foreach ($lines as $line) {
+            $this->assertLessThanOrEqual(42, mb_strlen($line), $line);
+        }
+
+        // La primera línea llena el ancho justo en caracteres y se pasa de 42 en bytes: contar
+        // bytes la habría partido antes.
+        $this->assertSame(42, mb_strlen($lines[0]));
+        $this->assertGreaterThan(42, strlen($lines[0]));
+
+        $body = $this->plain($cues[0]['text']);
+        $this->assertStringContainsString('¡Aún', $body);
+        $this->assertStringContainsString('¿Y también más acá?', $body);
+    }
+
+    /**
+     * La invariante entera de las reglas de tiempo: ningún cue se pisa con el siguiente y todos
+     * duran algo.
+     *
+     * @param  list<array{start: float, end: float, text: string}>  $cues
+     */
+    private function assertGapInvariant(array $cues): void
+    {
+        $this->assertNotEmpty($cues);
+        $count = count($cues);
+
+        for ($index = 0; $index < $count; $index++) {
+            $this->assertGreaterThan(
+                $cues[$index]['start'],
+                $cues[$index]['end'],
+                'El cue '.($index + 1).' no dura nada.',
+            );
+
+            if ($index + 1 >= $count) {
+                continue;
+            }
+
+            $gap = round($cues[$index + 1]['start'] - $cues[$index]['end'], 3);
+            $this->assertGreaterThanOrEqual(
+                0.079,
+                $gap,
+                'Los cues '.($index + 1).' y '.($index + 2).' no respetan el hueco mínimo.',
+            );
+        }
+    }
+
     /**
      * @param  list<array<string, mixed>>  $sentences
      * @return list<array{start: float, end: float, text: string}>

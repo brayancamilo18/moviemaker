@@ -44,9 +44,12 @@ final class SoundLibraryImporter
     }
 
     /**
+     * Nunca lanza: los llamantes tratan el fallo como un estado. La excepción viaja en 'error'
+     * porque el motivo en texto no basta para distinguir una red caída de un clip rechazado.
+     *
      * @param  array{id: int, name: string, author: string, license: string, duration: float, rating: float, downloads?: int, tags: list<string>, previewUrl: string, sourceUrl: string}  $sound
      * @param  list<string>  $extraTags
-     * @return array{status: string, clip?: array<string, mixed>, reason?: string}
+     * @return array{status: string, clip?: array<string, mixed>, reason?: string, error?: Throwable}
      */
     public function ingest(array $sound, string $type, array $extraTags = []): array
     {
@@ -128,6 +131,7 @@ final class SoundLibraryImporter
             return [
                 'status' => 'failed',
                 'reason' => $exception->getMessage(),
+                'error' => $exception,
             ];
         } finally {
             $this->files->deleteDirectory($workDir);

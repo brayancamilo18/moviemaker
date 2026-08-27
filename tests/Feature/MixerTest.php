@@ -6,6 +6,8 @@ namespace Tests\Feature;
 
 use App\Exceptions\FfmpegException;
 use App\Services\Audio\AudioTrack;
+use App\Services\Audio\LibraryClipProcessor;
+use App\Services\Audio\MasterProcessor;
 use App\Services\Audio\Mixer;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
@@ -102,6 +104,30 @@ final class MixerTest extends TestCase
         $this->assertEqualsWithDelta(2.0, $this->probe($output)['duration'], 0.2);
     }
 
+    /**
+     * Nivel real, no estructura del filtro: un golpe a -0.5 dBFS sumado a pelo (normalize=0) sobre
+     * narración y cama se sale de 0 dBFS, y en s16 el recorte llegaba al máster ya hecho.
+     */
+    public function test_a_hit_at_minus_half_a_decibel_does_not_clip_the_intermediate_mix(): void
+    {
+        $narration = $this->makeWav('narration.wav', 4.0, -6.0);
+        $ambience = $this->makeWav('ambience.wav', 4.0, -30.0);
+        $sfx = $this->makeWav('sfx.wav', 1.0, -0.5);
+        $output = $this->workDir.'/mix-levels.wav';
+
+        $gainDb = $this->app->make(LibraryClipProcessor::class)->sfxGainDb($sfx);
+
+        $this->app->make(Mixer::class)->mix([
+            new AudioTrack($narration, AudioTrack::ROLE_NARRATION, 0.0, null, 0.0, false, 0.0, 0.0),
+            new AudioTrack($ambience, AudioTrack::ROLE_AMBIENCE, 0.0, null, 0.0, true, 0.0, 0.0),
+            new AudioTrack($sfx, AudioTrack::ROLE_SFX, 1.0, null, $gainDb, false, 0.0, 0.0),
+        ], $output);
+
+        $truePeak = $this->app->make(MasterProcessor::class)->measure($output)['truePeak'];
+
+        $this->assertLessThan(0.0, $truePeak, sprintf('La mezcla intermedia recorta: %.1f dBTP.', $truePeak));
+    }
+
     public function test_failed_mix_dumps_the_full_filter_script(): void
     {
         $narration = $this->makeWav('narration.wav', 0.5);
@@ -154,10 +180,22 @@ final class MixerTest extends TestCase
         ];
     }
 
-    private function makeWav(string $name, float $duration): string
+    private function makeWav(string $name, float $duration, ?float $peakDbfs = null): string
     {
         $path = $this->workDir.'/'.$name;
+        $this->sine($path, $duration, 0.0);
 
+        if ($peakDbfs !== null) {
+            // La amplitud de la fuente sine de ffmpeg cambia entre versiones, así que un volume
+            // fijo no fija el pico: hay que medir lo que ha salido y corregir.
+            $this->sine($path, $duration, $peakDbfs - $this->samplePeakDbfs($path));
+        }
+
+        return $path;
+    }
+
+    private function sine(string $path, float $duration, float $gainDb): void
+    {
         $process = new Process([
             'ffmpeg', '-nostdin', '-y', '-hide_banner',
             '-f', 'lavfi',
@@ -165,11 +203,30 @@ final class MixerTest extends TestCase
             '-ac', '2',
             '-ar', '48000',
             '-sample_fmt', 's16',
+            '-af', sprintf('volume=%.3fdB', $gainDb),
             $path,
         ]);
         $process->setTimeout(30);
         $process->mustRun();
+    }
 
-        return $path;
+    private function samplePeakDbfs(string $path): float
+    {
+        $process = new Process([
+            'ffmpeg', '-nostdin', '-hide_banner',
+            '-i', $path,
+            '-af', 'volumedetect',
+            '-f', 'null',
+            '-',
+        ]);
+        $process->setTimeout(30);
+        $process->mustRun();
+
+        $this->assertSame(
+            1,
+            preg_match('/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/', $process->getErrorOutput(), $matches),
+        );
+
+        return (float) $matches[1];
     }
 }

@@ -29,6 +29,16 @@ final class FreesoundClient
 
     private const SEARCH_FIELDS = 'id,name,tags,username,license,duration,avg_rating,num_downloads,previews,url';
 
+    /**
+     * Únicos hosts a los que se le entrega el token.
+     *
+     * @var list<string>
+     */
+    private const AUTHORIZED_HOSTS = [
+        'freesound.org',
+        'cdn.freesound.org',
+    ];
+
     private readonly string $token;
 
     private readonly string $baseUrl;
@@ -108,6 +118,14 @@ final class FreesoundClient
     public function downloadPreview(string $url): string
     {
         $this->assertReady();
+
+        // La url llega tal cual del JSON de la API: se comprueba antes de pedirla.
+        $url = trim($url);
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+
+        if (! is_string($scheme) || ! in_array(mb_strtolower($scheme), ['http', 'https'], true)) {
+            throw new FreesoundException("La URL del preview no es http ni https: {$url}");
+        }
 
         $response = $this->request('GET', $url);
 
@@ -242,22 +260,21 @@ final class FreesoundClient
         try {
             $pending = $this->http
                 ->timeout($this->timeout)
-                ->withHeaders([
-                    'Authorization' => 'Token '.$this->token,
-                ])
                 ->retry(
                     $this->retryBackoff(),
                     when: $this->shouldRetry(...),
                 )
                 ->throw();
 
-            $response = strtoupper($method) === 'GET'
+            if ($this->carriesToken($url)) {
+                $pending = $pending->withHeaders([
+                    'Authorization' => 'Token '.$this->token,
+                ]);
+            }
+
+            return strtoupper($method) === 'GET'
                 ? $pending->get($url, $query)
                 : $pending->send($method, $url);
-
-            $this->lastRequestAt = microtime(true);
-
-            return $response;
         } catch (FreesoundException $exception) {
             throw $exception;
         } catch (ConnectionException $exception) {
@@ -267,7 +284,22 @@ final class FreesoundClient
                 $this->httpErrorMessage($exception->response),
                 previous: $exception,
             );
+        } finally {
+            // También tras un fallo: si no, la siguiente petición no espera y castiga a un
+            // proveedor que ya va mal.
+            $this->lastRequestAt = microtime(true);
         }
+    }
+
+    private function carriesToken(string $url): bool
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+
+        if (! is_string($host)) {
+            return false;
+        }
+
+        return in_array(mb_strtolower($host), self::AUTHORIZED_HOSTS, true);
     }
 
     private function throttle(): void

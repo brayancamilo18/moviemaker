@@ -11,6 +11,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
+use RuntimeException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -20,12 +21,17 @@ final class ImageGenerationTest extends TestCase
 
     private string $cacheDirectory;
 
+    /** Llamadas al doble del director: cada una devuelve una description distinta. */
+    private int $directorCalls = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         Sleep::fake();
         Http::preventStrayRequests();
+
+        $this->directorCalls = 0;
 
         $this->storiesDirectory = storage_path('app/testing/stories');
         $this->cacheDirectory = storage_path('app/testing/image-cache');
@@ -54,34 +60,107 @@ final class ImageGenerationTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_second_run_makes_zero_image_requests_because_everything_is_cached(): void
+    public function test_second_run_reuses_the_stored_direction_and_makes_zero_requests(): void
     {
         $this->fakePromptResponses($this->jpeg());
         $file = $this->writeStory(8);
 
         $this->artisan('story:images', ['file' => $file])->assertSuccessful();
 
-        $slug = pathinfo($file, PATHINFO_FILENAME);
-        $decoded = json_decode(
-            (string) file_get_contents($this->storiesDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json'),
-            true,
-            flags: JSON_THROW_ON_ERROR,
-        );
+        $decoded = $this->plan($file);
         $this->assertSame(ShotPlanner::VERSION, $decoded['plannerVersion'] ?? null);
         $this->assertSame(3, $decoded['plannerVersion']);
         $this->assertSame(
-            'Directed hallway fog at dusk',
+            'Directed hallway fog at dusk 1',
             $decoded['shots'][0]['description'] ?? null,
         );
         $this->assertSame('environment', $decoded['shots'][0]['subject'] ?? null);
         $this->assertSame([], $decoded['shots'][0]['characterSlugs'] ?? null);
 
         $this->assertGreaterThan(0, $this->promptRequestCount());
+        $this->assertGreaterThan(0, $this->directorRequestCount());
+
+        $before = $this->shots($file);
 
         $this->fakePromptResponses($this->jpeg());
         $this->artisan('story:images', ['file' => $file])->assertSuccessful();
 
+        $this->assertSame(0, $this->directorRequestCount());
         $this->assertSame(0, $this->promptRequestCount());
+        $this->assertSame($before, $this->shots($file));
+    }
+
+    public function test_redirecting_a_single_shot_leaves_the_other_rows_intact(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+        $file = $this->writeStory(8);
+
+        $this->artisan('story:images', ['file' => $file])->assertSuccessful();
+
+        $before = $this->shots($file);
+        $this->assertGreaterThan(3, count($before));
+
+        $this->fakePromptResponses($this->jpeg());
+        $this->artisan('story:images', [
+            'file' => $file,
+            '--only' => '3',
+            '--redirect' => true,
+        ])->assertSuccessful();
+
+        $after = $this->shots($file);
+        $this->assertCount(count($before), $after);
+
+        foreach ($after as $index => $row) {
+            if ((int) $row['order'] === 3) {
+                continue;
+            }
+
+            $this->assertSame($before[$index], $row, "La fila {$row['order']} no debía cambiar.");
+        }
+
+        $this->assertSame('Directed hallway fog at dusk 2', $after[2]['description']);
+        $this->assertNotSame($before[2]['prompt'], $after[2]['prompt']);
+        $this->assertNotSame($before[2]['imagePath'], $after[2]['imagePath']);
+        $this->assertSame(1, $this->promptRequestCount());
+    }
+
+    public function test_a_crash_halfway_keeps_the_rows_already_generated(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+        $file = $this->writeStory(8);
+
+        $this->app->instance(ImageGenerator::class, $this->generatorThatFailsAfter(2));
+
+        $this->artisan('story:images', ['file' => $file])->assertFailed();
+
+        $rows = $this->shots($file);
+
+        $this->assertIsString($rows[0]['imagePath']);
+        $this->assertIsString($rows[1]['imagePath']);
+        $this->assertNull($rows[2]['imagePath']);
+        $this->assertSame('Directed hallway fog at dusk 1', $rows[0]['description']);
+    }
+
+    public function test_a_stale_planner_version_redirects_the_shots(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+        $file = $this->writeStory(8);
+
+        $this->artisan('story:images', ['file' => $file])->assertSuccessful();
+
+        $decoded = $this->plan($file);
+        $decoded['plannerVersion'] = ShotPlanner::VERSION - 1;
+        file_put_contents(
+            $this->planPath($file),
+            json_encode($decoded, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n",
+        );
+
+        $this->fakePromptResponses($this->jpeg());
+        $this->artisan('story:images', ['file' => $file])->assertSuccessful();
+
+        $this->assertGreaterThan(0, $this->directorRequestCount());
+        $this->assertSame(ShotPlanner::VERSION, $this->plan($file)['plannerVersion']);
+        $this->assertSame('Directed hallway fog at dusk 2', $this->shots($file)[0]['description']);
     }
 
     public function test_only_range_makes_exactly_three_image_requests(): void
@@ -179,14 +258,76 @@ final class ImageGenerationTest extends TestCase
         )->count();
     }
 
+    private function directorRequestCount(): int
+    {
+        return Http::recorded(
+            static fn (Request $request): bool => str_contains($request->url(), 'generateContent'),
+        )->count();
+    }
+
+    private function generatorThatFailsAfter(int $successes): ImageGenerator
+    {
+        return new class($this->cacheDirectory, $this->jpeg(), $successes) implements ImageGenerator
+        {
+            private int $calls = 0;
+
+            public function __construct(
+                private string $directory,
+                private string $bytes,
+                private int $successes,
+            ) {}
+
+            public function generate(string $prompt, int $seed): string
+            {
+                $this->calls++;
+
+                if ($this->calls > $this->successes) {
+                    throw new RuntimeException('el proveedor de imágenes se cayó');
+                }
+
+                $path = $this->directory.DIRECTORY_SEPARATOR.'fake-'.$seed.'.jpg';
+                file_put_contents($path, $this->bytes);
+
+                return $path;
+            }
+
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+        };
+    }
+
+    private function planPath(string $storyFile): string
+    {
+        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
+
+        return $this->storiesDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function plan(string $storyFile): array
+    {
+        $decoded = json_decode(
+            (string) file_get_contents($this->planPath($storyFile)),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertIsArray($decoded);
+
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
     private function shots(string $storyFile): array
     {
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $path = $this->storiesDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json';
-        $decoded = json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+        $decoded = $this->plan($storyFile);
 
         $this->assertIsArray($decoded['shots'] ?? null);
 
@@ -279,6 +420,7 @@ final class ImageGenerationTest extends TestCase
         $text = is_array($payload) ? (string) ($payload['contents'][0]['parts'][0]['text'] ?? '{}') : '{}';
         $user = json_decode($text, true);
         $shots = [];
+        $this->directorCalls++;
 
         foreach (is_array($user['shots'] ?? null) ? $user['shots'] : [] as $shot) {
             if (! is_array($shot) || ! isset($shot['shotIndex'])) {
@@ -287,7 +429,7 @@ final class ImageGenerationTest extends TestCase
 
             $shots[] = [
                 'shotIndex' => (int) $shot['shotIndex'],
-                'description' => 'Directed hallway fog at dusk',
+                'description' => 'Directed hallway fog at dusk '.$this->directorCalls,
                 'subject' => 'environment',
                 'framing' => 'medium shot',
                 'threatStage' => '',

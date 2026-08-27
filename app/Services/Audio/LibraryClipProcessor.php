@@ -20,6 +20,8 @@ final class LibraryClipProcessor
 
     private readonly float $timeout;
 
+    private readonly float $sfxCeilingDbtp;
+
     public function __construct(
         private Filesystem $files,
         Repository $config,
@@ -28,6 +30,7 @@ final class LibraryClipProcessor
         $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
         $this->nice = (int) $config->get('stories.ffmpeg.nice');
         $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
+        $this->sfxCeilingDbtp = (float) $config->get('stories.audio.mix.sfx_true_peak_dbtp', -20.0);
     }
 
     public function assertAudio(string $path): void
@@ -102,6 +105,50 @@ final class LibraryClipProcessor
         $value = (float) $matches[1][array_key_last($matches[1])];
 
         return round($value, 1);
+    }
+
+    public function truePeakDbtp(string $path): ?float
+    {
+        $process = $this->run([
+            $this->ffmpeg, '-nostdin', '-hide_banner',
+            '-i', $path,
+            '-filter:a', 'ebur128=peak=true',
+            '-f', 'null',
+            '-',
+        ]);
+
+        $stderr = $process->getErrorOutput();
+        $offset = strripos($stderr, 'True peak:');
+
+        if ($offset === false) {
+            return null;
+        }
+
+        if (preg_match('/Peak:\s*(-?(?:\d+\.?\d*|inf))\s*dB/i', substr($stderr, $offset), $matches) !== 1) {
+            return null;
+        }
+
+        if (stripos($matches[1], 'inf') !== false) {
+            return null;
+        }
+
+        return round((float) $matches[1], 1);
+    }
+
+    /**
+     * Único sitio donde se decide el nivel de un efecto. Sin techo, dos golpes igual de válidos
+     * para SoundVerifier pueden entrar con 30 dB de diferencia sobre una cama a -30 LUFS.
+     * Devuelve 0.0 cuando no hay pico medible: sin medición no se inventa una ganancia.
+     */
+    public function sfxGainDb(string $path): float
+    {
+        $truePeak = $this->truePeakDbtp($path);
+
+        if ($truePeak === null) {
+            return 0.0;
+        }
+
+        return round($this->sfxCeilingDbtp - $truePeak, 3);
     }
 
     public function isLoopable(string $path, float $duration): bool

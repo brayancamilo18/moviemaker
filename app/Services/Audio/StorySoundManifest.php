@@ -370,7 +370,9 @@ final class StorySoundManifest
         $target = $this->planner->targetLufs($plan['type'], $plan['intensity']);
 
         if ($plan['type'] === 'sfx') {
-            $entry['gainDb'] = 0.0;
+            $entry['gainDb'] = $path !== '' && $this->files->isFile($path)
+                ? $this->processor->sfxGainDb($path)
+                : 0.0;
         } elseif ($path !== '' && $this->files->isFile($path)) {
             $lufs = $resolved->lufs !== 0.0
                 ? $resolved->lufs

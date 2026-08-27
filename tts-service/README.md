@@ -4,7 +4,8 @@ Servicio FastAPI local. Mantiene Kokoro en memoria para no recargar pesos en cad
 
 ## Requisitos
 
-- Python 3.11+
+- Python 3.11 o 3.12. No es un mínimo abierto: `kokoro` y `misaki` declaran `>=3.10,<3.13`, y
+  `numpy` exige `>=3.11`. Con 3.13 o superior la instalación falla.
 - `espeak-ng` en el sistema (G2P de Kokoro)
 
 macOS:
@@ -25,7 +26,7 @@ Desde la raíz del repo:
 
 ```bash
 cd tts-service
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -73,8 +74,8 @@ Sustituye `USER` y la ruta del proyecto. El servicio debe escuchar solo en `127.
 ```ini
 [program:kokoro-tts]
 user=USER
-directory=/home/USER/horror-studio/tts-service
-command=/home/USER/horror-studio/tts-service/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8020 --workers 1
+directory=/home/USER/moviemaker/tts-service
+command=/home/USER/moviemaker/tts-service/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8020 --workers 1
 autostart=true
 autorestart=true
 stopasgroup=true

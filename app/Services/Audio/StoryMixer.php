@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\DataObjects\SoundCredit;
 use App\DataObjects\Story;
+use App\Services\Storage\TempSweeper;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
@@ -29,6 +31,7 @@ final class StoryMixer
         private Mixer $mixer,
         private MasterProcessor $master,
         private LibraryClipProcessor $processor,
+        private TempSweeper $sweeper,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -96,102 +99,120 @@ final class StoryMixer
             new AudioTrack($narration, AudioTrack::ROLE_NARRATION, 0.0, null, 0.0, false, 0.0, 0.0),
         ];
 
-        if (! $noAmbience) {
-            foreach ($cues as $cue) {
-                if (($cue['type'] ?? '') === 'ambience' && trim((string) ($cue['file'] ?? '')) !== '') {
-                    $used[] = $cue;
+        // Camas derivadas: WAV de un solo uso que nadie más va a leer. Se borran pase lo que pase,
+        // con la misma disciplina que mix.wav; si no, cada mezcla deja cientos de MB en tmp.
+        $derived = [];
+
+        try {
+            if (! $noAmbience) {
+                $rows[] = [
+                    'role' => AudioTrack::ROLE_AMBIENCE,
+                    'startAt' => 0.0,
+                    'endAt' => $masterDuration,
+                    'gainDb' => 0.0,
+                    'duckable' => true,
+                    'file' => 'cama ('.count($this->manifest->ambienceByScene($cues)).' escenas)',
+                ];
+
+                if ($dryRun) {
+                    // En simulación no se construye la cama, así que no hay clip real que acreditar:
+                    // vale lo que declare sounds.json.
+                    foreach ($cues as $cue) {
+                        if (($cue['type'] ?? '') === 'ambience' && trim((string) ($cue['file'] ?? '')) !== '') {
+                            $used[] = $cue;
+                        }
+                    }
+                } else {
+                    $bed = $this->ambience->build($story, $timings, $narration, $this->manifest->ambienceByScene($cues));
+                    $audioTracks[] = $bed;
+                    $derived[] = $bed->path;
+
+                    foreach ($this->creditsFor($cues, $bed) as $credit) {
+                        $used[] = $credit;
+                    }
                 }
             }
 
-            $rows[] = [
-                'role' => AudioTrack::ROLE_AMBIENCE,
-                'startAt' => 0.0,
-                'endAt' => $masterDuration,
-                'gainDb' => 0.0,
-                'duckable' => true,
-                'file' => 'cama ('.count($this->manifest->ambienceByScene($cues)).' escenas)',
-            ];
+            if (! $noSfx) {
+                $placed = $this->sfx->place(
+                    $this->manifest->loadShots($slug),
+                    $manifest['directedSfx'],
+                    $this->manifest->overrides($cues, 'sfx'),
+                );
 
-            if (! $dryRun) {
-                $audioTracks[] = $this->ambience->build($story, $timings, $narration, $this->manifest->ambienceByScene($cues));
-            }
-        }
-
-        if (! $noSfx) {
-            $placed = $this->sfx->place(
-                $this->manifest->loadShots($slug),
-                $manifest['directedSfx'],
-                $this->manifest->overrides($cues, 'sfx'),
-            );
-
-            foreach ($placed['tracks'] as $track) {
-                $audioTracks[] = $track;
-                $rows[] = $this->rowFromTrack($track);
-                $matched = $this->cueByFile($cues, $track->path);
-
-                if ($matched !== null) {
-                    $used[] = $matched;
-                }
-            }
-        }
-
-        if (! $noMusic) {
-            if ($dryRun) {
-                foreach ($this->musicPlan($timings, $cues) as $row) {
-                    $rows[] = $row;
-                    $matched = $this->cueByFile($cues, $row['file']);
+                foreach ($placed['tracks'] as $track) {
+                    $audioTracks[] = $track;
+                    $rows[] = $this->rowFromTrack($track);
+                    $credit = $placed['credits'][$track->path] ?? null;
+                    $matched = $this->cueByFile($cues, $track->path)
+                        ?? ($credit instanceof SoundCredit ? $credit->toCue() : null);
 
                     if ($matched !== null) {
                         $used[] = $matched;
                     }
                 }
-            } else {
-                $musicTracks = $this->music->place($story, $timings, $this->manifest->overrides($cues, 'music'));
+            }
 
-                foreach ($musicTracks as $index => $track) {
-                    $audioTracks[] = $track;
-                    $rows[] = $this->rowFromTrack($track);
-                    $cueId = $index === 0 && $track->startAt === 0.0 ? 'music.hook' : 'music.climax';
+            if (! $noMusic) {
+                if ($dryRun) {
+                    foreach ($this->musicPlan($timings, $cues) as $row) {
+                        $rows[] = $row;
+                        $matched = $this->cueByFile($cues, $row['file']);
 
-                    foreach ($cues as $cue) {
-                        if (($cue['id'] ?? '') === $cueId) {
-                            $used[] = $cue;
+                        if ($matched !== null) {
+                            $used[] = $matched;
+                        }
+                    }
+                } else {
+                    $musicTracks = $this->music->place($story, $timings, $this->manifest->overrides($cues, 'music'));
+
+                    foreach ($musicTracks as $track) {
+                        $audioTracks[] = $track;
+                        $rows[] = $this->rowFromTrack($track);
+                        $derived[] = $track->path;
+
+                        foreach ($this->creditsFor($cues, $track) as $credit) {
+                            $used[] = $credit;
                         }
                     }
                 }
             }
-        }
 
-        if ($dryRun) {
+            if ($dryRun) {
+                return [
+                    'dryRun' => true,
+                    'tracks' => $rows,
+                    'usedCues' => $used,
+                    'wav' => null,
+                    'mp3' => null,
+                    'duration' => $masterDuration,
+                    'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
+                    'tailSeconds' => $tailSeconds,
+                    'measurement' => null,
+                ];
+            }
+
+            $raw = $directory.DIRECTORY_SEPARATOR.'mix.wav';
+            $this->mixer->mix($audioTracks, $raw);
+            $mastered = $this->master->process($raw, $directory, $masterDuration);
+            $this->files->delete($raw);
+
             return [
-                'dryRun' => true,
+                'dryRun' => false,
                 'tracks' => $rows,
                 'usedCues' => $used,
-                'wav' => null,
-                'mp3' => null,
+                'wav' => $mastered['wav'],
+                'mp3' => $mastered['mp3'],
                 'duration' => $masterDuration,
                 'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
                 'tailSeconds' => $tailSeconds,
-                'measurement' => null,
+                'measurement' => $this->master->measure($mastered['wav']),
             ];
+        } finally {
+            foreach ($derived as $path) {
+                $this->sweeper->discard($path);
+            }
         }
-
-        $raw = $directory.DIRECTORY_SEPARATOR.'mix.wav';
-        $this->mixer->mix($audioTracks, $raw);
-        $mastered = $this->master->process($raw, $directory, $masterDuration);
-        $this->files->delete($raw);
-
-        return [
-            'dryRun' => false,
-            'tracks' => $rows,
-            'usedCues' => $used,
-            'wav' => $mastered['wav'],
-            'mp3' => $mastered['mp3'],
-            'duration' => $masterDuration,
-            'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
-            'tailSeconds' => $tailSeconds,
-            'measurement' => $this->master->measure($mastered['wav']),
-        ];
     }
 
     /**
@@ -249,6 +270,31 @@ final class StoryMixer
     }
 
     /**
+     * Acredita lo que de verdad suena en una pista, clip a clip.
+     *
+     * No se empareja por la ruta de la pista: la cama y la música son WAV derivados y no coinciden
+     * con ningún cue. Se empareja por la ruta del clip de origen que declara el placer. Si hay cue
+     * para ese fichero manda el cue, porque es quien trae la licencia del override; si no lo hay,
+     * el clip lo resolvió el placer y la licencia viene en su propio crédito.
+     *
+     * @param  list<array<string, mixed>>  $cues
+     * @return list<array<string, mixed>>
+     */
+    private function creditsFor(array $cues, AudioTrack $track): array
+    {
+        $credits = [];
+
+        foreach ($track->credits as $credit) {
+            $credits[] = $this->cueByFile($cues, $credit->file) ?? $credit->toCue();
+        }
+
+        return $credits;
+    }
+
+    /**
+     * Empareja por ruta completa: dos clips con el mismo basename en directorios distintos son
+     * clips distintos, y confundirlos acredita al autor equivocado.
+     *
      * @param  list<array<string, mixed>>  $cues
      * @return array<string, mixed>|null
      */
@@ -259,7 +305,7 @@ final class StoryMixer
         foreach ($cues as $cue) {
             $absolute = str_replace('\\', '/', $this->manifest->absoluteFile((string) ($cue['file'] ?? '')));
 
-            if ($absolute !== '' && ($absolute === $normalized || basename($absolute) === basename($normalized))) {
+            if ($absolute !== '' && $absolute === $normalized) {
                 return $cue;
             }
         }

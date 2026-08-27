@@ -6,9 +6,11 @@ namespace App\Console\Commands;
 
 use App\DataObjects\CoverageReport;
 use App\DataObjects\Story;
+use App\Services\Audio\AttributionWriter;
 use App\Services\Audio\CoverageAuditor;
 use App\Services\Audio\StoryMixer;
 use App\Services\Audio\StorySoundManifest;
+use App\Services\Storage\TempSweeper;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
@@ -27,22 +29,34 @@ final class MixCommand extends Command
 
     protected $description = 'Mezcla y masteriza el audio de una historia a partir de sounds.json';
 
+    private const LUFS_TOLERANCE = 0.5;
+
     private readonly string $outputDirectory;
+
+    private readonly float $targetLufs;
+
+    private readonly float $targetTruePeak;
 
     public function __construct(
         private StoryMixer $mixer,
         private StorySoundManifest $manifest,
         private CoverageAuditor $auditor,
+        private AttributionWriter $attribution,
+        private TempSweeper $sweeper,
         private Filesystem $files,
         Repository $config,
     ) {
         parent::__construct();
 
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
+        $this->targetLufs = (float) $config->get('stories.ffmpeg.loudnorm.I', -14.0);
+        $this->targetTruePeak = (float) $config->get('stories.ffmpeg.loudnorm.TP', -1.5);
     }
 
     public function handle(): int
     {
+        $this->sweepOrphans();
+
         $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
 
         if ($storyFile === null) {
@@ -120,11 +134,28 @@ final class MixCommand extends Command
         }
 
         $this->renderMeasurement($result['measurement']);
-        $this->renderCredits($result['usedCues']);
+        $credits = $this->attribution->cueCredits($result['usedCues']);
+        $this->renderCredits($credits);
         $this->info('Mezcla: '.$result['wav']);
         $this->line('Escucha: '.$result['mp3']);
+        $this->line('Créditos: '.$this->writeCredits($slug, $credits));
 
         return self::SUCCESS;
+    }
+
+    private function sweepOrphans(): void
+    {
+        $swept = $this->sweeper->sweep();
+
+        if ($swept['entries'] === 0) {
+            return;
+        }
+
+        $this->comment(sprintf(
+            'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
+            $swept['entries'],
+            $swept['bytes'] / 1048576,
+        ));
     }
 
     private function renderCoverage(CoverageReport $report): void
@@ -195,11 +226,11 @@ final class MixCommand extends Command
         $this->newLine();
         $this->line($this->metricLine(
             sprintf('LUFS integrado: %.1f', $measurement['lufs']),
-            abs($measurement['lufs'] - (-14.0)) > 0.5,
+            abs($measurement['lufs'] - $this->targetLufs) > self::LUFS_TOLERANCE,
         ));
         $this->line($this->metricLine(
             sprintf('True peak: %.1f dBTP', $measurement['truePeak']),
-            $measurement['truePeak'] > -1.0,
+            $measurement['truePeak'] > $this->targetTruePeak,
         ));
         $this->line(sprintf('Rango dinámico: %.1f LU', $measurement['lra']));
     }
@@ -210,38 +241,13 @@ final class MixCommand extends Command
     }
 
     /**
-     * @param  list<array<string, mixed>>  $cues
+     * @param  list<array{file: string, author: string, sourceUrl: string, license: string}>  $credits
      */
-    private function renderCredits(array $cues): void
+    private function renderCredits(array $credits): void
     {
-        $lines = [];
-        $seen = [];
-
-        foreach ($cues as $cue) {
-            if (! ($cue['attributionRequired'] ?? false)) {
-                continue;
-            }
-
-            $file = (string) ($cue['file'] ?? '');
-            $key = $file.'|'.(string) ($cue['sourceUrl'] ?? '');
-
-            if ($file === '' || isset($seen[$key])) {
-                continue;
-            }
-
-            $seen[$key] = true;
-            $lines[] = sprintf(
-                '"%s" by %s — %s — %s',
-                basename($file),
-                (string) ($cue['author'] ?? 'unknown'),
-                (string) ($cue['sourceUrl'] ?? ''),
-                (string) ($cue['license'] ?? ''),
-            );
-        }
-
         $this->newLine();
 
-        if ($lines === []) {
+        if ($credits === []) {
             $this->comment('No hay créditos de atribución en los ficheros usados.');
 
             return;
@@ -249,9 +255,20 @@ final class MixCommand extends Command
 
         $this->info('Créditos (solo ficheros usados en esta historia):');
 
-        foreach ($lines as $line) {
+        foreach ($this->attribution->lines($credits) as $line) {
             $this->line($line);
         }
+    }
+
+    /**
+     * @param  list<array{file: string, author: string, sourceUrl: string, license: string}>  $credits
+     */
+    private function writeCredits(string $slug, array $credits): string
+    {
+        $path = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'credits.txt';
+        $this->attribution->write($path, $this->attribution->storyDocument($slug, $credits));
+
+        return $path;
     }
 
     private function resolveStoryFile(string $file): ?string

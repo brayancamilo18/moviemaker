@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Services\Audio;
 
 use App\DataObjects\DirectedSfx;
+use App\DataObjects\ResolvedSound;
 use App\DataObjects\Shot;
+use App\DataObjects\SoundCredit;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use Psr\Log\LoggerInterface;
@@ -29,24 +31,35 @@ final class SfxPlacer
     }
 
     /**
+     * `credits` lleva la procedencia de los clips resueltos aquí, en tiempo de mezcla: no están en
+     * sounds.json, así que sin esto acabarían en el vídeo sin crédito.
+     *
      * @param  list<Shot>  $shots
      * @param  list<DirectedSfx>  $effects
      * @param  array<string, array{path: string, gainDb?: float}>  $resolved
-     * @return array{tracks: list<AudioTrack>, skipped: list<array<string, mixed>>}
+     * @return array{
+     *     tracks: list<AudioTrack>,
+     *     skipped: list<array<string, mixed>>,
+     *     credits: array<string, SoundCredit>
+     * }
      */
     public function place(array $shots, array $effects, array $resolved = []): array
     {
         $plan = $this->plan($shots, $effects);
         $placements = $this->thin($plan['placements']);
         $tracks = [];
+        $credits = [];
         $used = [];
 
         foreach ($placements as $placement) {
             $effect = $placement['effect'];
             $override = $resolved[$placement['cueId']] ?? null;
             $overridePath = is_array($override) ? (string) ($override['path'] ?? '') : '';
+            $found = null;
 
             if ($overridePath !== '' && $this->files->isFile($overridePath)) {
+                // El gainDb del override ya salió de LibraryClipProcessor::sfxGainDb() al escribir
+                // sounds.json: recalcularlo aquí desharía cualquier ajuste manual del cue.
                 $path = $overridePath;
                 $gainDb = (float) ($override['gainDb'] ?? 0.0);
             } else {
@@ -58,7 +71,7 @@ final class SfxPlacer
                     $used,
                 );
                 $path = $found->path;
-                $gainDb = 0.0;
+                $gainDb = null;
             }
 
             if ($path === '' || ! $this->files->isFile($path)) {
@@ -103,16 +116,21 @@ final class SfxPlacer
                 role: AudioTrack::ROLE_SFX,
                 startAt: $startAt,
                 endAt: $endAt,
-                gainDb: $gainDb,
+                gainDb: $gainDb ?? $this->processor->sfxGainDb($path),
                 duckable: false,
                 fadeIn: 0.0,
                 fadeOut: 0.0,
             );
+
+            if ($found instanceof ResolvedSound) {
+                $credits[$path] = SoundCredit::fromResolved($placement['cueId'], 'sfx', 'scene', $found, $path);
+            }
         }
 
         return [
             'tracks' => $tracks,
             'skipped' => $plan['skipped'],
+            'credits' => $credits,
         ];
     }
 

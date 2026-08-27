@@ -1,0 +1,43 @@
+{
+    "version": 1,
+    "languages": {
+        "en": {
+            "articles": ["a", "an", "the"],
+            "conjunctions": [
+                "and",
+                "but",
+                "or",
+                "nor",
+                "yet",
+                "so",
+                "because",
+                "while",
+                "when",
+                "if",
+                "though",
+                "although",
+                "until",
+                "before",
+                "after",
+                "unless",
+                "whereas",
+                "since"
+            ]
+        },
+        "es": {
+            "articles": ["el", "la", "los", "las", "un", "una", "unos", "unas", "lo"],
+            "conjunctions": [
+                "y",
+                "e",
+                "o",
+                "u",
+                "pero",
+                "sino",
+                "porque",
+                "aunque",
+                "cuando",
+                "mientras"
+            ]
+        }
+    }
+}

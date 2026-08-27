@@ -27,6 +27,7 @@
 !/storage/app/image-cache/.gitkeep
 /storage/app/whisper/
 /storage/app/tmp/
+/storage/app/audio/
 /storage/app/render/*
 /resources/audio/**/*.wav
 !/resources/audio/core/

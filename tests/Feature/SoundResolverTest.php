@@ -16,6 +16,9 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Psr\Log\AbstractLogger;
+use Psr\Log\LoggerInterface;
+use Stringable;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -281,6 +284,22 @@ final class SoundResolverTest extends TestCase
         ], $queries);
     }
 
+    public function test_a_core_wav_absent_from_the_index_is_credited_as_unknown_license(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['results' => []], 200),
+        ]);
+
+        $this->installCore('door.wav');
+
+        $resolved = $this->resolve('sfx', 'door creak slow', ['door', 'creak']);
+
+        $this->assertSame(ResolvedSound::SOURCE_FALLBACK, $resolved->source);
+        $this->assertSame(AudioLibrary::LICENSE_UNKNOWN, $resolved->license);
+        $this->assertSame(AudioLibrary::AUTHOR_UNKNOWN, $resolved->author);
+        $this->assertTrue($resolved->attributionRequired);
+    }
+
     public function test_synthesizes_when_the_core_kit_is_missing_and_the_profile_is_credible(): void
     {
         Http::fake([
@@ -374,6 +393,82 @@ final class SoundResolverTest extends TestCase
         $resolver->resolve(['gammatre'], 'gammatre cue', 'sfx');
 
         $this->assertSame($sent, Http::recorded()->count());
+    }
+
+    public function test_opens_the_circuit_after_three_failed_preview_downloads(): void
+    {
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), '/data/previews/')) {
+                return Http::response(['detail' => 'unavailable'], 503);
+            }
+
+            return Http::response([
+                'results' => [
+                    $this->apiSound(1, 'First take', ['door', 'creak'], 4.0, 30, 1.0),
+                    $this->apiSound(2, 'Second take', ['door', 'creak'], 4.0, 20, 1.0),
+                    $this->apiSound(3, 'Third take', ['door', 'creak'], 4.0, 10, 1.0),
+                ],
+            ], 200);
+        });
+
+        $resolver = $this->app->make(SoundResolver::class);
+        $resolver->resolve(['door', 'creak'], 'door creak slow', 'sfx');
+
+        // Una búsqueda y las tres descargas del primer nivel de la escalera.
+        $sent = Http::recorded()->count();
+        $this->assertSame(4, $sent);
+
+        $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
+
+        $this->assertSame($sent, Http::recorded()->count());
+    }
+
+    public function test_an_unauthorized_search_opens_the_circuit_immediately(): void
+    {
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response(['detail' => 'Invalid token.'], 401),
+        ]);
+
+        $logger = $this->fakeLogger();
+        $resolver = $this->app->make(SoundResolver::class);
+        $resolver->resolve(['door', 'creak'], 'door creak slow', 'sfx');
+
+        Http::assertSentCount(1);
+
+        $resolver->resolve(['betatwo'], 'betatwo cue', 'sfx');
+
+        Http::assertSentCount(1);
+        $this->assertNotEmpty(array_filter(
+            $logger->warnings,
+            static fn (array $entry): bool => str_contains($entry['message'], 'FREESOUND_TOKEN'),
+        ));
+    }
+
+    public function test_logs_the_reason_of_a_failed_ingest(): void
+    {
+        $logger = $this->fakeLogger();
+
+        Http::fake([
+            'freesound.org/apiv2/search/text*' => Http::response([
+                'results' => [
+                    $this->apiSound(1, 'Broken take', ['door', 'creak'], 4.0, 100, 1.0),
+                ],
+            ], 200),
+            'freesound.org/data/previews/1.mp3' => Http::response('', 200),
+        ]);
+
+        $this->app->make(SoundResolver::class)->resolve(['door', 'creak'], 'door creak slow', 'sfx');
+
+        $reasons = array_map(
+            static fn (array $entry): string => (string) ($entry['context']['reason'] ?? ''),
+            array_filter(
+                $logger->warnings,
+                static fn (array $entry): bool => str_contains($entry['message'], 'Fallo al descargar'),
+            ),
+        );
+
+        $this->assertNotEmpty($reasons);
+        $this->assertStringContainsString('preview vacío', implode(' ', $reasons));
     }
 
     /**
@@ -662,6 +757,32 @@ final class SoundResolverTest extends TestCase
             ]],
             'pronunciations' => [],
         ]);
+    }
+
+    /**
+     * @return object{warnings: list<array{message: string, context: array<string, mixed>}>}
+     */
+    private function fakeLogger(): object
+    {
+        $logger = new class extends AbstractLogger
+        {
+            /** @var list<array{message: string, context: array<string, mixed>}> */
+            public array $warnings = [];
+
+            public function log(mixed $level, string|Stringable $message, array $context = []): void
+            {
+                if ((string) $level === 'warning') {
+                    $this->warnings[] = [
+                        'message' => (string) $message,
+                        'context' => $context,
+                    ];
+                }
+            }
+        };
+
+        $this->app->instance(LoggerInterface::class, $logger);
+
+        return $logger;
     }
 
     private function makeWav(string $path, float $duration): void

@@ -112,6 +112,78 @@ final class RenderTest extends TestCase
         }
     }
 
+    public function test_keep_intermediates_decides_the_fate_of_the_assemble_directory(): void
+    {
+        $assemble = $this->workDirectory().DIRECTORY_SEPARATOR.'assemble';
+
+        $this->artisan('story:render', [
+            'file' => $this->storyFile(),
+            '--keep-intermediates' => true,
+            '--no-grade' => true,
+        ])->assertSuccessful();
+
+        $this->assertDirectoryExists($assemble);
+        $this->assertFileExists($assemble.DIRECTORY_SEPARATOR.'body.mp4');
+
+        $this->artisan('story:render', [
+            'file' => $this->storyFile(),
+            '--from' => 'assemble',
+            '--no-grade' => true,
+        ])->assertSuccessful();
+
+        $this->assertDirectoryDoesNotExist($assemble);
+    }
+
+    public function test_unusable_timings_do_not_throw_away_a_finished_render(): void
+    {
+        file_put_contents(
+            $this->storyDirectory().DIRECTORY_SEPARATOR.'timings.json',
+            json_encode([
+                'version' => 1,
+                'sentences' => [],
+                'scenes' => [],
+            ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n",
+        );
+
+        $this->artisan('story:render', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('No se pudieron generar los subtítulos')
+            ->assertSuccessful();
+
+        $video = $this->storyDirectory().DIRECTORY_SEPARATOR.'video.mp4';
+        $this->assertFileExists($video);
+        $this->assertFileDoesNotExist($this->storyDirectory().DIRECTORY_SEPARATOR.'subtitles.srt');
+        $this->assertDirectoryDoesNotExist($this->workDirectory());
+
+        $payload = $this->readStoryPayload();
+        $this->assertSame($video, $payload['video']['mp4']);
+        $this->assertNull($payload['video']['subtitles']);
+        $this->assertTrue($payload['video']['grade']);
+    }
+
+    public function test_no_grade_writes_its_own_pointer_and_leaves_the_graded_master_alone(): void
+    {
+        $graded = $this->storyDirectory().DIRECTORY_SEPARATOR.'video.mp4';
+        $payload = $this->readStoryPayload();
+        $payload['video'] = ['mp4' => $graded, 'grade' => true];
+        file_put_contents(
+            $this->storyFile(),
+            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n",
+        );
+
+        $this->artisan('story:render', [
+            'file' => $this->storyFile(),
+            '--no-grade' => true,
+        ])->assertSuccessful();
+
+        $updated = $this->readStoryPayload();
+        $this->assertSame($graded, $updated['video']['mp4']);
+        $this->assertSame(
+            $this->storyDirectory().DIRECTORY_SEPARATOR.'video-nograde.mp4',
+            $updated['video']['mp4_nograde'],
+        );
+        $this->assertFalse($updated['video']['grade']);
+    }
+
     public function test_dry_run_fails_when_shots_do_not_cover_the_mix(): void
     {
         $dir = $this->storyDirectory();
@@ -318,6 +390,21 @@ final class RenderTest extends TestCase
             'pix_fmt' => $pix,
             'types' => $types,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function readStoryPayload(): array
+    {
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode(
+            (string) file_get_contents($this->storyFile()),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        return $payload;
     }
 
     private function storyFile(): string

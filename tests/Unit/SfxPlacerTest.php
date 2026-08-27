@@ -8,6 +8,7 @@ use App\DataObjects\DirectedSfx;
 use App\DataObjects\Shot;
 use App\Services\Audio\AudioLibrary;
 use App\Services\Audio\AudioTrack;
+use App\Services\Audio\LibraryClipProcessor;
 use App\Services\Audio\SfxPlacer;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Http;
@@ -130,6 +131,43 @@ final class SfxPlacerTest extends TestCase
         $this->assertLessThanOrEqual(5.0, $tracks[1]->startAt);
     }
 
+    /**
+     * SoundVerifier acepta cualquier pico entre -35 y 0 dBFS, así que dos golpes «válidos» pueden
+     * llevarse 28 dB. Tras normalizar tienen que sonar al mismo nivel.
+     */
+    public function test_two_hits_with_opposite_peaks_end_up_at_the_same_level(): void
+    {
+        $this->indexClip('sfx/door-slam-1.wav', ['door', 'slam'], 2.0, -2.0);
+        $this->indexClip('sfx/glass-crack-1.wav', ['glass', 'crack'], 2.0, -30.0);
+
+        $tracks = $this->placeEffects(
+            [$this->shot(1, 1, 1.0, 2.0), $this->shot(2, 1, 20.0, 21.0)],
+            [
+                $this->effect(1, 0.0, 'door slam', ['door', 'slam'], DirectedSfx::IMPORTANCE_KEY),
+                $this->effect(2, 0.0, 'glass crack', ['glass', 'crack'], DirectedSfx::IMPORTANCE_KEY),
+            ],
+        )['tracks'];
+
+        $this->assertCount(2, $tracks);
+        $this->assertStringContainsString('door-slam', $tracks[0]->path);
+        $this->assertStringContainsString('glass-crack', $tracks[1]->path);
+
+        $processor = $this->app->make(LibraryClipProcessor::class);
+        $levels = [];
+
+        foreach ($tracks as $track) {
+            $truePeak = $processor->truePeakDbtp($track->path);
+
+            $this->assertNotNull($truePeak);
+
+            $levels[] = $truePeak + $track->gainDb;
+        }
+
+        $this->assertLessThan(-10.0, $tracks[0]->gainDb);
+        $this->assertGreaterThan(0.0, $tracks[1]->gainDb);
+        $this->assertEqualsWithDelta($levels[0], $levels[1], 1.0);
+    }
+
     public function test_rotates_the_file_when_two_shots_share_a_query(): void
     {
         $this->indexClip('sfx/door-creak-1.wav', ['door', 'creak'], 0.8);
@@ -195,23 +233,18 @@ final class SfxPlacerTest extends TestCase
     /**
      * @param  list<string>  $tags
      */
-    private function indexClip(string $file, array $tags, float $duration): void
+    private function indexClip(string $file, array $tags, float $duration, ?float $peakDbfs = null): void
     {
         $absolute = $this->libraryDir.DIRECTORY_SEPARATOR.str_replace('/', DIRECTORY_SEPARATOR, $file);
         (new Filesystem)->ensureDirectoryExists(dirname($absolute));
+        $this->sine($absolute, $duration, -12.0);
 
-        $process = new Process([
-            'ffmpeg', '-nostdin', '-y', '-hide_banner',
-            '-f', 'lavfi',
-            '-i', sprintf('sine=frequency=440:sample_rate=48000:duration=%.3f', $duration),
-            '-ac', '2',
-            '-ar', '48000',
-            '-sample_fmt', 's16',
-            '-af', 'volume=-12dB',
-            $absolute,
-        ]);
-        $process->setTimeout(30);
-        $process->mustRun();
+        if ($peakDbfs !== null) {
+            // La amplitud de la fuente sine de ffmpeg cambia entre versiones, así que un volume
+            // fijo no fija el pico: hay que medir lo que ha salido y corregir.
+            $sourcePeak = $this->samplePeakDbfs($absolute) + 12.0;
+            $this->sine($absolute, $duration, $peakDbfs - $sourcePeak);
+        }
 
         $this->app->make(AudioLibrary::class)->add([
             'file' => $file,
@@ -227,5 +260,41 @@ final class SfxPlacerTest extends TestCase
             'lufs' => -20.0,
             'sha1' => sha1($file),
         ]);
+    }
+
+    private function sine(string $path, float $duration, float $gainDb): void
+    {
+        $process = new Process([
+            'ffmpeg', '-nostdin', '-y', '-hide_banner',
+            '-f', 'lavfi',
+            '-i', sprintf('sine=frequency=440:sample_rate=48000:duration=%.3f', $duration),
+            '-ac', '2',
+            '-ar', '48000',
+            '-sample_fmt', 's16',
+            '-af', sprintf('volume=%.3fdB', $gainDb),
+            $path,
+        ]);
+        $process->setTimeout(30);
+        $process->mustRun();
+    }
+
+    private function samplePeakDbfs(string $path): float
+    {
+        $process = new Process([
+            'ffmpeg', '-nostdin', '-hide_banner',
+            '-i', $path,
+            '-af', 'volumedetect',
+            '-f', 'null',
+            '-',
+        ]);
+        $process->setTimeout(30);
+        $process->mustRun();
+
+        $this->assertSame(
+            1,
+            preg_match('/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/', $process->getErrorOutput(), $matches),
+        );
+
+        return (float) $matches[1];
     }
 }
