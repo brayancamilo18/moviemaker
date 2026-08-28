@@ -344,7 +344,27 @@ final class MixTest extends TestCase
     {
         return [
             'sentences' => [
-                ['order' => 1, 'sceneOrder' => 1, 'text' => 'The door creaked open in the dark hallway.', 'start' => 1.0, 'end' => 3.0, 'pauseAfter' => 0.4],
+                [
+                    'order' => 1,
+                    'sceneOrder' => 1,
+                    'text' => 'The door creaked open in the dark hallway.',
+                    'start' => 1.0,
+                    'end' => 3.0,
+                    'pauseAfter' => 0.4,
+                    'alignment' => 'text',
+                    // El efecto dirigido cuelga de «creaked», así que la palabra tiene que estar en
+                    // la alineación: sin ella SfxPlacer no coloca el golpe.
+                    'words' => [
+                        ['token' => 'the', 'start' => 1.0, 'end' => 1.2],
+                        ['token' => 'door', 'start' => 1.2, 'end' => 1.5],
+                        ['token' => 'creaked', 'start' => 1.5, 'end' => 2.0],
+                        ['token' => 'open', 'start' => 2.0, 'end' => 2.4],
+                        ['token' => 'in', 'start' => 2.4, 'end' => 2.5],
+                        ['token' => 'the', 'start' => 2.5, 'end' => 2.6],
+                        ['token' => 'dark', 'start' => 2.6, 'end' => 2.8],
+                        ['token' => 'hallway', 'start' => 2.8, 'end' => 3.0],
+                    ],
+                ],
             ],
             'scenes' => [
                 ['order' => 1, 'start' => 0.0, 'end' => 16.0, 'duration' => 16.0, 'sentenceCount' => 1],
@@ -459,6 +479,7 @@ final class MixTest extends TestCase
             'cues' => $cues,
             'directedSfx' => [[
                 'shotIndex' => 1,
+                'anchorWord' => 'creaked',
                 'offsetRatio' => 0.0,
                 'query' => 'metal scrape',
                 'tags' => ['metal', 'scrape'],

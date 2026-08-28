@@ -6,4 +6,8 @@ namespace App\Exceptions;
 
 use RuntimeException;
 
-final class LlmGenerationException extends RuntimeException {}
+/**
+ * El LLM contestó y la respuesta no sirve. No es final porque LlmUnavailableException la extiende:
+ * quien solo quiera saber que la generación falló sigue capturando esta.
+ */
+class LlmGenerationException extends RuntimeException {}

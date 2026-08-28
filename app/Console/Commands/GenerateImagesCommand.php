@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Contracts\ImageGenerator;
+use App\Contracts\JsonLlm;
 use App\DataObjects\PlannedShot;
 use App\DataObjects\Shot;
 use App\DataObjects\ShotPlan;
@@ -47,6 +48,7 @@ final class GenerateImagesCommand extends Command
         private VisualBibleGenerator $bibles,
         private ShotPlanRepository $plans,
         private NarrationClock $clock,
+        private JsonLlm $llm,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -207,7 +209,11 @@ final class GenerateImagesCommand extends Command
         }
 
         if ($redirect || ! $samePlan instanceof ShotPlan || ! $samePlan->isDirected()) {
-            return $this->director->direct($shots, $story, $bible);
+            $directed = $this->director->direct($shots, $story, $bible);
+            $this->line('Planos dirigidos con '.$this->llm->name().'.');
+            $this->warnAboutFallback();
+
+            return $directed;
         }
 
         $this->line('El plan no ha cambiado: se reutiliza la dirección de shots.json (--redirect para volver a dirigir).');
@@ -228,6 +234,8 @@ final class GenerateImagesCommand extends Command
                 motion: $shot->motion,
                 subject: $row->shot->subject,
                 threatStage: $row->shot->threatStage,
+                journeyLeg: $row->shot->journeyLeg,
+                lightStage: $row->shot->lightStage,
                 description: $row->shot->description,
                 characterSlugs: $row->shot->characterSlugs,
                 imagePath: $shot->imagePath,
@@ -235,6 +243,15 @@ final class GenerateImagesCommand extends Command
         }
 
         return $directed;
+    }
+
+    private function warnAboutFallback(): void
+    {
+        $notice = $this->llm->fallbackNotice();
+
+        if ($notice !== null) {
+            $this->warn($notice);
+        }
     }
 
     /**
@@ -255,6 +272,9 @@ final class GenerateImagesCommand extends Command
 
             return null;
         }
+
+        $this->line('Biblia visual escrita con '.$this->llm->name().'.');
+        $this->warnAboutFallback();
 
         $payload['visualBible'] = $bible->toArray();
         $this->writeJson($storyFile, $payload);

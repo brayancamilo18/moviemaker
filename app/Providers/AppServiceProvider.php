@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Contracts\ImageGenerator;
+use App\Contracts\JsonLlm;
 use App\Contracts\TextToSpeech;
 use App\Services\Audio\FreesoundClient;
 use App\Services\Audio\SoundResolver;
@@ -12,6 +13,8 @@ use App\Services\Ffmpeg\FfmpegFilterScript;
 use App\Services\Ffmpeg\FfmpegRunner;
 use App\Services\Ffmpeg\MediaProbe;
 use App\Services\Image\PollinationsGenerator;
+use App\Services\Llm\AnthropicClient;
+use App\Services\Llm\FailoverJsonLlm;
 use App\Services\Llm\GeminiClient;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Foundation\Application;
@@ -19,6 +22,7 @@ use Illuminate\Filesystem\Filesystem;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
+use Psr\Log\LoggerInterface;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -27,17 +31,27 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->singleton(GeminiClient::class, function (Application $app): GeminiClient {
-            /** @var array{api_key: ?string, model: string, base_url: string, timeout: int, max_retries: int} $gemini */
-            $gemini = $app->make('config')->get('stories.gemini');
+        // Singleton para que el cambio al respaldo valga para toda la ejecución: si cada servicio
+        // recibiera su propia instancia, cada uno volvería a pagar los reintentos del principal.
+        $this->app->singleton(JsonLlm::class, function (Application $app): JsonLlm {
+            $config = $app->make('config');
+            $primary = $this->llmClient($app, (string) $config->get('stories.llm.provider'));
+            $fallbackProvider = (string) $config->get('stories.llm.fallback');
 
-            return new GeminiClient(
-                http: $app->make(Factory::class),
-                apiKey: (string) $gemini['api_key'],
-                model: $gemini['model'],
-                baseUrl: $gemini['base_url'],
-                timeout: (int) $gemini['timeout'],
-                maxRetries: (int) $gemini['max_retries'],
+            if ($fallbackProvider === '' || $fallbackProvider === (string) $config->get('stories.llm.provider')) {
+                return $primary;
+            }
+
+            $fallback = $this->llmClient($app, $fallbackProvider);
+
+            if (! $fallback->isAvailable()) {
+                return $primary;
+            }
+
+            return new FailoverJsonLlm(
+                primary: $primary,
+                fallback: $fallback,
+                logger: $app->make(LoggerInterface::class),
             );
         });
 
@@ -96,5 +110,49 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         //
+    }
+
+    private function llmClient(Application $app, string $provider): JsonLlm
+    {
+        return match ($provider) {
+            'gemini' => $this->gemini($app),
+            'anthropic' => $this->anthropic($app),
+            default => throw new InvalidArgumentException(
+                "Proveedor de LLM desconocido: {$provider}.",
+            ),
+        };
+    }
+
+    private function gemini(Application $app): GeminiClient
+    {
+        /** @var array{api_key: ?string, base_url: string, timeout: int, max_retries: int, models: array<string, string>} $gemini */
+        $gemini = $app->make('config')->get('stories.llm.gemini');
+
+        return new GeminiClient(
+            http: $app->make(Factory::class),
+            apiKey: (string) $gemini['api_key'],
+            models: $gemini['models'],
+            baseUrl: $gemini['base_url'],
+            timeout: (int) $gemini['timeout'],
+            maxRetries: (int) $gemini['max_retries'],
+        );
+    }
+
+    private function anthropic(Application $app): AnthropicClient
+    {
+        /** @var array{api_key: ?string, base_url: string, version: string, beta: string, timeout: int, max_retries: int, models: array<string, string>, max_tokens: array<string, int>} $anthropic */
+        $anthropic = $app->make('config')->get('stories.llm.anthropic');
+
+        return new AnthropicClient(
+            http: $app->make(Factory::class),
+            apiKey: (string) $anthropic['api_key'],
+            models: $anthropic['models'],
+            maxTokens: $anthropic['max_tokens'],
+            baseUrl: $anthropic['base_url'],
+            version: (string) $anthropic['version'],
+            beta: (string) $anthropic['beta'],
+            timeout: (int) $anthropic['timeout'],
+            maxRetries: (int) $anthropic['max_retries'],
+        );
     }
 }

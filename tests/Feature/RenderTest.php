@@ -6,7 +6,9 @@ namespace Tests\Feature;
 
 use App\Services\Image\ShotPlanner;
 use App\Services\Story\StoryValidator;
+use App\Services\Video\FinalEncoder;
 use Illuminate\Filesystem\Filesystem;
+use InvalidArgumentException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -65,6 +67,46 @@ final class RenderTest extends TestCase
         $this->assertContains('audio', $probe['types']);
         $this->assertSame('yuv420p', $probe['pix_fmt']);
         $this->assertEqualsWithDelta(8.4, $probe['duration'], 0.1);
+    }
+
+    /**
+     * El caso de producción, que es el que se escapaba: la mezcla trae una cola de ambiente después
+     * de la última palabra y los planos solo cubren el habla. El outro arranca donde acaba el habla,
+     * así que la cola suena sobre él y al audio solo hay que añadirle lo que le falta para llegar al
+     * final del outro. Con `tail_seconds` a 0 esta cuenta y la ingenua dan el mismo número, y por
+     * eso el resto de los tests de este fichero no la ven.
+     */
+    public function test_the_outro_covers_the_tail_of_the_mix(): void
+    {
+        config([
+            'stories.video.outro_seconds' => 1.4,
+            'stories.audio.tail_seconds' => 1.0,
+        ]);
+
+        // Habla hasta 8.0 s, que es lo que cubren los planos, más 1.0 s de cola.
+        $this->writeWav($this->storyDirectory().DIRECTORY_SEPARATOR.'narration_mix.wav', 9.0);
+
+        $this->artisan('story:render', [
+            'file' => $this->storyFile(),
+            '--no-grade' => true,
+        ])->assertSuccessful();
+
+        $video = $this->storyDirectory().DIRECTORY_SEPARATOR.'video-nograde.mp4';
+        $this->assertFileExists($video);
+        $this->assertEqualsWithDelta(9.4, $this->probe($video)['duration'], 0.1);
+    }
+
+    public function test_an_outro_shorter_than_the_tail_is_refused(): void
+    {
+        config([
+            'stories.video.outro_seconds' => 4.0,
+            'stories.audio.tail_seconds' => 10.0,
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('no puede ser menor que audio.tail_seconds');
+
+        $this->app->make(FinalEncoder::class);
     }
 
     public function test_rerun_only_regenerates_the_missing_scene_clip(): void

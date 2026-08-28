@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\DataObjects\NarrationWord;
 use App\DataObjects\SoundCredit;
 use App\DataObjects\Story;
 use App\Services\Storage\TempSweeper;
@@ -52,6 +53,7 @@ final class StoryMixer
      *     duration: float,
      *     lastTranscribedPhraseEnd: float,
      *     tailSeconds: float,
+     *     sfxSkipped: list<array<string, mixed>>,
      *     measurement: ?array{lufs: float, truePeak: float, lra: float}
      * }
      */
@@ -103,6 +105,10 @@ final class StoryMixer
         // con la misma disciplina que mix.wav; si no, cada mezcla deja cientos de MB en tmp.
         $derived = [];
 
+        // Efectos que se quedan fuera por no tener ancla. No es un detalle de log: es la diferencia
+        // entre una historia con golpes y una sin ellos, y quien mezcla tiene que verla.
+        $sfxSkipped = [];
+
         try {
             if (! $noAmbience) {
                 $rows[] = [
@@ -138,7 +144,9 @@ final class StoryMixer
                     $this->manifest->loadShots($slug),
                     $manifest['directedSfx'],
                     $this->manifest->overrides($cues, 'sfx'),
+                    $this->narrationWords($timings),
                 );
+                $sfxSkipped = $placed['skipped'];
 
                 foreach ($placed['tracks'] as $track) {
                     $audioTracks[] = $track;
@@ -188,6 +196,7 @@ final class StoryMixer
                     'duration' => $masterDuration,
                     'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
                     'tailSeconds' => $tailSeconds,
+                    'sfxSkipped' => $sfxSkipped,
                     'measurement' => null,
                 ];
             }
@@ -206,6 +215,7 @@ final class StoryMixer
                 'duration' => $masterDuration,
                 'lastTranscribedPhraseEnd' => $lastTranscribedPhraseEnd,
                 'tailSeconds' => $tailSeconds,
+                'sfxSkipped' => $sfxSkipped,
                 'measurement' => $this->master->measure($mastered['wav']),
             ];
         } finally {
@@ -311,6 +321,37 @@ final class StoryMixer
         }
 
         return null;
+    }
+
+    /**
+     * Palabras del máster, planas y en orden, para que el colocador cuelgue cada golpe de la suya.
+     * Solo las traen las frases que anclaron por texto: las demás no publican palabras.
+     *
+     * @param  array{sentences?: list<array<string, mixed>>}  $timings
+     * @return list<NarrationWord>
+     */
+    private function narrationWords(array $timings): array
+    {
+        $words = [];
+
+        foreach ($timings['sentences'] ?? [] as $sentence) {
+            if (! is_array($sentence)) {
+                continue;
+            }
+
+            foreach (is_array($sentence['words'] ?? null) ? $sentence['words'] : [] as $word) {
+                if (is_array($word)) {
+                    $words[] = NarrationWord::fromArray($word);
+                }
+            }
+        }
+
+        usort(
+            $words,
+            static fn (NarrationWord $left, NarrationWord $right): int => $left->start <=> $right->start,
+        );
+
+        return $words;
     }
 
     /**

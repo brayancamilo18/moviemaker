@@ -30,7 +30,7 @@ final class ShotPlanner
     ];
 
     /** Versión del algoritmo de planificación persistida en shots.json. */
-    public const VERSION = 3;
+    public const VERSION = 4;
 
     private const ACTION_VERBS = [
         'burst', 'chase', 'crack', 'crash', 'dash', 'flee', 'grab', 'hit', 'jump',
@@ -49,6 +49,8 @@ final class ShotPlanner
 
     private readonly float $atmosphereDuration;
 
+    private readonly float $maxHoldSlack;
+
     public function __construct(Repository $config)
     {
         $this->minDuration = (float) $config->get('stories.shots.min_duration');
@@ -56,6 +58,7 @@ final class ShotPlanner
         $this->targetDuration = (float) $config->get('stories.shots.target_duration');
         $this->tensionDuration = (float) $config->get('stories.shots.tension_duration');
         $this->atmosphereDuration = (float) $config->get('stories.shots.atmosphere_duration');
+        $this->maxHoldSlack = (float) $config->get('stories.shots.max_hold_slack');
     }
 
     /**
@@ -493,13 +496,11 @@ final class ShotPlanner
                 }
 
                 if ($end > $speechEnd + 0.0005) {
-                    $windows[] = [
-                        'shot' => $shot,
-                        'start' => $this->seconds($speechEnd),
-                        'end' => $this->seconds($end),
-                        'continuation' => false,
-                        'closing' => true,
-                    ];
+                    foreach ($this->splitOversizedHold($shot, $speechEnd, $end) as $piece) {
+                        $piece['continuation'] = false;
+                        $piece['closing'] = true;
+                        $windows[] = $piece;
+                    }
                 }
             } else {
                 foreach ($this->splitOversizedHold($shot, $start, $end) as $piece) {
@@ -560,6 +561,8 @@ final class ShotPlanner
                 motion: $motion,
                 subject: $subject,
                 threatStage: $threatStage,
+                journeyLeg: $source->journeyLeg,
+                lightStage: $source->lightStage,
                 description: $source->description,
                 characterSlugs: $source->characterSlugs,
                 imagePath: $source->imagePath,
@@ -587,13 +590,14 @@ final class ShotPlanner
     }
 
     /**
-     * Si absorber silencio deja un plano más de 3 s por encima de max_duration, parte el exceso.
+     * Si absorber silencio deja un plano por encima de max_duration + max_hold_slack, parte el
+     * exceso. Vale igual para la ventana de cierre: un congelado largo es un plano muerto.
      *
      * @return list<array{shot: Shot, start: float, end: float, continuation: bool, closing?: bool}>
      */
     private function splitOversizedHold(Shot $shot, float $start, float $end): array
     {
-        $maxHold = $this->maxDuration + 3.0;
+        $maxHold = $this->maxDuration + $this->maxHoldSlack;
         $pieces = [];
         $cursor = $start;
         $continuation = false;

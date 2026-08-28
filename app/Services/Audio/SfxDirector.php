@@ -4,18 +4,22 @@ declare(strict_types=1);
 
 namespace App\Services\Audio;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\DirectedSfx;
 use App\DataObjects\Shot;
 use App\DataObjects\Story;
 use App\DataObjects\StoryScene;
 use App\Exceptions\LlmGenerationException;
-use App\Services\Llm\GeminiClient;
+use App\Services\Llm\LlmTask;
 use JsonException;
+use Psr\Log\LoggerInterface;
 
 final class SfxDirector
 {
     public function __construct(
-        private GeminiClient $gemini,
+        private JsonLlm $llm,
+        private SfxAnchor $anchor,
+        private LoggerInterface $logger,
     ) {}
 
     /**
@@ -65,13 +69,14 @@ final class SfxDirector
         $allowed = [];
 
         foreach ($sceneShots as $shot) {
-            $allowed[$shot->order] = true;
+            $allowed[$shot->order] = $shot;
         }
 
-        $data = $this->gemini->generateJson(
+        $data = $this->llm->generateJson(
             $this->systemInstruction(),
             $this->userPrompt($sceneShots, $story, $sceneOrder),
             $this->schema(),
+            task: LlmTask::SfxDirection,
             temperature: 0.4,
         );
 
@@ -85,6 +90,18 @@ final class SfxDirector
             $effect = DirectedSfx::fromArray($row);
 
             if ($effect->query === '' || ! isset($allowed[$effect->shotIndex])) {
+                continue;
+            }
+
+            // Un ancla que no está en la narración del plano no se podrá colocar en la mezcla, así
+            // que el efecto se cae aquí: resolverle un sonido sería descargar un WAV para nada.
+            if (! $this->anchor->mentions($allowed[$effect->shotIndex]->sourceText, $effect->anchorWord)) {
+                $this->logger->info('Efecto sin ancla en la narración de su plano; se descarta.', [
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
+                    'anchorWord' => $effect->anchorWord,
+                ]);
+
                 continue;
             }
 
@@ -141,7 +158,11 @@ final class SfxDirector
         return <<<'INSTRUCTION'
 You are the sound designer for a horror YouTube channel. You place diegetic sound effects on specific shots.
 
-Each shot has its own narration line. Only place an effect when that line contains something that physically makes a sound, at the moment it happens. Set offsetRatio to where in that shot the sound occurs: 0.0 at the start of the line, 1.0 at the end.
+Each shot has its own narration line. Only place an effect when that line contains something that physically makes a sound, at the moment it happens.
+
+anchorWord is the single word of that narration line that names the sound, copied exactly as written. The effect is played on that word, so the word must be the one the listener hears at the instant the sound happens: for "The door creaked open" the anchor is creaked, not door. If no single word in the line names the sound, there is no effect to place: leave that shot out.
+
+Set offsetRatio to where in that shot the sound occurs anyway, from 0.0 at the start of the line to 1.0 at the end.
 
 The query is how you would search a sound library: two to four plain English words, describing the physical sound. Never metaphor. Wind howling like a widow is wind howling night.
 
@@ -149,6 +170,7 @@ RULES:
 - Zero to two effects per shot. Most shots have none, and that is correct.
 - At most one key effect in the whole scene. Everything else is texture.
 - Only sounds that exist in the scene. No musical stingers. No jump scares. No score.
+- anchorWord must appear literally in that shot's narration line. Never invent it, never use a word from another line.
 - Silence is a tool. An empty result for a quiet scene is a good answer.
 INSTRUCTION;
     }
@@ -171,6 +193,10 @@ INSTRUCTION;
                                 'type' => 'INTEGER',
                                 'description' => 'Echo a shotIndex you were given.',
                             ],
+                            'anchorWord' => [
+                                'type' => 'STRING',
+                                'description' => 'The single word of that shot narration that names the sound, copied literally from it.',
+                            ],
                             'offsetRatio' => [
                                 'type' => 'NUMBER',
                                 'description' => 'Where in that shot the sound occurs, from 0.0 at the start to 1.0 at the end.',
@@ -192,7 +218,7 @@ INSTRUCTION;
                                 'description' => 'Exactly one of: key, texture.',
                             ],
                         ],
-                        'required' => ['shotIndex', 'offsetRatio', 'query', 'tags', 'importance'],
+                        'required' => ['shotIndex', 'anchorWord', 'offsetRatio', 'query', 'tags', 'importance'],
                     ],
                 ],
             ],

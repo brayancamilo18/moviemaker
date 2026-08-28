@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Audio;
 
 use App\DataObjects\DirectedSfx;
+use App\DataObjects\NarrationWord;
 use App\DataObjects\ResolvedSound;
 use App\DataObjects\Shot;
 use App\DataObjects\SoundCredit;
@@ -22,6 +23,7 @@ final class SfxPlacer
         private SoundResolver $resolver,
         private LibraryClipProcessor $processor,
         private SoundVerifier $verifier,
+        private SfxAnchor $anchor,
         private Filesystem $files,
         private LoggerInterface $logger,
         Repository $config,
@@ -37,15 +39,17 @@ final class SfxPlacer
      * @param  list<Shot>  $shots
      * @param  list<DirectedSfx>  $effects
      * @param  array<string, array{path: string, gainDb?: float}>  $resolved
+     * @param  list<NarrationWord>  $words  Palabras del máster con su ventana real. Sin ellas ningún
+     *                                      golpe tiene ancla y no se coloca ninguno.
      * @return array{
      *     tracks: list<AudioTrack>,
      *     skipped: list<array<string, mixed>>,
      *     credits: array<string, SoundCredit>
      * }
      */
-    public function place(array $shots, array $effects, array $resolved = []): array
+    public function place(array $shots, array $effects, array $resolved = [], array $words = []): array
     {
-        $plan = $this->plan($shots, $effects);
+        $plan = $this->plan($shots, $effects, $words);
         $placements = $this->thin($plan['placements']);
         $tracks = [];
         $credits = [];
@@ -97,7 +101,10 @@ final class SfxPlacer
             }
 
             $duration = $this->processor->duration($path);
-            $startAt = $placement['startAt'];
+            // startAt es el instante en el que se quiere oír el golpe; el fichero tiene que entrar
+            // antes, tanto como dure su cabeza muerta, para que el golpe caiga donde toca.
+            $onset = $this->processor->onsetSeconds($path);
+            $startAt = round(max(0.0, $placement['startAt'] - $onset), 3);
             $endAt = round($startAt + $duration, 3);
 
             if ($endAt <= $startAt) {
@@ -137,12 +144,13 @@ final class SfxPlacer
     /**
      * @param  list<Shot>  $shots
      * @param  list<DirectedSfx>  $effects
+     * @param  list<NarrationWord>  $words
      * @return array{
      *     placements: list<array{cueId: string, shotIndex: int, effect: DirectedSfx, startAt: float}>,
      *     skipped: list<array<string, mixed>>
      * }
      */
-    private function plan(array $shots, array $effects): array
+    private function plan(array $shots, array $effects, array $words): array
     {
         $byOrder = [];
 
@@ -168,8 +176,23 @@ final class SfxPlacer
                 continue;
             }
 
-            $span = $shot->end - $shot->start;
-            $startAt = round(max(0.0, $shot->start + $effect->offsetRatio * $span - $this->lead), 3);
+            // Sin la palabra que lo nombra el golpe no se coloca. Estimarlo dentro del plano lo deja
+            // a uno o dos segundos de donde la voz lo anuncia, y un transitorio a esa distancia no
+            // suena a ambiente: suena a error. Vale más el silencio.
+            $anchorAt = $this->anchor->resolve($shot, $effect, $words);
+
+            if ($anchorAt === null) {
+                $skipped[] = [
+                    'shot' => $effect->shotIndex,
+                    'query' => $effect->query,
+                    'anchorWord' => $effect->anchorWord,
+                    'reason' => $effect->anchorWord === '' ? 'anchor_missing' : 'anchor_not_found',
+                ];
+
+                continue;
+            }
+
+            $startAt = round(max(0.0, $anchorAt - $this->lead), 3);
 
             $placements[] = [
                 'cueId' => 'sfx.'.$effect->shotIndex.'.'.$indexByShot[$effect->shotIndex],

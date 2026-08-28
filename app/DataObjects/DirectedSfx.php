@@ -12,6 +12,9 @@ final readonly class DirectedSfx
 
     /**
      * @param  list<string>  $tags
+     * @param  string  $anchorWord  Palabra de la narración que nombra el sonido. Es de donde cuelga el
+     *                              golpe: sin ella solo queda estimar con offsetRatio, que en un plano
+     *                              de cuatro segundos se equivoca por más de lo que el oído perdona.
      */
     public function __construct(
         public int $shotIndex,
@@ -19,6 +22,7 @@ final readonly class DirectedSfx
         public string $query,
         public array $tags,
         public string $importance,
+        public string $anchorWord = '',
     ) {}
 
     /**
@@ -50,11 +54,12 @@ final readonly class DirectedSfx
             query: trim((string) ($data['query'] ?? '')),
             tags: $tags,
             importance: $importance,
+            anchorWord: mb_strtolower(trim((string) ($data['anchorWord'] ?? ''))),
         );
     }
 
     /**
-     * @return array{shotIndex: int, offsetRatio: float, query: string, tags: list<string>, importance: string}
+     * @return array{shotIndex: int, offsetRatio: float, query: string, tags: list<string>, importance: string, anchorWord: string}
      */
     public function toArray(): array
     {
@@ -64,6 +69,7 @@ final readonly class DirectedSfx
             'query' => $this->query,
             'tags' => $this->tags,
             'importance' => $this->importance,
+            'anchorWord' => $this->anchorWord,
         ];
     }
 }

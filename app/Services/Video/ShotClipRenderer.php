@@ -47,6 +47,18 @@ final class ShotClipRenderer
         $this->zoomMax = (float) $config->get('stories.video.zoom_max');
         $this->intermediateCrf = (int) $config->get('stories.video.intermediate_crf');
         $this->transitionDuration = (float) $config->get('stories.video.transition_duration');
+
+        // zoompan recorta iw/zoom del fotograma ya escalado, así que escalar por debajo del zoom
+        // máximo deja al recorte sin píxeles y todos los planos salen blandos. No hay forma de
+        // notarlo mirando el vídeo salvo comparándolo con otro, así que se para aquí.
+        if ($this->sourceUpscale < $this->zoomMax) {
+            throw new InvalidArgumentException(sprintf(
+                'video.source_upscale (%.2f) no puede ser menor que video.zoom_max (%.2f): '
+                .'el recorte del zoom se quedaría sin píxeles y los planos saldrían blandos.',
+                $this->sourceUpscale,
+                $this->zoomMax,
+            ));
+        }
     }
 
     public function durationFor(Shot $shot, bool $followedByXfade): float

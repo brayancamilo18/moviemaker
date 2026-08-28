@@ -27,7 +27,8 @@ final class DoctorCommandTest extends TestCase
         $config->set('stories.audio.library_path', $this->workDirectory.'/audio');
         $config->set('stories.tts.base_url', 'http://127.0.0.1:8020');
         // Valores que sí están en su sitio, para que el único fallo sea el que prueba cada test.
-        $config->set('stories.gemini.api_key', 'clave-de-prueba');
+        $config->set('stories.llm.gemini.api_key', 'clave-de-prueba');
+        $config->set('stories.llm.anthropic.api_key', 'clave-de-respaldo');
         $config->set('stories.whisper.binary', 'php');
         $config->set('stories.whisper.model', $this->workDirectory.'/whisper/ggml-base.en.bin');
 
@@ -84,6 +85,37 @@ final class DoctorCommandTest extends TestCase
             ->expectsOutputToContain('[bloqueante] sidecar de Kokoro: No responde en /health.');
     }
 
+    public function test_it_puts_the_source_resolution_on_the_table(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $config = $this->app->make('config');
+        $config->set('stories.images.width', 1024);
+        $config->set('stories.video.width', 1280);
+        $config->set('stories.video.zoom_max', 1.18);
+
+        $this->artisan('story:doctor')
+            ->assertSuccessful()
+            ->expectsOutputToContain('Fuentes de 1024 px para una salida de 1280 px');
+    }
+
+    public function test_a_source_that_covers_the_zoom_is_not_a_warning(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $config = $this->app->make('config');
+        $config->set('stories.images.width', 2048);
+        $config->set('stories.video.width', 1280);
+        $config->set('stories.video.zoom_max', 1.18);
+
+        $this->artisan('story:doctor')
+            ->assertSuccessful()
+            ->expectsOutputToContain('hacen falta 1511 y sobran')
+            ->doesntExpectOutputToContain('[aviso] resolución de las fuentes');
+    }
+
     public function test_a_missing_manifest_is_only_a_warning(): void
     {
         $this->writeWhisperModel();
@@ -136,6 +168,36 @@ final class DoctorCommandTest extends TestCase
         $this->artisan('story:doctor')
             ->assertSuccessful()
             ->expectsOutputToContain('Entorno listo.');
+    }
+
+    public function test_a_single_provider_with_credential_is_enough(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $this->app->make('config')->set('stories.llm.gemini.api_key', '');
+
+        $this->artisan('story:doctor')
+            ->assertSuccessful()
+            ->expectsOutputToContain('[aviso] GEMINI_API_KEY: ausente.')
+            ->expectsOutputToContain('Entorno usable, pero con avisos.');
+    }
+
+    public function test_without_any_provider_the_doctor_blocks(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $config = $this->app->make('config');
+        $config->set('stories.llm.gemini.api_key', '');
+        $config->set('stories.llm.anthropic.api_key', '');
+
+        $this->artisan('story:doctor')
+            ->assertFailed()
+            ->expectsOutputToContain(
+                '[bloqueante] proveedor de LLM: Ni GEMINI_API_KEY ni ANTHROPIC_API_KEY están '
+                .'definidas: no se puede generar el guion.',
+            );
     }
 
     public function test_never_prints_the_value_of_a_secret(): void

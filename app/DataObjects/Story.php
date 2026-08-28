@@ -48,7 +48,7 @@ final readonly class Story
     }
 
     /**
-     * @return array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt: string, visualSummary: string, ambience: ?array{query: string, tags: list<string>, intensity: string}}>, pronunciations: list<array{term: string, phonetic: string}>, visualBible?: array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, characters: list<array{slug: string, bodyDescriptor: string, framingOptions: list<string>}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}}
+     * @return array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt: string, visualSummary: string, ambience: ?array{query: string, tags: list<string>, intensity: string}}>, pronunciations: list<array{term: string, phonetic: string}>, visualBible?: array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, journey: list<array{slug: string, descriptor: string}>, light: list<array{slug: string, descriptor: string}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}}
      */
     public function toArray(): array
     {
@@ -112,6 +112,22 @@ final readonly class Story
             fn (StoryScene $scene): string => $this->textForTts($scene->narration),
             $this->scenes,
         ));
+    }
+
+    /**
+     * Narración del guion partida por escena, sin fonética: es lo que se publica en timings.json.
+     *
+     * @return list<array{order: int, text: string}>
+     */
+    public function scenesForNarration(): array
+    {
+        return array_map(
+            static fn (StoryScene $scene): array => [
+                'order' => $scene->order,
+                'text' => $scene->narration,
+            ],
+            $this->scenes,
+        );
     }
 
     /**

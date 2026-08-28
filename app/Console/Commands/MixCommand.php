@@ -120,6 +120,7 @@ final class MixCommand extends Command
         }
 
         $this->renderTracks($result['tracks']);
+        $this->renderSkippedSfx($result['sfxSkipped']);
         $this->line(sprintf(
             'Duración del máster: %.3f s (última frase %.3f s + cola %.1f s).',
             $result['duration'],
@@ -156,6 +157,38 @@ final class MixCommand extends Command
             $swept['entries'],
             $swept['bytes'] / 1048576,
         ));
+    }
+
+    /**
+     * Un efecto sin ancla no suena, y eso hay que decirlo: si no, la historia pierde golpes en
+     * silencio y nadie sabe si es que la escena era muda o que el ancla no casó.
+     *
+     * @param  list<array<string, mixed>>  $skipped
+     */
+    private function renderSkippedSfx(array $skipped): void
+    {
+        if ($skipped === []) {
+            return;
+        }
+
+        $this->warn(sprintf('%d efecto(s) sin colocar:', count($skipped)));
+
+        foreach ($skipped as $entry) {
+            $this->line(sprintf(
+                '  · plano %s  %s  (%s)',
+                (string) ($entry['shot'] ?? '?'),
+                (string) ($entry['query'] ?? ''),
+                match ((string) ($entry['reason'] ?? '')) {
+                    'anchor_missing' => 'sin palabra ancla; vuelve a dirigir con story:sounds --refresh',
+                    'anchor_not_found' => sprintf(
+                        'la palabra «%s» no está alineada en ese plano',
+                        (string) ($entry['anchorWord'] ?? ''),
+                    ),
+                    'shot_not_found' => 'el plano no existe en shots.json',
+                    default => (string) ($entry['reason'] ?? 'motivo desconocido'),
+                },
+            ));
+        }
     }
 
     private function renderCoverage(CoverageReport $report): void

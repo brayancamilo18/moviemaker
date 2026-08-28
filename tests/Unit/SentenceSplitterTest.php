@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\DataObjects\NarrationSentence;
+use App\DataObjects\Story;
 use App\Services\Audio\SentenceSplitter;
 use Tests\TestCase;
 
@@ -91,6 +92,56 @@ final class SentenceSplitterTest extends TestCase
     {
         $this->assertSame([], $this->splitter()->split(''));
         $this->assertSame([], $this->splitter()->split('   '));
+    }
+
+    public function test_each_sentence_carries_its_own_phonetics_next_to_the_script_text(): void
+    {
+        $story = Story::fromArray([
+            'title' => 'Splitter fixture',
+            'hook' => 'The spring went bad.',
+            'description' => 'A fixture for the phonetic pairing.',
+            'tags' => ['test'],
+            'thumbnailPrompt' => 'A dry spring',
+            'scenes' => [
+                ['order' => 1, 'narration' => 'The Culebrón was not destroyed. It waited.', 'imagePrompt' => 'x', 'visualSummary' => 'x'],
+                ['order' => 2, 'narration' => 'Doña Herminia knew.', 'imagePrompt' => 'x', 'visualSummary' => 'x'],
+            ],
+            'pronunciations' => [
+                ['term' => 'Culebrón', 'phonetic' => 'koo-leh-BROHN'],
+                ['term' => 'Doña Herminia', 'phonetic' => 'DOH-nyah er-MEE-nee-ah'],
+            ],
+        ]);
+
+        $sentences = $this->splitter()->splitScenes(
+            $story->scenesForNarration(),
+            static fn (string $sentence): string => $story->textForTts($sentence),
+        );
+
+        $this->assertSame(
+            [
+                'The Culebrón was not destroyed.',
+                'It waited.',
+                'Doña Herminia knew.',
+            ],
+            $this->texts($sentences),
+        );
+        $this->assertSame('The koo-leh-BROHN was not destroyed.', $sentences[0]->forTts());
+        $this->assertSame('It waited.', $sentences[1]->forTts());
+        $this->assertSame('DOH-nyah er-MEE-nee-ah knew.', $sentences[2]->forTts());
+        $this->assertSame([1, 1, 2], array_map(
+            static fn (NarrationSentence $sentence): int => $sentence->sceneOrder,
+            $sentences,
+        ));
+        // La pausa entre escenas se decide sobre el texto del guion, no sobre la fonética.
+        $this->assertSame(1.8, $sentences[1]->pauseAfter);
+    }
+
+    public function test_a_sentence_without_phonetics_speaks_the_script_text(): void
+    {
+        $sentences = $this->splitter()->split('The well was open.');
+
+        $this->assertSame('The well was open.', $sentences[0]->text);
+        $this->assertSame('The well was open.', $sentences[0]->forTts());
     }
 
     private function splitter(): SentenceSplitter

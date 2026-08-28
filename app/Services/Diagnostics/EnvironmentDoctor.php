@@ -25,7 +25,15 @@ final class EnvironmentDoctor
 
     private readonly string $geminiKey;
 
+    private readonly string $anthropicKey;
+
     private readonly string $freesoundToken;
+
+    private readonly int $imageWidth;
+
+    private readonly int $videoWidth;
+
+    private readonly float $zoomMax;
 
     public function __construct(
         private Filesystem $files,
@@ -39,8 +47,12 @@ final class EnvironmentDoctor
         $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
         $this->whisperBinary = (string) $config->get('stories.whisper.binary');
         $this->whisperModel = (string) $config->get('stories.whisper.model');
-        $this->geminiKey = trim((string) $config->get('stories.gemini.api_key'));
+        $this->geminiKey = trim((string) $config->get('stories.llm.gemini.api_key'));
+        $this->anthropicKey = trim((string) $config->get('stories.llm.anthropic.api_key'));
         $this->freesoundToken = trim((string) $config->get('stories.audio.freesound.token'));
+        $this->imageWidth = (int) $config->get('stories.images.width');
+        $this->videoWidth = (int) $config->get('stories.video.width');
+        $this->zoomMax = (float) $config->get('stories.video.zoom_max');
     }
 
     /**
@@ -54,7 +66,19 @@ final class EnvironmentDoctor
             $this->binary('whisper', $this->whisperBinary, 'Sin él no hay timings.json.'),
             $this->whisperModel(),
             $this->sidecar(),
-            $this->secret('GEMINI_API_KEY', $this->geminiKey, true, 'Sin ella no se puede generar el guion.'),
+            $this->llmProvider(),
+            $this->secret(
+                'GEMINI_API_KEY',
+                $this->geminiKey,
+                false,
+                'Sin ella el guion sale por el proveedor de respaldo.',
+            ),
+            $this->secret(
+                'ANTHROPIC_API_KEY',
+                $this->anthropicKey,
+                false,
+                'Sin ella no hay respaldo cuando Gemini está saturado.',
+            ),
             $this->secret(
                 'FREESOUND_TOKEN',
                 $this->freesoundToken,
@@ -62,6 +86,7 @@ final class EnvironmentDoctor
                 'Sin él story:sounds solo dispone del core kit y de los sintéticos.',
             ),
             $this->manifest(),
+            $this->sourceResolution(),
         ];
     }
 
@@ -143,6 +168,36 @@ final class EnvironmentDoctor
     }
 
     /**
+     * Lo bloqueante no es una clave concreta, sino quedarse sin ningún proveedor de LLM: mientras
+     * quede uno con credencial, el guion se puede escribir.
+     *
+     * @return array{name: string, ok: bool, blocking: bool, detail: string}
+     */
+    private function llmProvider(): array
+    {
+        $available = [];
+
+        if ($this->geminiKey !== '') {
+            $available[] = 'Gemini';
+        }
+
+        if ($this->anthropicKey !== '') {
+            $available[] = 'Anthropic';
+        }
+
+        if ($available === []) {
+            return $this->check(
+                'proveedor de LLM',
+                false,
+                true,
+                'Ni GEMINI_API_KEY ni ANTHROPIC_API_KEY están definidas: no se puede generar el guion.',
+            );
+        }
+
+        return $this->check('proveedor de LLM', true, true, implode(' y ', $available));
+    }
+
+    /**
      * @return array{name: string, ok: bool, blocking: bool, detail: string}
      */
     private function secret(string $name, string $value, bool $blocking, string $consequence): array
@@ -196,6 +251,40 @@ final class EnvironmentDoctor
         }
 
         return $this->check('manifest de audio', true, false, count($clips).' clips, todos en disco.');
+    }
+
+    /**
+     * Un plano se ve tan nítido como la imagen que lo alimenta, y con el zoom al máximo hacen falta
+     * video.width × zoom_max píxeles de fuente para no estirar nada. Quedarse corto no es un fallo
+     * que se arregle en esta máquina: es el techo del proveedor de imágenes. Aquí solo se pone el
+     * número a la vista, porque hasta ahora era invisible y se daba por hecho que la fuente cubría.
+     *
+     * @return array{name: string, ok: bool, blocking: bool, detail: string}
+     */
+    private function sourceResolution(): array
+    {
+        $name = 'resolución de las fuentes';
+        $needed = (int) ceil($this->videoWidth * $this->zoomMax);
+
+        if ($this->imageWidth < $needed) {
+            return $this->check($name, true, false, sprintf(
+                'Fuentes de %d px para una salida de %d px: con zoom_max %.2f harían falta %d, '
+                .'así que los planos se estiran hasta %.2fx. Es el techo del proveedor.',
+                $this->imageWidth,
+                $this->videoWidth,
+                $this->zoomMax,
+                $needed,
+                $needed / max(1, $this->imageWidth),
+            ));
+        }
+
+        return $this->check($name, true, false, sprintf(
+            'Fuentes de %d px para una salida de %d px con zoom_max %.2f: hacen falta %d y sobran.',
+            $this->imageWidth,
+            $this->videoWidth,
+            $this->zoomMax,
+            $needed,
+        ));
     }
 
     /**

@@ -19,6 +19,35 @@ final class TranscriptTimer
     public const MODEL_HINT = 'Arréglalo de una de estas dos formas: define WHISPER_MODEL con la ruta absoluta '
         .'a un ggml-*.bin, o déjala vacía y coloca el modelo en storage/app/whisper/ggml-base.en.bin.';
 
+    /**
+     * Esquema de timings.json. La 2 añade ttsText junto al texto del guion. La 3 añade words a las
+     * frases ancladas por texto, para poder colgar un efecto de la palabra que lo nombra.
+     */
+    private const TIMINGS_VERSION = 3;
+
+    /** Palabras de whisper que se miran como mucho para anclar una frase corta. */
+    private const MIN_ANCHOR_WINDOW = 8;
+
+    /**
+     * Fracción de tokens de la frase que tienen que caer en orden para dar el ancla por buena, y
+     * fracción de la ventana anclada que tienen que ser tokens de esa frase: sin lo segundo, un
+     * match parcial se estira sobre las palabras de las frases siguientes.
+     */
+    private const MIN_MATCH_RATIO = 0.6;
+
+    /**
+     * Tokens de cabecera que se pueden saltar para encontrar el ancla. Una frase que empieza por
+     * un nombre fonético («eh-LEH-nah») no casa nunca por su primer token, porque whisper oye el
+     * nombre real; anclarla por lo que viene después es mejor que dejarla sin anclar.
+     */
+    private const MAX_LEADING_SKIP = 3;
+
+    /** Longitud mínima del prefijo común para aceptar dos tokens como el mismo. */
+    private const FUZZY_PREFIX_LENGTH = 4;
+
+    /** Desde esta longitud se admite una letra de diferencia entre tokens. */
+    private const FUZZY_DISTANCE_LENGTH = 5;
+
     private readonly string $binary;
 
     private readonly string $model;
@@ -37,6 +66,10 @@ final class TranscriptTimer
 
     private readonly string $storiesDirectory;
 
+    private readonly float $minTextRatio;
+
+    private readonly float $maxUncoveredSeconds;
+
     public function __construct(
         private Filesystem $files,
         private LoggerInterface $logger,
@@ -52,6 +85,8 @@ final class TranscriptTimer
         $this->threads = (int) $config->get('stories.whisper.threads');
         $this->maxLen = (int) $config->get('stories.whisper.max_len');
         $this->dtw = (string) $config->get('stories.whisper.dtw');
+        $this->minTextRatio = (float) $config->get('stories.whisper.alignment.min_text_ratio');
+        $this->maxUncoveredSeconds = (float) $config->get('stories.whisper.alignment.max_uncovered_seconds');
         $this->storiesDirectory = storage_path('app/'.$config->get('stories.output_path'));
     }
 
@@ -122,80 +157,264 @@ final class TranscriptTimer
     /**
      * Empareja cada frase original con su ventana en el audio. Nunca lanza por desajuste.
      *
+     * Va en dos pasadas: primero se anclan por texto las frases que casan con la transcripción y
+     * después se reparten las que no, proporcionalmente a su recuento de palabras, dentro del hueco
+     * que dejan sus dos anclas. Así un fallo de anclaje se queda encerrado en su hueco en vez de
+     * desplazar todo lo que viene detrás.
+     *
      * @param  list<array{start: float, end: float, text: string}>  $segments
-     * @param  list<NarrationSentence|array{order?: int, sceneOrder?: int, text: string, pauseAfter?: float}|string>  $sentences
-     * @return list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential'}>
+     * @param  list<NarrationSentence|array{order?: int, sceneOrder?: int, text: string, ttsText?: string, pauseAfter?: float}|string>  $sentences
+     * @return list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{token: string, start: float, end: float}>}>
      */
-    public function alignToSentences(array $segments, array $sentences): array
+    public function alignToSentences(array $segments, array $sentences, ?float $narrationEnd = null): array
     {
         $words = $this->wordsFromSegments($segments);
-        $wordCount = count($words);
+        $rows = [];
         $cursor = 0;
-        $lastEnd = 0.0;
-        $aligned = [];
+        $pending = 0;
 
         foreach ($sentences as $index => $sentence) {
             $fields = $this->sentenceFields($index, $sentence);
-            $expected = $this->tokens($fields['text']);
-            $match = $this->matchExpected($words, $cursor, $expected);
-
-            if ($match !== null) {
-                $start = $words[$match['from']]['start'];
-                $end = $words[$match['to']]['end'];
-                $cursor = $match['to'] + 1;
-                $alignment = 'text';
-            } else {
-                $take = min(max(count($expected), 1), max($wordCount - $cursor, 0));
-
-                if ($take === 0) {
-                    $start = $lastEnd;
-                    $end = $lastEnd + max(0.25, count($expected) * 0.35);
-                } else {
-                    $from = $cursor;
-                    $to = $cursor + $take - 1;
-                    $start = $words[$from]['start'];
-                    $end = $words[$to]['end'];
-                    $cursor = $to + 1;
-                }
-
-                $alignment = 'sequential';
-            }
-
-            if ($end < $start) {
-                [$start, $end] = [$end, $start];
-            }
-
-            $lastEnd = $end;
-            $aligned[] = [
+            $expected = $this->tokens($fields['ttsText']);
+            $match = $this->matchExpected($words, $cursor, $expected, $pending);
+            $row = [
                 'order' => $fields['order'],
                 'sceneOrder' => $fields['sceneOrder'],
                 'text' => $fields['text'],
-                'start' => $this->seconds($start),
-                'end' => $this->seconds($end),
+                'ttsText' => $fields['ttsText'],
+                'start' => 0.0,
+                'end' => 0.0,
                 'pauseAfter' => $fields['pauseAfter'],
-                'alignment' => $alignment,
+                'alignment' => 'sequential',
+                'words' => [],
+                'weight' => max(count($expected), 1),
             ];
+
+            if ($match !== null) {
+                $row['start'] = min($words[$match['from']]['start'], $words[$match['to']]['end']);
+                $row['end'] = max($words[$match['from']]['start'], $words[$match['to']]['end']);
+                $row['alignment'] = 'text';
+                $row['words'] = array_slice($words, $match['from'], $match['to'] - $match['from'] + 1);
+                $cursor = $match['to'] + 1;
+                $pending = 0;
+            } else {
+                // La frase que no ancla no mueve el cursor: si lo empujara a estimación se comería
+                // palabras que son de la frase siguiente. Lo que crece es la ventana de búsqueda,
+                // por las palabras que esa frase debería haber consumido, para que el habla siga
+                // al alcance de las que vienen detrás.
+                $pending += count($expected);
+            }
+
+            $rows[] = $row;
+        }
+
+        return $this->interpolateHoles($rows, $this->speechLimit($words, $rows, $narrationEnd));
+    }
+
+    /**
+     * Hasta dónde puede llegar el habla. Con el máster delante se descuenta la pausa final, que es
+     * silencio pedido al ensamblar y no habla; sin él, lo último que transcribió whisper.
+     *
+     * @param  list<array{start: float, end: float, token: string}>  $words
+     * @param  list<array{pauseAfter: float}>  $rows
+     */
+    private function speechLimit(array $words, array $rows, ?float $narrationEnd): float
+    {
+        if ($narrationEnd !== null) {
+            $lastPause = $rows === [] ? 0.0 : $rows[array_key_last($rows)]['pauseAfter'];
+
+            return max(0.0, $narrationEnd - $lastPause);
+        }
+
+        if ($words === []) {
+            return 0.0;
+        }
+
+        return $words[array_key_last($words)]['end'];
+    }
+
+    /**
+     * Reparte las frases sin ancla dentro del hueco entre las dos que sí la tienen.
+     *
+     * @param  list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{start: float, end: float, token: string}>, weight: int}>  $rows
+     * @return list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{token: string, start: float, end: float}>}>
+     */
+    private function interpolateHoles(array $rows, float $limit): array
+    {
+        $count = count($rows);
+        $previousEnd = 0.0;
+        $index = 0;
+
+        while ($index < $count) {
+            if ($rows[$index]['alignment'] === 'text') {
+                $rows[$index]['start'] = max($rows[$index]['start'], $previousEnd);
+                $rows[$index]['end'] = max($rows[$index]['end'], $rows[$index]['start']);
+                $previousEnd = $rows[$index]['end'];
+                $index++;
+
+                continue;
+            }
+
+            $last = $index;
+
+            while ($last + 1 < $count && $rows[$last + 1]['alignment'] !== 'text') {
+                $last++;
+            }
+
+            $nextStart = $last + 1 < $count ? $rows[$last + 1]['start'] : $limit;
+            $span = max(0.0, $nextStart - $previousEnd);
+            $weight = 0;
+
+            for ($position = $index; $position <= $last; $position++) {
+                $weight += $rows[$position]['weight'];
+            }
+
+            $cursor = $previousEnd;
+
+            for ($position = $index; $position <= $last; $position++) {
+                $rows[$position]['start'] = $cursor;
+                $rows[$position]['end'] = $position === $last
+                    ? $previousEnd + $span
+                    : $cursor + ($weight > 0 ? $span * $rows[$position]['weight'] / $weight : 0.0);
+                $cursor = $rows[$position]['end'];
+            }
+
+            $previousEnd = $cursor;
+            $index = $last + 1;
+        }
+
+        $aligned = [];
+
+        foreach ($rows as $row) {
+            unset($row['weight']);
+            $row['start'] = $this->seconds($row['start']);
+            $row['end'] = $this->seconds(max($row['end'], $row['start']));
+            $row['words'] = $this->clampWords($row['words'], $row['start'], $row['end']);
+            $aligned[] = $row;
         }
 
         return $aligned;
     }
 
     /**
+     * Encierra las palabras en la ventana definitiva de su frase. La ventana se recorta al ajustarla
+     * contra la frase anterior, y una palabra que sobresaliera dejaría un timings.json que se
+     * contradice consigo mismo.
+     *
+     * @param  list<array{start: float, end: float, token: string}>  $words
+     * @return list<array{token: string, start: float, end: float}>
+     */
+    private function clampWords(array $words, float $start, float $end): array
+    {
+        $clamped = [];
+
+        foreach ($words as $word) {
+            $from = $this->seconds(min(max($word['start'], $start), $end));
+            $to = $this->seconds(min(max($word['end'], $from), $end));
+            $clamped[] = [
+                'token' => $word['token'],
+                'start' => $from,
+                'end' => $to,
+            ];
+        }
+
+        return $clamped;
+    }
+
+    /**
      * Transcribe, alinea y escribe timings.json para la Fase 3.
      *
-     * @param  list<NarrationSentence|array{order?: int, sceneOrder?: int, text: string, pauseAfter?: float}|string>  $sentences
-     * @return list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential'}>
+     * @param  list<NarrationSentence|array{order?: int, sceneOrder?: int, text: string, ttsText?: string, pauseAfter?: float}|string>  $sentences
+     * @return list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{token: string, start: float, end: float}>}>
      */
     public function time(string $slug, string $audioPath, array $sentences): array
     {
-        $aligned = $this->alignToSentences($this->timestamps($audioPath), $sentences);
+        $aligned = $this->alignToSentences(
+            $this->timestamps($audioPath),
+            $sentences,
+            $this->clock->narrationEnd($audioPath),
+        );
         $this->save($slug, $aligned);
+
+        foreach ($this->alignmentProblems($this->alignmentReport($aligned, $audioPath)) as $problem) {
+            $this->logger->warning($problem);
+        }
 
         return $aligned;
     }
 
     /**
-     * @param  list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: string}>  $sentences
+     * Calidad de la alineación: cuántas frases anclaron por texto y cuánto máster se queda fuera
+     * del habla. Sirve para el informe de story:narrate y para auditar un timings.json ya escrito,
+     * porque las frases de las dos fuentes tienen la misma forma.
+     *
+     * @param  list<array{start?: float, end?: float, alignment?: string}>  $sentences
+     * @return array{sentences: int, textAligned: int, sequential: int, textRatio: float, speechEnd: float, narrationEnd: float, uncovered: float}
+     */
+    public function alignmentReport(array $sentences, string $audioPath): array
+    {
+        $count = count($sentences);
+        $textAligned = 0;
+        $speechEnd = 0.0;
+
+        foreach ($sentences as $sentence) {
+            if (($sentence['alignment'] ?? '') === 'text') {
+                $textAligned++;
+            }
+
+            $speechEnd = max($speechEnd, (float) ($sentence['end'] ?? 0));
+        }
+
+        $narrationEnd = $this->clock->narrationEnd($audioPath);
+
+        return [
+            'sentences' => $count,
+            'textAligned' => $textAligned,
+            'sequential' => $count - $textAligned,
+            'textRatio' => $count > 0 ? round($textAligned / $count, 4) : 0.0,
+            'speechEnd' => $this->seconds($speechEnd),
+            'narrationEnd' => $this->seconds($narrationEnd),
+            'uncovered' => $this->seconds(max(0.0, $narrationEnd - $speechEnd)),
+        ];
+    }
+
+    /**
+     * @param  array{sentences: int, textAligned: int, sequential: int, textRatio: float, speechEnd: float, narrationEnd: float, uncovered: float}  $report
+     * @return list<string>
+     */
+    public function alignmentProblems(array $report): array
+    {
+        if ($report['sentences'] === 0) {
+            return [];
+        }
+
+        $problems = [];
+
+        if ($report['textRatio'] < $this->minTextRatio) {
+            $problems[] = sprintf(
+                'Solo %d de %d frases anclaron por texto (%.0f%%, mínimo %.0f%%): la alineación se ha ido por posición.',
+                $report['textAligned'],
+                $report['sentences'],
+                $report['textRatio'] * 100,
+                $this->minTextRatio * 100,
+            );
+        }
+
+        if ($report['uncovered'] > $this->maxUncoveredSeconds) {
+            $problems[] = sprintf(
+                'El habla alineada acaba en %.3f s y el máster dura %.3f s: %.3f s sin cubrir (máximo %.1f s).',
+                $report['speechEnd'],
+                $report['narrationEnd'],
+                $report['uncovered'],
+                $this->maxUncoveredSeconds,
+            );
+        }
+
+        return $problems;
+    }
+
+    /**
+     * @param  list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: string, words?: list<array{token: string, start: float, end: float}>}>  $sentences
      */
     public function save(string $slug, array $sentences): string
     {
@@ -206,7 +425,7 @@ final class TranscriptTimer
         $path = $directory.DIRECTORY_SEPARATOR.'timings.json';
         $json = json_encode(
             [
-                'version' => 1,
+                'version' => self::TIMINGS_VERSION,
                 'sentences' => $sentences,
                 'scenes' => $this->sceneWindows($sentences),
             ],
@@ -297,6 +516,11 @@ final class TranscriptTimer
     }
 
     /**
+     * whisper.cpp no devuelve palabras, devuelve tokens BPE: «wedged» llega como «wed» + «ged» y
+     * «hand,» como «hand» + «,». El token que no empieza por espacio continúa la palabra anterior,
+     * así que se pegan y la ventana de la palabra es la unión de las de sus trozos. Sin esto, el
+     * alineador compara palabras del guion contra fragmentos y nunca ancla.
+     *
      * @param  array<string, mixed>  $item
      * @return list<array{start: float, end: float, text: string}>
      */
@@ -315,7 +539,8 @@ final class TranscriptTimer
                 continue;
             }
 
-            $text = trim((string) ($token['text'] ?? ''));
+            $raw = (string) ($token['text'] ?? '');
+            $text = trim($raw);
 
             if ($text === '' || $this->isSpecialToken($text)) {
                 continue;
@@ -326,6 +551,14 @@ final class TranscriptTimer
 
             if ($start === null || $end === null) {
                 return [];
+            }
+
+            if ($segments !== [] && ! str_starts_with($raw, ' ')) {
+                $last = array_key_last($segments);
+                $segments[$last]['text'] .= $text;
+                $segments[$last]['end'] = max($segments[$last]['end'], $this->seconds($end));
+
+                continue;
             }
 
             $segments[] = [
@@ -373,52 +606,130 @@ final class TranscriptTimer
     }
 
     /**
+     * Ancla la frase en la transcripción. La ventana de búsqueda crece con la frase y con $slack,
+     * las palabras que dejaron sin consumir las frases anteriores que no anclaron. Los tokens se
+     * comparan con holgura y basta con que caiga en orden MIN_MATCH_RATIO de la frase: whisper
+     * parte palabras, se come artículos y escribe los números en cifra.
+     *
      * @param  list<array{start: float, end: float, token: string}>  $words
      * @param  list<string>  $expected
      * @return array{from: int, to: int}|null
      */
-    private function matchExpected(array $words, int $cursor, array $expected): ?array
+    private function matchExpected(array $words, int $cursor, array $expected, int $slack = 0): ?array
     {
-        $wordCount = count($words);
         $expectedCount = count($expected);
 
-        if ($expectedCount === 0 || $cursor >= $wordCount) {
+        if ($expectedCount === 0 || $cursor >= count($words)) {
             return null;
         }
 
-        $searchLimit = min($wordCount, $cursor + 4);
+        $skipLimit = min(self::MAX_LEADING_SKIP, $expectedCount - 1);
 
-        for ($start = $cursor; $start < $searchLimit; $start++) {
-            if ($words[$start]['token'] !== $expected[0]) {
-                continue;
-            }
+        for ($skip = 0; $skip <= $skipLimit; $skip++) {
+            $anchor = $this->bestAnchor($words, $cursor, $expected, $skip, $slack);
 
-            $matched = 1;
-            $end = $start;
-            $skips = 0;
-
-            for ($index = $start + 1; $index < $wordCount && $matched < $expectedCount; $index++) {
-                if ($words[$index]['token'] === $expected[$matched]) {
-                    $matched++;
-                    $end = $index;
-                    $skips = 0;
-
-                    continue;
-                }
-
-                $skips++;
-
-                if ($skips > $expectedCount) {
-                    break;
-                }
-            }
-
-            if ($matched === $expectedCount) {
-                return ['from' => $start, 'to' => $end];
+            if ($anchor !== null) {
+                return $anchor;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Mejor ancla que empieza en $expected[$skip]. La fracción se mide siempre sobre la frase
+     * completa: saltar tokens de cabecera sirve para encontrar el sitio, no para bajar el listón.
+     *
+     * @param  list<array{start: float, end: float, token: string}>  $words
+     * @param  list<string>  $expected
+     * @return array{from: int, to: int}|null
+     */
+    private function bestAnchor(array $words, int $cursor, array $expected, int $skip, int $slack): ?array
+    {
+        $wordCount = count($words);
+        $expectedCount = count($expected);
+        $searchLimit = min($wordCount, $cursor + max(self::MIN_ANCHOR_WINDOW, $expectedCount * 2) + $slack);
+        $best = null;
+
+        for ($start = $cursor; $start < $searchLimit; $start++) {
+            if (! $this->tokensMatch($words[$start]['token'], $expected[$skip])) {
+                continue;
+            }
+
+            $matched = 1;
+            $position = $skip + 1;
+            $end = $start;
+            $misses = 0;
+
+            for ($index = $start + 1; $index < $wordCount && $position < $expectedCount; $index++) {
+                if ($this->tokensMatch($words[$index]['token'], $expected[$position])) {
+                    $matched++;
+                    $position++;
+                    $end = $index;
+                    $misses = 0;
+
+                    continue;
+                }
+
+                $misses++;
+
+                if ($misses > $expectedCount) {
+                    break;
+                }
+            }
+
+            $ratio = $matched / $expectedCount;
+            $density = $matched / ($end - $start + 1);
+
+            if ($ratio < self::MIN_MATCH_RATIO || $density < self::MIN_MATCH_RATIO) {
+                continue;
+            }
+
+            if ($best === null || $ratio > $best['ratio']) {
+                $best = ['from' => $start, 'to' => $end, 'ratio' => $ratio];
+            }
+
+            if ($position === $expectedCount) {
+                break;
+            }
+        }
+
+        if ($best === null) {
+            return null;
+        }
+
+        return ['from' => $best['from'], 'to' => $best['to']];
+    }
+
+    /**
+     * Dos tokens son el mismo si coinciden, si uno es prefijo del otro con FUZZY_PREFIX_LENGTH
+     * caracteres o si a partir de FUZZY_DISTANCE_LENGTH se diferencian en una letra.
+     */
+    private function tokensMatch(string $left, string $right): bool
+    {
+        if ($left === $right) {
+            return true;
+        }
+
+        if ($left === '' || $right === '') {
+            return false;
+        }
+
+        $leftLength = mb_strlen($left);
+        $rightLength = mb_strlen($right);
+        $shortest = min($leftLength, $rightLength);
+
+        if ($shortest >= self::FUZZY_PREFIX_LENGTH) {
+            if ($leftLength <= $rightLength ? str_starts_with($right, $left) : str_starts_with($left, $right)) {
+                return true;
+            }
+        }
+
+        if ($shortest < self::FUZZY_DISTANCE_LENGTH || abs($leftLength - $rightLength) > 1) {
+            return false;
+        }
+
+        return levenshtein($left, $right) <= 1;
     }
 
     /**
@@ -465,7 +776,7 @@ final class TranscriptTimer
     }
 
     /**
-     * @return array{order: int, sceneOrder: int, text: string, pauseAfter: float}
+     * @return array{order: int, sceneOrder: int, text: string, ttsText: string, pauseAfter: float}
      */
     private function sentenceFields(int $index, mixed $sentence): array
     {
@@ -474,6 +785,7 @@ final class TranscriptTimer
                 'order' => $sentence->order,
                 'sceneOrder' => $sentence->sceneOrder,
                 'text' => $sentence->text,
+                'ttsText' => $sentence->forTts(),
                 'pauseAfter' => $sentence->pauseAfter,
             ];
         }
@@ -483,6 +795,7 @@ final class TranscriptTimer
                 'order' => $index + 1,
                 'sceneOrder' => 1,
                 'text' => $sentence,
+                'ttsText' => $sentence,
                 'pauseAfter' => 0.0,
             ];
         }
@@ -492,14 +805,19 @@ final class TranscriptTimer
                 'order' => $index + 1,
                 'sceneOrder' => 1,
                 'text' => '',
+                'ttsText' => '',
                 'pauseAfter' => 0.0,
             ];
         }
 
+        $text = (string) ($sentence['text'] ?? '');
+        $ttsText = trim((string) ($sentence['ttsText'] ?? ''));
+
         return [
             'order' => (int) ($sentence['order'] ?? $index + 1),
             'sceneOrder' => (int) ($sentence['sceneOrder'] ?? 1),
-            'text' => (string) ($sentence['text'] ?? ''),
+            'text' => $text,
+            'ttsText' => $ttsText !== '' ? $ttsText : $text,
             'pauseAfter' => (float) ($sentence['pauseAfter'] ?? 0),
         ];
     }

@@ -26,6 +26,8 @@ final class FinalEncoder
 
     private readonly float $outroSeconds;
 
+    private readonly float $tailSeconds;
+
     private readonly float $syncTolerance;
 
     public function __construct(
@@ -41,7 +43,31 @@ final class FinalEncoder
         $this->contrast = (float) $config->get('stories.video.grade.contrast');
         $this->grain = (float) $config->get('stories.video.grade.grain');
         $this->outroSeconds = (float) $config->get('stories.video.outro_seconds');
+        $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds');
         $this->syncTolerance = (float) $config->get('stories.video.sync_tolerance');
+
+        // El outro sostiene el último fotograma desde que se acaba de hablar, así que la cola de
+        // ambiente de la mezcla suena encima de él. Si el outro fuese más corto que esa cola, el
+        // vídeo se acabaría con audio todavía sonando y no hay forma honrada de arreglarlo aquí.
+        if ($this->outroSeconds < $this->tailSeconds) {
+            throw new InvalidArgumentException(sprintf(
+                'video.outro_seconds (%.1f s) no puede ser menor que audio.tail_seconds (%.1f s): '
+                .'el outro es lo que cubre la cola de la mezcla.',
+                $this->outroSeconds,
+                $this->tailSeconds,
+            ));
+        }
+    }
+
+    /**
+     * Silencio que hay que añadirle a la mezcla para llegar al final del outro.
+     *
+     * La mezcla ya trae `audio.tail_seconds` después de la última palabra, y el outro empieza justo
+     * ahí, así que lo que falta es el resto del outro y no el outro entero.
+     */
+    private function audioPadSeconds(): float
+    {
+        return round($this->outroSeconds - $this->tailSeconds, 3);
     }
 
     public function encode(string $videoPath, string $audioPath, string $outputPath, bool $grade = true): string
@@ -60,7 +86,8 @@ final class FinalEncoder
         $this->files->ensureDirectoryExists(dirname($outputPath));
 
         $audioDuration = $this->probe->duration($audioPath);
-        $expected = round($audioDuration + $this->outroSeconds, 3);
+        $pad = $this->audioPadSeconds();
+        $expected = round($audioDuration + $pad, 3);
 
         $started = hrtime(true);
         $arguments = [
@@ -77,7 +104,7 @@ final class FinalEncoder
         $arguments[] = '-vf';
         $arguments[] = $vf;
         $arguments[] = '-af';
-        $arguments[] = 'apad=pad_dur='.$this->ffmpeg->formatNumber($this->outroSeconds);
+        $arguments[] = 'apad=pad_dur='.$this->ffmpeg->formatNumber($pad);
 
         $arguments = [
             ...$arguments,
@@ -103,11 +130,13 @@ final class FinalEncoder
 
         if (abs($actual - $expected) > $this->syncTolerance) {
             throw new RuntimeException(sprintf(
-                'El máster dura %.3f s y se esperaban %.3f s (audio %.3f s + outro %.3f s, tolerancia %.3f s). El vídeo mudo no cuadra con el audio: rehazlo con php artisan story:render {file} --from=assemble',
+                'El máster dura %.3f s y se esperaban %.3f s (audio %.3f s + relleno %.3f s, que es el outro de %.1f s menos la cola de %.1f s ya incluida en la mezcla, tolerancia %.3f s). El vídeo mudo no cuadra con el audio: rehazlo con php artisan story:render {file} --from=assemble',
                 $actual,
                 $expected,
                 $audioDuration,
+                $pad,
                 $this->outroSeconds,
+                $this->tailSeconds,
                 $this->syncTolerance,
             ));
         }

@@ -19,6 +19,10 @@ final readonly class Shot
         public string $motion,
         public string $subject,
         public ?string $threatStage,
+        /** Tramo del recorrido en el que cae el plano. Null si la biblia no trae trayecto. */
+        public ?string $journeyLeg = null,
+        /** Etapa de luz del plano, de la más abierta a la más cerrada. */
+        public ?string $lightStage = null,
         public string $description = '',
         /** @var list<string> */
         public array $characterSlugs = [],
@@ -36,6 +40,8 @@ final readonly class Shot
      *     motion?: string,
      *     subject?: string,
      *     threatStage?: string|null,
+     *     journeyLeg?: string|null,
+     *     lightStage?: string|null,
      *     description?: string,
      *     characterSlugs?: list<string>,
      *     imagePath?: string|null
@@ -66,6 +72,8 @@ final readonly class Shot
             motion: is_string($data['motion'] ?? null) ? $data['motion'] : 'static',
             subject: is_string($data['subject'] ?? null) ? $data['subject'] : '',
             threatStage: is_string($threat) && $threat !== '' ? $threat : null,
+            journeyLeg: self::slug($data['journeyLeg'] ?? null),
+            lightStage: self::slug($data['lightStage'] ?? null),
             description: trim((string) ($data['description'] ?? '')),
             characterSlugs: $slugs,
             imagePath: is_string($imagePath) && $imagePath !== '' ? $imagePath : null,
@@ -83,6 +91,8 @@ final readonly class Shot
      *     motion: string,
      *     subject: string,
      *     threatStage: ?string,
+     *     journeyLeg: ?string,
+     *     lightStage: ?string,
      *     description: string,
      *     characterSlugs: list<string>,
      *     imagePath: ?string
@@ -100,9 +110,22 @@ final readonly class Shot
             'motion' => $this->motion,
             'subject' => $this->subject,
             'threatStage' => $this->threatStage,
+            'journeyLeg' => $this->journeyLeg,
+            'lightStage' => $this->lightStage,
             'description' => $this->description,
             'characterSlugs' => $this->characterSlugs,
             'imagePath' => $this->imagePath,
         ];
+    }
+
+    private static function slug(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $slug = trim($value);
+
+        return $slug === '' ? null : $slug;
     }
 }

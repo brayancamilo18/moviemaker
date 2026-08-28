@@ -46,6 +46,53 @@ final class ValidateStoryTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_validate_fails_when_the_timings_drifted_from_the_master(): void
+    {
+        // El habla acaba en 2 s de un máster de 8 s y casi nada ancló por texto: es la firma de la
+        // deriva del alineador, y con ella shots.json y sounds.json van desplazados.
+        $this->writeTimings([
+            ['start' => 0.0, 'end' => 1.0, 'alignment' => 'sequential'],
+            ['start' => 1.0, 'end' => 2.0, 'alignment' => 'sequential'],
+        ]);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('frases anclaron por texto')
+            ->assertFailed();
+    }
+
+    public function test_validate_warns_but_does_not_block_when_there_are_no_timings(): void
+    {
+        (new Filesystem)->delete($this->storyDirectory().DIRECTORY_SEPARATOR.'timings.json');
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('No hay timings.json')
+            ->expectsOutputToContain('sin bloqueantes')
+            ->assertSuccessful();
+    }
+
+    public function test_validate_fails_when_a_shot_is_longer_than_the_ceiling(): void
+    {
+        $dir = $this->storyDirectory();
+        $ceiling = (float) config('stories.shots.max_duration') + (float) config('stories.shots.max_hold_slack');
+        $duration = $ceiling + 2.0;
+
+        $this->writeWav($dir.DIRECTORY_SEPARATOR.'narration.wav', $duration);
+        $this->writeWav($dir.DIRECTORY_SEPARATOR.'narration_mix.wav', $duration);
+        $this->writeTimings([
+            ['start' => 0.0, 'end' => $duration / 2, 'alignment' => 'text'],
+            ['start' => $duration / 2, 'end' => $duration, 'alignment' => 'text'],
+        ]);
+        $this->writeShots([
+            $this->shot(1, 0.0, $duration, $dir.DIRECTORY_SEPARATOR.'shot-1.jpg', 'A dim hallway'),
+        ]);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('Planos demasiado largos')
+            ->assertFailed();
+    }
+
     public function test_validate_fails_when_a_shot_has_no_description(): void
     {
         $dir = $this->storyDirectory();
@@ -60,6 +107,70 @@ final class ValidateStoryTest extends TestCase
             ->assertFailed();
     }
 
+    /**
+     * El efecto cuya palabra no está alineada no se coloca en la mezcla, así que el validador tiene
+     * que decir cuántos golpes van a sonar de verdad. Es aviso: quedarse sin uno no rompe el vídeo.
+     */
+    public function test_it_counts_the_effects_that_hang_from_their_word(): void
+    {
+        $this->writeTimings([
+            [
+                'start' => 0.0,
+                'end' => 4.0,
+                'alignment' => 'text',
+                'words' => [
+                    ['token' => 'the', 'start' => 0.0, 'end' => 0.4],
+                    ['token' => 'door', 'start' => 0.4, 'end' => 0.9],
+                    ['token' => 'creaked', 'start' => 0.9, 'end' => 1.6],
+                ],
+            ],
+            [
+                'start' => 4.0,
+                'end' => 8.0,
+                'alignment' => 'text',
+                'words' => [
+                    ['token' => 'nobody', 'start' => 4.0, 'end' => 4.6],
+                    ['token' => 'answered', 'start' => 4.6, 'end' => 5.2],
+                ],
+            ],
+        ]);
+        $this->writeSounds([
+            [
+                'shotIndex' => 1,
+                'anchorWord' => 'creaked',
+                'offsetRatio' => 0.2,
+                'query' => 'door creak',
+                'tags' => ['door', 'creak'],
+                'importance' => 'key',
+            ],
+            [
+                'shotIndex' => 2,
+                'anchorWord' => 'slammed',
+                'offsetRatio' => 0.5,
+                'query' => 'door slam',
+                'tags' => ['door', 'slam'],
+                'importance' => 'texture',
+            ],
+        ]);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('1 de 2 efecto(s) anclados. No van a sonar: plano 2')
+            ->assertSuccessful();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $directedSfx
+     */
+    private function writeSounds(array $directedSfx): void
+    {
+        file_put_contents($this->storyDirectory().DIRECTORY_SEPARATOR.'sounds.json', json_encode([
+            'version' => 1,
+            'slug' => pathinfo($this->storyFile(), PATHINFO_FILENAME),
+            'cues' => [],
+            'directedSfx' => $directedSfx,
+        ], JSON_THROW_ON_ERROR)."\n");
+    }
+
     private function writeFixture(): void
     {
         $dir = $this->storyDirectory();
@@ -70,6 +181,10 @@ final class ValidateStoryTest extends TestCase
         $this->writeShots([
             $this->shot(1, 0.0, 4.0, $dir.DIRECTORY_SEPARATOR.'shot-1.jpg', 'A dim hallway'),
             $this->shot(2, 4.0, 8.0, $dir.DIRECTORY_SEPARATOR.'shot-2.jpg', 'Fog over the road'),
+        ]);
+        $this->writeTimings([
+            ['start' => 0.0, 'end' => 4.0, 'alignment' => 'text'],
+            ['start' => 4.0, 'end' => 8.0, 'alignment' => 'text'],
         ]);
 
         file_put_contents($this->storyFile(), json_encode([
@@ -97,6 +212,39 @@ final class ValidateStoryTest extends TestCase
             'version' => 1,
             'plannerVersion' => ShotPlanner::VERSION,
             'shots' => $shots,
+        ], JSON_THROW_ON_ERROR)."\n");
+    }
+
+    /**
+     * @param  list<array{start: float, end: float, alignment: string, words?: list<array{token: string, start: float, end: float}>}>  $sentences
+     */
+    private function writeTimings(array $sentences): void
+    {
+        $rows = [];
+
+        foreach ($sentences as $index => $sentence) {
+            $rows[] = [
+                'order' => $index + 1,
+                'sceneOrder' => 1,
+                'text' => 'Fixture sentence '.($index + 1).'.',
+                'start' => $sentence['start'],
+                'end' => $sentence['end'],
+                'pauseAfter' => 0.0,
+                'alignment' => $sentence['alignment'],
+                'words' => $sentence['words'] ?? [],
+            ];
+        }
+
+        file_put_contents($this->storyDirectory().DIRECTORY_SEPARATOR.'timings.json', json_encode([
+            'version' => 1,
+            'sentences' => $rows,
+            'scenes' => [[
+                'order' => 1,
+                'start' => $rows[0]['start'],
+                'end' => $rows[array_key_last($rows)]['end'],
+                'duration' => $rows[array_key_last($rows)]['end'] - $rows[0]['start'],
+                'sentenceCount' => count($rows),
+            ]],
         ], JSON_THROW_ON_ERROR)."\n");
     }
 

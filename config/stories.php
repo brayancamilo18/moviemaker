@@ -4,12 +4,45 @@ declare(strict_types=1);
 
 return [
 
-    'gemini' => [
-        'api_key' => env('GEMINI_API_KEY'),
-        'model' => env('GEMINI_MODEL', 'gemini-3.6-flash'),
-        'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
-        'timeout' => 120,
-        'max_retries' => 3,
+    'llm' => [
+
+        // Proveedor que atiende primero. El respaldo solo entra cuando este no responde.
+        'provider' => env('LLM_PROVIDER', 'gemini'),
+
+        // Respaldo cuando el principal se cae. AI_FEATURES_ENABLED lo apaga sin borrar la clave.
+        'fallback' => (bool) env('AI_FEATURES_ENABLED', true) ? 'anthropic' : '',
+
+        'gemini' => [
+            'api_key' => env('GEMINI_API_KEY'),
+            'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
+            'timeout' => 120,
+            'max_retries' => 3,
+            // 'default' vale para toda tarea que no aparezca aquí con nombre propio.
+            'models' => [
+                'default' => env('GEMINI_MODEL', 'gemini-3.6-flash'),
+                'review' => env('GEMINI_REVIEW_MODEL', env('GEMINI_MODEL', 'gemini-3.6-flash')),
+            ],
+        ],
+
+        'anthropic' => [
+            'api_key' => env('ANTHROPIC_API_KEY'),
+            'base_url' => 'https://api.anthropic.com/v1',
+            'version' => '2023-06-01',
+            // Cabecera anthropic-beta, por si output_config deja de ser estable. Vacío: no se manda.
+            'beta' => env('ANTHROPIC_BETA', ''),
+            'timeout' => 180,
+            'max_retries' => 3,
+            'models' => [
+                'default' => env('AI_MODEL', 'claude-haiku-4-5'),
+            ],
+            // Anthropic exige un tope de salida en cada petición. El guion completo es lo único
+            // que necesita sitio de verdad; el resto de tareas devuelven objetos cortos.
+            'max_tokens' => [
+                'default' => 8000,
+                'script' => 24000,
+            ],
+        ],
+
     ],
 
     'story' => [
@@ -23,7 +56,6 @@ return [
 
     'review' => [
         'enabled' => true,
-        'model' => env('GEMINI_REVIEW_MODEL', env('GEMINI_MODEL', 'gemini-3.6-flash')),
     ],
 
     'tts' => [
@@ -70,6 +102,13 @@ return [
         'threads' => 4,
         'max_len' => 1,
         'dtw' => env('WHISPER_DTW', ''),
+        // Umbrales de calidad de la alineación. Por debajo de min_text_ratio hay demasiadas frases
+        // colocadas por posición, y max_uncovered_seconds es el silencio de cola que se admite al
+        // final del máster: la pausa entre escenas (1.8 s) más holgura.
+        'alignment' => [
+            'min_text_ratio' => 0.6,
+            'max_uncovered_seconds' => 5.0,
+        ],
     ],
 
     // Duraciones en segundos. Los cortes salen de timings.json; max_duration es un techo, no un objetivo.
@@ -79,25 +118,61 @@ return [
         'target_duration' => 5.5,
         'tension_duration' => 3.5,
         'atmosphere_duration' => 8.0,
+        // Holgura sobre max_duration antes de trocear una ventana: por debajo de este margen el
+        // trozo que sobra no daría para un plano decente.
+        'max_hold_slack' => 3.0,
     ],
 
-    // 1280×720 × source_upscale 2.0 = 2560 px, cubre zoom_max 1.18 en 1080p (mínimo ~2266 px).
-    // Si zoom_max pasa de 1.3, sube también images.width.
+    // Estos 1024×576 no son una preferencia: son el techo real del proveedor. Pollinations recorta
+    // la petición en silencio (flux, turbo, z-image-turbo y nanobanana-pro devuelven 1024×576 tanto
+    // si pides 1280×720 como 1920×1080), y los modelos de más resolución exigen cuenta. Pedir más de
+    // lo que entrega solo sirve para creerse una nitidez que no existe: de ahí sale la salida a 720p
+    // de video.width. Si algún día hay credenciales y un modelo mayor, esto sube y video.width con él.
     'images' => [
         'provider' => env('IMAGE_PROVIDER', 'pollinations'),
-        'width' => 1280,
-        'height' => 720,
+        'width' => 1024,
+        'height' => 576,
         'rate_limit_seconds' => 6,
         'max_retries' => 4,
         'concurrency' => 1,
         'timeout' => 120,
         'cache_path' => 'image-cache',
-        // Tope de palabras del prompt. El sufijo de estilo y los negativos quedan fuera del
-        // recorte: el presupuesto de la parte descriptiva es este tope menos lo que ocupan ellos.
+        // Tope de palabras de la parte descriptiva del prompt: description del plano, tramo del
+        // recorrido, etapa de luz, amenaza, encuadre, setting, clima y paleta. El sufijo de estilo
+        // y los negativos se añaden después y no entran en el reparto, porque no son negociables.
         'max_prompt_words' => 75,
-        // Suelo del presupuesto descriptivo (description del plano más un par de bloques cortos).
-        // Si el sufijo de estilo lo hunde por debajo, se cae el sufijo antes que los negativos.
-        'min_prompt_description_words' => 20,
+        // La cámara es el oyente, así que la única figura que puede salir es el ente. Se raciona
+        // por dos motivos: el proveedor gratuito resuelve mal una cara a 1024×576 (con la cabeza a
+        // 140-190 px hay píxeles para intentarla y no los suficientes para acertarla), y un ente
+        // que asoma en uno de cada tres planos deja de acechar. El hueco lo llenan paisaje y
+        // objeto, que es lo que este proveedor sí hace bien.
+        'direction' => [
+            'threat_ratio_min' => 0.12,
+            'threat_ratio_max' => 0.25,
+            'detail_ratio_max' => 0.35,
+        ],
+        // Que el proveedor se caiga no es una imagen mala: es no tener imagen. Rellenar con
+        // marcadores convierte una caída de media hora en una historia entera que hay que rehacer,
+        // así que cuando deja de responder se espera y se vuelve a pedir. Solo se rinde tras
+        // probe_seconds × max_probes sin una sola respuesta útil, que es media hora larga.
+        'outage' => [
+            'probe_seconds' => 60,
+            'max_probes' => 40,
+        ],
+        // Calidad del JPEG al reescribir una imagen recortada. Alta a propósito: es la segunda
+        // codificación de la misma imagen y lo que se pierda aquí ya no se recupera.
+        'jpeg_quality' => 92,
+        // De vez en cuando el modelo pinta la escena como una copia enmarcada y devuelve bandas
+        // claras arriba y abajo. Son bandas planas, así que se detectan y se recortan.
+        'letterbox' => [
+            // Brillo medio a partir del cual una fila o columna del borde cuenta como marco.
+            'brightness' => 200,
+            // Desviación típica máxima dentro de esa fila: un marco es plano, el cielo no.
+            'uniformity' => 12.0,
+            // Fracción máxima de cada lado que se acepta recortar. Por encima de esto ya no es un
+            // marco, es contenido claro (niebla, un foco), y recortarlo sería peor que dejarlo.
+            'max_ratio' => 0.2,
+        ],
         'pollinations' => [
             'base_url' => 'https://image.pollinations.ai/prompt',
             'model' => 'flux',
@@ -168,6 +243,11 @@ return [
         'sfx' => [
             'lead_seconds' => 0.15,
             'min_gap_seconds' => 4.0,
+            // Cabeza muerta del clip: el silencio que trae antes del primer golpe audible. Se resta
+            // al colocar, porque si no el golpe llega tarde por mucho que el ancla sea exacta.
+            // El tope evita que una cama mal etiquetada como efecto adelante el clip medio segundo.
+            'onset_threshold_db' => -40.0,
+            'onset_max_seconds' => 1.5,
         ],
         // En terror el silencio trabaja más que cualquier score. Prueba el vídeo entero sin música.
         'music_enabled' => false,
@@ -207,11 +287,20 @@ return [
     ],
 
     // El render no es un solo filter_complex: planos → escenas → vídeo mudo → máster.
+    //
+    // La salida es 720p porque la fuente son 1024×576 (ver el comentario de images): estirar eso a
+    // 1080p es un upscale de 1,875x que se ve blando, y a 720p es 1,25x. Menos resolución nominal y
+    // más nitidez real.
+    //
+    // source_upscale multiplica la resolución de SALIDA, no la de la imagen: es el tamaño al que se
+    // escala el fotograma antes del zoompan, y tiene que cubrir el recorte del zoom, así que nunca
+    // puede ser menor que zoom_max. 1280 × 1.25 = 1600 px sobre el mínimo de 1280 × 1.18 = 1510 px.
+    // Subirlo más no añade nitidez, solo píxeles: el detalle lo pone la fuente.
     'video' => [
-        'width' => 1920,
-        'height' => 1080,
+        'width' => 1280,
+        'height' => 720,
         'fps' => 30,
-        'source_upscale' => 2.0,
+        'source_upscale' => 1.25,
         'zoom_max' => 1.18,
         'transition_duration' => 0.5,
         'scene_fade_duration' => 0.8,

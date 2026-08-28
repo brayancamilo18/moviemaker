@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\DataObjects\Story;
 use App\Services\Audio\AudioLibrary;
 use App\Services\Audio\StoryMixer;
+use App\Services\Image\ShotPlanner;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
@@ -239,6 +240,8 @@ final class StorySoundsAndMixTest extends TestCase
                 'effects' => [
                     [
                         'shotIndex' => $shotIndex,
+                        // El ancla tiene que estar en la narración de ese plano o el efecto se cae.
+                        'anchorWord' => $shotIndex === 1 ? 'creaked' : 'road',
                         'offsetRatio' => 0.25,
                         'query' => $query,
                         'tags' => ['door', 'creak'],
@@ -246,6 +249,7 @@ final class StorySoundsAndMixTest extends TestCase
                     ],
                     [
                         'shotIndex' => 99,
+                        'anchorWord' => 'choir',
                         'offsetRatio' => 0.5,
                         'query' => 'ghost choir',
                         'tags' => ['ghost'],
@@ -268,6 +272,7 @@ final class StorySoundsAndMixTest extends TestCase
                 'query' => 'door creak',
                 'tags' => ['door', 'creak'],
                 'importance' => 'key',
+                'anchorWord' => 'creaked',
             ],
             [
                 'shotIndex' => 2,
@@ -275,6 +280,7 @@ final class StorySoundsAndMixTest extends TestCase
                 'query' => 'door creak',
                 'tags' => ['door', 'creak'],
                 'importance' => 'key',
+                'anchorWord' => 'road',
             ],
         ], $first['directedSfx']);
         $this->assertContains('sfx.1.1', array_column($first['cues'], 'id'));
@@ -293,6 +299,56 @@ final class StorySoundsAndMixTest extends TestCase
         $refreshed = json_decode((string) file_get_contents($path), true);
         $this->assertSame('wood creak', $refreshed['directedSfx'][0]['query']);
         $this->assertSame('wood creak', $refreshed['directedSfx'][1]['query']);
+    }
+
+    /**
+     * El modelo se inventa anclas que no están en la narración del plano. Ese efecto no se podría
+     * colocar nunca, así que no se dirige: resolverle un sonido sería descargar un WAV para nada.
+     */
+    public function test_an_effect_whose_anchor_is_not_in_the_narration_is_not_directed(): void
+    {
+        $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind', 'night'], 3.0);
+        $this->indexClip('sfx/door-1.wav', 'sfx', ['door', 'creak'], 0.8);
+        $storyFile = $this->writeStory();
+        $this->writeTimings();
+        $this->writeNarration();
+        $this->writeShots();
+
+        Http::fake(function ($request) {
+            if (! str_contains($request->url(), 'generateContent')) {
+                return Http::response(['results' => []], 200);
+            }
+
+            return Http::response($this->geminiEnvelope([
+                'effects' => [
+                    [
+                        'shotIndex' => 1,
+                        'anchorWord' => 'creaked',
+                        'offsetRatio' => 0.25,
+                        'query' => 'door creak',
+                        'tags' => ['door', 'creak'],
+                        'importance' => 'key',
+                    ],
+                    [
+                        'shotIndex' => 1,
+                        'anchorWord' => 'exploded',
+                        'offsetRatio' => 0.75,
+                        'query' => 'wood snap',
+                        'tags' => ['wood', 'snap'],
+                        'importance' => 'texture',
+                    ],
+                ],
+            ]), 200);
+        });
+
+        $this->artisan('story:sounds', ['file' => $storyFile])->assertSuccessful();
+
+        $manifest = json_decode(
+            (string) file_get_contents(storage_path('app/'.$this->storiesDir.'/the-house/sounds.json')),
+            true,
+        );
+
+        $this->assertSame(['creaked'], array_column($manifest['directedSfx'], 'anchorWord'));
     }
 
     private function writeStory(): string
@@ -370,7 +426,7 @@ final class StorySoundsAndMixTest extends TestCase
 
         file_put_contents($directory.'/shots.json', json_encode([
             'version' => 1,
-            'plannerVersion' => 3,
+            'plannerVersion' => ShotPlanner::VERSION,
             'shots' => [
                 [
                     'order' => 1,

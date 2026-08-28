@@ -8,7 +8,8 @@ final readonly class VisualBible
 {
     /**
      * @param  list<string>  $palette
-     * @param  list<array{slug: string, bodyDescriptor: string, framingOptions: list<string>}>  $characters
+     * @param  list<array{slug: string, descriptor: string}>  $journey
+     * @param  list<array{slug: string, descriptor: string}>  $light
      * @param  list<array{slug: string, descriptor: string}>  $recurringObjects
      * @param  list<string>  $avoid
      * @param  array{nature: string, stages: list<array{stage: string, descriptor: string}>}  $threat
@@ -19,7 +20,8 @@ final readonly class VisualBible
         public string $timeOfDay,
         public string $weather,
         public array $palette,
-        public array $characters,
+        public array $journey,
+        public array $light,
         public array $recurringObjects,
         public array $avoid,
         public array $threat,
@@ -36,7 +38,8 @@ final readonly class VisualBible
             timeOfDay: (string) ($data['timeOfDay'] ?? ''),
             weather: (string) ($data['weather'] ?? ''),
             palette: self::stringList($data['palette'] ?? []),
-            characters: self::characterList($data['characters'] ?? []),
+            journey: self::objectList($data['journey'] ?? []),
+            light: self::objectList($data['light'] ?? []),
             recurringObjects: self::objectList($data['recurringObjects'] ?? []),
             avoid: self::stringList($data['avoid'] ?? []),
             threat: self::threat($data['threat'] ?? []),
@@ -44,7 +47,7 @@ final readonly class VisualBible
     }
 
     /**
-     * @return array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, characters: list<array{slug: string, bodyDescriptor: string, framingOptions: list<string>}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}
+     * @return array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, journey: list<array{slug: string, descriptor: string}>, light: list<array{slug: string, descriptor: string}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}
      */
     public function toArray(): array
     {
@@ -54,11 +57,73 @@ final readonly class VisualBible
             'timeOfDay' => $this->timeOfDay,
             'weather' => $this->weather,
             'palette' => $this->palette,
-            'characters' => $this->characters,
+            'journey' => $this->journey,
+            'light' => $this->light,
             'recurringObjects' => $this->recurringObjects,
             'avoid' => $this->avoid,
             'threat' => $this->threat,
         ];
+    }
+
+    /**
+     * Slugs de los tramos, en el orden del recorrido. El índice es la posición en el trayecto, y
+     * es lo que permite comprobar que un plano nunca retrocede respecto al anterior.
+     *
+     * @return list<string>
+     */
+    public function journeySlugs(): array
+    {
+        return self::slugsOf($this->journey);
+    }
+
+    /**
+     * Slugs de las etapas de luz, de la más abierta a la más cerrada.
+     *
+     * @return list<string>
+     */
+    public function lightSlugs(): array
+    {
+        return self::slugsOf($this->light);
+    }
+
+    public function journeyDescriptor(?string $slug): string
+    {
+        return self::descriptorOf($this->journey, $slug);
+    }
+
+    public function lightDescriptor(?string $slug): string
+    {
+        return self::descriptorOf($this->light, $slug);
+    }
+
+    /**
+     * @param  list<array{slug: string, descriptor: string}>  $items
+     * @return list<string>
+     */
+    private static function slugsOf(array $items): array
+    {
+        return array_values(array_map(
+            static fn (array $item): string => $item['slug'],
+            $items,
+        ));
+    }
+
+    /**
+     * @param  list<array{slug: string, descriptor: string}>  $items
+     */
+    private static function descriptorOf(array $items, ?string $slug): string
+    {
+        if ($slug === null || $slug === '') {
+            return '';
+        }
+
+        foreach ($items as $item) {
+            if ($item['slug'] === $slug) {
+                return $item['descriptor'];
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -79,55 +144,6 @@ final readonly class VisualBible
         }
 
         return $items;
-    }
-
-    /**
-     * @return list<array{slug: string, bodyDescriptor: string, framingOptions: list<string>}>
-     */
-    private static function characterList(mixed $value): array
-    {
-        if (! is_array($value)) {
-            return [];
-        }
-
-        $characters = [];
-
-        foreach ($value as $item) {
-            if (! is_array($item)) {
-                continue;
-            }
-
-            $slug = (string) ($item['slug'] ?? '');
-            $bodyDescriptor = (string) ($item['bodyDescriptor'] ?? $item['descriptor'] ?? '');
-            $framingOptions = self::framingOptions($item);
-
-            if ($slug === '' || $bodyDescriptor === '') {
-                continue;
-            }
-
-            $characters[] = [
-                'slug' => $slug,
-                'bodyDescriptor' => $bodyDescriptor,
-                'framingOptions' => $framingOptions,
-            ];
-        }
-
-        return $characters;
-    }
-
-    /**
-     * @param  array<string, mixed>  $item
-     * @return list<string>
-     */
-    private static function framingOptions(array $item): array
-    {
-        if (isset($item['framingOptions']) && is_array($item['framingOptions'])) {
-            return self::stringList($item['framingOptions']);
-        }
-
-        $legacy = (string) ($item['framingRule'] ?? '');
-
-        return $legacy === '' ? [] : [$legacy];
     }
 
     /**

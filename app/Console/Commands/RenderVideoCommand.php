@@ -39,6 +39,8 @@ final class RenderVideoCommand extends Command
 
     private readonly float $outroSeconds;
 
+    private readonly float $tailSeconds;
+
     private readonly float $syncTolerance;
 
     private ?string $fromStep = null;
@@ -60,7 +62,25 @@ final class RenderVideoCommand extends Command
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->workRoot = storage_path('app/'.$config->get('stories.video.work_path'));
         $this->outroSeconds = (float) $config->get('stories.video.outro_seconds');
+        $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds');
         $this->syncTolerance = (float) $config->get('stories.video.sync_tolerance');
+    }
+
+    /**
+     * Hasta dónde llega el habla en la mezcla. Los planos cubren esto y solo esto: la cola de
+     * ambiente que la mezcla añade después suena ya sobre el outro.
+     */
+    private function bodyDuration(float $audioDuration): float
+    {
+        return round($audioDuration - $this->tailSeconds, 3);
+    }
+
+    /**
+     * Lo que tienen que medir el vídeo mudo y el máster: el habla más el outro entero.
+     */
+    private function masterDuration(float $audioDuration): float
+    {
+        return round($this->bodyDuration($audioDuration) + $this->outroSeconds, 3);
     }
 
     public function handle(): int
@@ -164,7 +184,7 @@ final class RenderVideoCommand extends Command
         }
 
         $this->printSummary($videoDuration, $audioDuration, $bytes, $elapsed, $videoPath);
-        $expected = round($audioDuration + $this->outroSeconds, 3);
+        $expected = $this->masterDuration($audioDuration);
         $this->updateStoryPayload($storyFile, $payload, [
             // Un render sin gradar no es publicable: apunta a su propia clave y deja intacto el
             // puntero al máster gradado.
@@ -395,7 +415,7 @@ final class RenderVideoCommand extends Command
     private function assembleVideo(array $scenePaths, float $audioDuration, string $silentPath): void
     {
         $this->info('Ensamblado');
-        $expected = round($audioDuration + $this->outroSeconds, 3);
+        $expected = $this->masterDuration($audioDuration);
 
         if (! $this->shouldRerun('assemble') && $this->isValidVideo($silentPath, $expected)) {
             $this->comment('  Vídeo mudo ya válido, se omite.');
@@ -411,7 +431,7 @@ final class RenderVideoCommand extends Command
         try {
             $this->assembler->assemble(
                 $scenePaths,
-                $audioDuration,
+                $this->bodyDuration($audioDuration),
                 $silentPath,
                 (bool) $this->option('keep-intermediates'),
             );
@@ -432,7 +452,7 @@ final class RenderVideoCommand extends Command
 
         $audioDuration = $this->probe->tryDuration($audioPath) ?? 0.0;
         $grade = ! (bool) $this->option('no-grade');
-        $expected = round($audioDuration + $this->outroSeconds, 3);
+        $expected = $this->masterDuration($audioDuration);
 
         if (! $this->shouldRerun('encode') && $this->isValidVideo($videoPath, $expected)) {
             $this->comment('  Vídeo final ya válido, se omite.');
@@ -529,16 +549,22 @@ final class RenderVideoCommand extends Command
 
         $this->table(['Escena', 'Planos', 'Duración s', 'Empalmes'], $sceneRows);
 
-        $delta = $plan['body'] - $audioDuration;
-        $master = round($audioDuration + $this->outroSeconds, 3);
+        $body = $this->bodyDuration($audioDuration);
+        $delta = $plan['body'] - $body;
+        $master = $this->masterDuration($audioDuration);
         $this->newLine();
         $this->line('Planos: '.count($shots).'  Escenas: '.count($grouped));
         $this->line(sprintf('Cuerpo previsto: %s (%.3f s)', $this->formatClock($plan['body']), $plan['body']));
         $this->line(sprintf('Outro: %.1f s  Vídeo mudo previsto: %s', $this->outroSeconds, $this->formatClock($plan['silent'])));
         $this->line(sprintf('Audio: %s (%.3f s)', $this->formatClock($audioDuration), $audioDuration));
+        $this->line(sprintf('Habla: %s (%.3f s, el resto es la cola de %.1f s)', $this->formatClock($body), $body, $this->tailSeconds));
         $this->line(sprintf('Máster previsto: %s (%.3f s)', $this->formatClock($master), $master));
-        $this->line($this->deltaLine($delta, 'cuerpo−audio'));
-        $this->comment('El audio se rellena con silencio durante el outro para que -shortest corte por el vídeo.');
+        $this->line($this->deltaLine($delta, 'cuerpo−habla'));
+        $this->comment(sprintf(
+            'El outro arranca al acabar el habla, así que la cola de %.1f s de la mezcla suena sobre él y al audio solo se le añaden %.1f s de silencio.',
+            $this->tailSeconds,
+            $this->outroSeconds - $this->tailSeconds,
+        ));
     }
 
     /**
@@ -583,7 +609,7 @@ final class RenderVideoCommand extends Command
         float $elapsed,
         string $videoPath,
     ): void {
-        $expected = round($audioDuration + $this->outroSeconds, 3);
+        $expected = $this->masterDuration($audioDuration);
         $delta = $videoDuration - $expected;
 
         $this->newLine();
@@ -591,7 +617,7 @@ final class RenderVideoCommand extends Command
         $this->line('  Vídeo: '.$this->formatClock($videoDuration).sprintf(' (%.3f s)', $videoDuration));
         $this->line('  Audio: '.$this->formatClock($audioDuration).sprintf(' (%.3f s)', $audioDuration));
         $this->line(sprintf('  Outro: %.1f s  Esperado: %s (%.3f s)', $this->outroSeconds, $this->formatClock($expected), $expected));
-        $this->line('  '.$this->deltaLine($delta, 'vídeo−(audio+outro)'));
+        $this->line('  '.$this->deltaLine($delta, 'vídeo−(habla+outro)'));
         $this->line(sprintf('  Tamaño: %.1f MiB', $bytes / 1048576));
         $this->line(sprintf('  Tiempo: %.1f s', $elapsed));
         $this->line(sprintf('  Factor tiempo real: %.2fx', $elapsed / max($videoDuration, 0.001)));

@@ -11,19 +11,34 @@ use InvalidArgumentException;
 
 final class ShotPromptBuilder
 {
-    /**
-     * @var list<string>
-     */
-    private const FIGURE_SUBJECTS = ['protagonist', 'threat', 'both'];
-
     // Prioridad de la parte descriptiva: cuando no cabe todo, se cae primero el rango más alto.
     private const RANK_DESCRIPTION = 1;
 
-    private const RANK_CHARACTERS = 2;
+    private const RANK_THREAT = 2;
 
-    private const RANK_SETTING = 3;
+    private const RANK_JOURNEY = 3;
 
-    private const RANK_REST = 4;
+    private const RANK_SETTING = 4;
+
+    private const RANK_REST = 5;
+
+    /**
+     * Ocultación con la que sale el ente, que es la única figura que puede aparecer en cuadro. Son
+     * afirmaciones, no negaciones: los negativos viajan como texto dentro del prompt porque el
+     * proveedor no expone rama negativa, y «no clear facial features» no impide una cara mientras
+     * que una silueta a contraluz no tiene ninguna que resolver. Todas valen a cualquier escala,
+     * así que ninguna puede contradecir el encuadre del plano.
+     *
+     * @var list<string>
+     */
+    private const OCCLUSIONS = [
+        'seen from behind',
+        'silhouette against a light source',
+        'backlit figure',
+        'features lost in shadow',
+        'face turned away',
+        'body turned away from the camera',
+    ];
 
     /**
      * @var array<string, string>
@@ -48,13 +63,10 @@ final class ShotPromptBuilder
 
     private readonly int $maxWords;
 
-    private readonly int $minDescriptiveWords;
-
     public function __construct(Repository $config)
     {
         $this->styleSuffix = trim((string) $config->get('stories.image_style_suffix'));
         $this->maxWords = (int) $config->get('stories.images.max_prompt_words');
-        $this->minDescriptiveWords = (int) $config->get('stories.images.min_prompt_description_words');
     }
 
     public function build(Shot $shot, VisualBible $bible): string
@@ -65,49 +77,34 @@ final class ShotPromptBuilder
             throw new InvalidArgumentException("El plano {$shot->order} no tiene description.");
         }
 
-        $parts = [];
+        $parts = [$this->part(self::RANK_DESCRIPTION, $this->sanitize($description))];
 
-        if (in_array($shot->subject, self::FIGURE_SUBJECTS, true)) {
-            foreach ($shot->characterSlugs as $slug) {
-                $character = $this->characterBySlug($bible, $slug);
-
-                if ($character === null) {
-                    continue;
-                }
-
-                $parts[] = $this->part(self::RANK_CHARACTERS, $this->sanitize($character['bodyDescriptor']));
-                $options = $character['framingOptions'];
-
-                if ($options !== []) {
-                    $parts[] = $this->part(self::RANK_CHARACTERS, $this->sanitize($options[$shot->order % count($options)]));
-                }
-            }
+        if ($shot->subject === 'threat') {
+            $parts[] = $this->part(self::RANK_THREAT, $this->sanitize($this->threatStageDescriptor($bible, $shot->threatStage)));
+            // El ente sale ocultado siempre, sin excepción: un plano con alguien dentro y sin
+            // encoding de ocultación es exactamente el que devuelve una cara a medio resolver.
+            $parts[] = $this->part(self::RANK_THREAT, $this->occlusion($shot));
         }
 
-        if (in_array($shot->subject, ['threat', 'both'], true)) {
-            $parts[] = $this->part(self::RANK_REST, $this->sanitize($this->threatStageDescriptor($bible, $shot->threatStage)));
-        }
-
-        $parts[] = $this->part(self::RANK_DESCRIPTION, $this->sanitize($description));
-        $parts[] = $this->part(self::RANK_REST, $this->sanitize($shot->framing));
+        // El tramo dice dónde está plantada la cámara y la luz cuánta queda: son los dos bloques
+        // que hacen que cien planos se lean como un recorrido y no como un carrusel del mismo
+        // sitio. Por eso van por encima del setting, que a partir de aquí es solo el ancla corta.
+        $parts[] = $this->part(self::RANK_JOURNEY, $this->sanitize($bible->journeyDescriptor($shot->journeyLeg)));
+        $parts[] = $this->part(self::RANK_JOURNEY, $this->sanitize($this->light($bible, $shot)));
         $parts[] = $this->part(self::RANK_SETTING, $this->sanitize($bible->setting));
-        $parts[] = $this->part(self::RANK_REST, $this->sanitize($bible->timeOfDay));
+        $parts[] = $this->part(self::RANK_REST, $this->sanitize($shot->framing));
         $parts[] = $this->part(self::RANK_REST, $this->sanitize($bible->weather));
         $parts[] = $this->part(self::RANK_REST, $this->sanitize(implode(' ', $bible->palette)));
 
-        $negatives = $this->negatives($bible);
-        $suffix = $this->styleSuffix;
-        $budget = $this->maxWords - $this->wordCount($negatives) - $this->wordCount($suffix);
-
-        // Los negativos son la única defensa contra caras resueltas y marcas de agua: si el
-        // presupuesto descriptivo se queda sin aire, el que cede el sitio es el sufijo de estilo.
-        if ($budget < $this->minDescriptiveWords) {
-            $suffix = '';
-            $budget = $this->maxWords - $this->wordCount($negatives);
-        }
-
+        // El tope gobierna solo la parte descriptiva. Los negativos son la única defensa contra
+        // caras resueltas y marcas de agua, y el sufijo es lo que mantiene el estilo constante
+        // entre planos: ninguno de los dos compite por el sitio de lo que describe la escena.
         $prompt = array_values(array_filter(
-            [$this->descriptive($parts, $budget), $suffix, $negatives],
+            [
+                $this->descriptive($this->dedupe($parts), $this->maxWords),
+                $this->styleSuffix,
+                $this->negatives($bible),
+            ],
             static fn (string $part): bool => $part !== '',
         ));
 
@@ -141,8 +138,54 @@ final class ShotPromptBuilder
     }
 
     /**
+     * Quita los bloques repetidos antes de presupuestar, sin distinguir mayúsculas: la biblia y el
+     * planificador comparten vocabulario y el mismo texto puede llegar por dos vías. Gana la
+     * primera aparición, que es la de mayor prioridad.
+     *
+     * @param  list<array{rank: int, text: string}>  $parts
+     * @return list<array{rank: int, text: string}>
+     */
+    private function dedupe(array $parts): array
+    {
+        $kept = [];
+        $seen = [];
+
+        foreach ($parts as $part) {
+            $key = mb_strtolower($part['text']);
+
+            if ($part['text'] === '' || isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $kept[] = $part;
+        }
+
+        return $kept;
+    }
+
+    private function occlusion(Shot $shot): string
+    {
+        return self::OCCLUSIONS[$shot->order % count(self::OCCLUSIONS)];
+    }
+
+    /**
+     * La etapa de luz del plano, y si el plano no trae ninguna resoluble, la hora que la biblia
+     * dejó fijada. Un shots.json dirigido antes de que existieran las etapas no se queda sin luz:
+     * se queda con la de siempre.
+     */
+    private function light(VisualBible $bible, Shot $shot): string
+    {
+        $stage = $bible->lightDescriptor($shot->lightStage);
+
+        return $stage === '' ? $bible->timeOfDay : $stage;
+    }
+
+    /**
      * Reparte el presupuesto de palabras entre los bloques descriptivos: cada bloque elige antes
-     * que los de menor prioridad, y el que no quepa se descarta entero. Solo el primero (la
+     * que los de menor prioridad, y el que no quepa se descarta entero. En cuanto se cae un bloque
+     * por falta de sitio, nada de menor prioridad puede colarse detrás: si no, el descriptor del
+     * ente acaba cediendo su hueco a la paleta y al clima. Solo el primero (la
      * description del plano) se recorta, porque un prompt sin él no describe nada. El prompt se
      * devuelve en orden semántico, no en orden de prioridad.
      *
@@ -162,11 +205,13 @@ final class ShotPromptBuilder
 
         $kept = [];
         $spent = 0;
+        $droppedRank = null;
 
         foreach ($order as $index) {
             $text = $parts[$index]['text'];
+            $rank = $parts[$index]['rank'];
 
-            if ($text === '') {
+            if ($text === '' || ($droppedRank !== null && $rank > $droppedRank)) {
                 continue;
             }
 
@@ -174,6 +219,8 @@ final class ShotPromptBuilder
 
             if ($spent + $cost > $budget) {
                 if ($kept !== []) {
+                    $droppedRank = $droppedRank === null ? $rank : min($droppedRank, $rank);
+
                     continue;
                 }
 
@@ -188,20 +235,6 @@ final class ShotPromptBuilder
         ksort($kept);
 
         return implode(', ', $kept);
-    }
-
-    /**
-     * @return array{slug: string, bodyDescriptor: string, framingOptions: list<string>}|null
-     */
-    private function characterBySlug(VisualBible $bible, string $slug): ?array
-    {
-        foreach ($bible->characters as $character) {
-            if ($character['slug'] === $slug) {
-                return $character;
-            }
-        }
-
-        return null;
     }
 
     private function threatStageDescriptor(VisualBible $bible, ?string $stage): string

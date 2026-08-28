@@ -4,21 +4,16 @@ declare(strict_types=1);
 
 namespace App\Services\Story;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\Story;
 use App\DataObjects\StoryReview;
-use App\Services\Llm\GeminiClient;
-use Illuminate\Contracts\Config\Repository;
+use App\Services\Llm\LlmTask;
 
 final class StoryReviewer
 {
-    private readonly string $model;
-
     public function __construct(
-        private GeminiClient $gemini,
-        Repository $config,
-    ) {
-        $this->model = (string) $config->get('stories.review.model');
-    }
+        private JsonLlm $llm,
+    ) {}
 
     public function review(Story $story): StoryReview
     {
@@ -27,12 +22,12 @@ final class StoryReviewer
             JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
         );
 
-        $data = $this->gemini->generateJson(
+        $data = $this->llm->generateJson(
             $this->systemInstruction(),
             $this->userPrompt($script),
             $this->schema(),
+            task: LlmTask::Review,
             temperature: 0.3,
-            model: $this->model,
         );
 
         return StoryReview::fromArray($data);

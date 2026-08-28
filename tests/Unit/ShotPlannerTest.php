@@ -319,6 +319,48 @@ final class ShotPlannerTest extends TestCase
         );
     }
 
+    public function test_a_long_silent_tail_is_cut_into_closing_shots_instead_of_one_freeze(): void
+    {
+        $planner = $this->app->make(ShotPlanner::class);
+        $timings = $this->fixtures()['coverage'];
+        $ceiling = (float) config('stories.shots.max_duration') + (float) config('stories.shots.max_hold_slack');
+        $sceneEnd = $this->audioEnd($timings);
+        // 40 s de cola: es la forma que tenía la deriva del alineador, un plano congelado al final.
+        $audioDuration = $sceneEnd + 40.0;
+
+        $shots = $planner->plan($timings, $this->storyWithScenes(count($timings['scenes'])), $audioDuration);
+
+        $this->assertCoverage($shots, $audioDuration);
+
+        foreach ($shots as $shot) {
+            $this->assertLessThanOrEqual(
+                $ceiling + 0.001,
+                $shot->end - $shot->start,
+                "El plano {$shot->order} supera el techo de {$ceiling} s.",
+            );
+        }
+
+        $closing = array_values(array_filter(
+            $shots,
+            static fn (Shot $shot): bool => $shot->start >= $sceneEnd - 0.001,
+        ));
+
+        $this->assertGreaterThan(1, count($closing), 'La cola muda debería trocearse en varios planos.');
+
+        $previous = null;
+
+        foreach ($closing as $shot) {
+            $this->assertSame('static', $shot->motion);
+            $this->assertSame('environment', $shot->subject);
+            $this->assertNotSame(
+                $previous,
+                $shot->framing,
+                "El plano de cola {$shot->order} repite el encuadre del anterior.",
+            );
+            $previous = $shot->framing;
+        }
+    }
+
     /**
      * @param  list<Shot>  $shots
      */

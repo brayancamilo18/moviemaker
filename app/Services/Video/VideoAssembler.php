@@ -38,17 +38,19 @@ final class VideoAssembler
 
     /**
      * @param  list<string>  $sceneClips
+     * @param  float  $bodyDuration  hasta dónde llega el habla, sin la cola de la mezcla: es lo que
+     *                               cubren los planos, y el outro empieza justo ahí
      */
     public function assemble(
         array $sceneClips,
-        float $targetDuration,
+        float $bodyDuration,
         string $outputPath,
         bool $keepIntermediates = false,
     ): string {
         $paths = $this->assertClips($sceneClips);
 
-        if ($targetDuration <= 0) {
-            throw new InvalidArgumentException('La duración del mix de audio tiene que ser mayor que 0.');
+        if ($bodyDuration <= 0) {
+            throw new InvalidArgumentException('La duración del cuerpo tiene que ser mayor que 0.');
         }
 
         $workDir = $this->makeWorkDirectory($outputPath);
@@ -73,7 +75,7 @@ final class VideoAssembler
             $bodyPath = $workDir.DIRECTORY_SEPARATOR.'body.mp4';
             $this->concat($prepared, $bodyPath);
 
-            $this->assertSync($durations, $this->probe->duration($bodyPath), $targetDuration);
+            $this->assertSync($durations, $this->probe->duration($bodyPath), $bodyDuration);
 
             $outroPath = $this->renderOutro(
                 $prepared[$last],
@@ -242,7 +244,7 @@ final class VideoAssembler
         }
 
         throw new RuntimeException(sprintf(
-            'El vídeo mudo dura %.3f s y el mix de audio %.3f s (desfase %+.3f s, tolerancia %.3f s). El desfase se acumuló en la escena %d (acumulado %.3f s). Duraciones: %s. No se estira el vídeo: hay un bug aguas arriba. Rehaz el vídeo mudo con: php artisan story:render {file} --from=assemble',
+            'El cuerpo del vídeo dura %.3f s y el habla de la narración %.3f s (desfase %+.3f s, tolerancia %.3f s). El desfase se acumuló en la escena %d (acumulado %.3f s). Duraciones: %s. No se estira el vídeo: hay un bug aguas arriba. Rehaz el vídeo mudo con: php artisan story:render {file} --from=assemble',
             $actual,
             $target,
             $delta,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\CoverageReport;
 use App\DataObjects\ResolvedSound;
 use App\DataObjects\Story;
@@ -32,6 +33,7 @@ final class SoundsCommand extends Command
     public function __construct(
         private StorySoundManifest $manifest,
         private CoverageAuditor $auditor,
+        private JsonLlm $llm,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -91,6 +93,12 @@ final class SoundsCommand extends Command
             $this->error($exception->getMessage());
 
             return self::FAILURE;
+        }
+
+        $notice = $this->llm->fallbackNotice();
+
+        if ($notice !== null) {
+            $this->warn($notice);
         }
 
         $this->renderTable($manifest['cues']);

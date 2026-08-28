@@ -148,16 +148,22 @@ Notas de comportamiento que no se ven en la firma:
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "sentences": [
     {
       "order": 1,
       "sceneOrder": 1,
       "text": "The door closed.",
+      "ttsText": "The door closed.",
       "start": 0.0,
       "end": 1.42,
       "pauseAfter": 0.45,
-      "alignment": "text"
+      "alignment": "text",
+      "words": [
+        { "token": "the", "start": 0.0, "end": 0.24 },
+        { "token": "door", "start": 0.24, "end": 0.71 },
+        { "token": "closed", "start": 0.71, "end": 1.42 }
+      ]
     }
   ],
   "scenes": [
@@ -174,14 +180,16 @@ Notas de comportamiento que no se ven en la firma:
 
 | Campo | Dónde | Qué es |
 |---|---|---|
-| `version` | raíz | Esquema. Hoy `1`. Si cambia, bump. |
+| `version` | raíz | Esquema. Hoy `3`. Si cambia, bump. |
 | `sentences[].order` | frase | Orden global de narración, 1-based. |
 | `sentences[].sceneOrder` | frase | Escena del guion (`StoryScene.order`). Agrupa el plano. |
 | `sentences[].text` | frase | Texto original del guion, no la transcripción de Whisper. |
+| `sentences[].ttsText` | frase | La misma frase con la fonética aplicada, que es lo que se sintetizó. |
 | `sentences[].start` | frase | Inicio del habla de esa frase en el máster. |
 | `sentences[].end` | frase | Fin del habla. **No incluye** la pausa. |
 | `sentences[].pauseAfter` | frase | Silencio pedido al ensamblar (s). Entre escenas es el valor largo. |
 | `sentences[].alignment` | frase | `text` = emparejado por texto normalizado; `sequential` = respaldo por posición. Diagnóstico; el generador de imágenes puede ignorarlo. |
+| `sentences[].words` | frase | Palabras con su ventana real, tal como las oyó whisper: token normalizado, `start` y `end` dentro de la ventana de la frase. **Solo las traen las frases con `alignment: text`**; en las `sequential` va vacío, porque unos tiempos por palabra inventados serían peores que ninguno. |
 | `scenes[].order` | escena | Igual que `sceneOrder`. Una entrada por escena, en orden. |
 | `scenes[].start` | escena | `start` de la primera frase de la escena. |
 | `scenes[].end` | escena | `start` de la siguiente escena; en la última, `end` de la última frase + su `pauseAfter`. |
@@ -194,6 +202,51 @@ Cómo usar esto al generar imágenes:
 2. Duración del plano = `scenes[].duration` (no recalcular a partir de recuento de palabras).
 3. Corte entre planos = `scenes[].end` de una escena = `scenes[].start` de la siguiente. Las pausas entre escenas quedan dentro del plano que termina.
 4. No uses `sentences[].end` como corte de plano: deja fuera el silencio y desincroniza imagen y voz.
+
+`words` no lo usa el generador de imágenes: es lo que hace que un efecto puntual suene a tiempo.
+Cada efecto de `sounds.json` declara la palabra de la que cuelga (`anchorWord`) y `SfxPlacer` lo
+coloca en el `start` de esa palabra menos `audio.sfx.lead_seconds`, menos el silencio que traiga el
+propio clip antes de su primer golpe (`LibraryClipProcessor::onsetSeconds()`). Un efecto cuya palabra
+no esté en `words` **no se coloca**: `story:mix` lo dice y `story:validate` lo cuenta. Los ambientes
+no dependen de esto, se colocan por escena.
+
+## Resolución: por qué el vídeo sale a 720p
+
+**El proveedor de imágenes topa en 1024×576 y no hay forma de pedirle más sin cuenta.** Pollinations
+devuelve ese tamaño tanto si le pides 1280×720 como 1920×1080, y lo mismo con `flux`, `turbo`,
+`z-image-turbo` y `nanobanana-pro`: recorta la petición, responde 200 y no lo dice en ninguna parte.
+Los modelos que sí dan más (`seedream`, `nanobanana`, `kontext`) exigen credenciales.
+
+De ahí sale toda la cadena de números de `config/stories.php`:
+
+| Clave | Valor | Por qué |
+|---|---|---|
+| `images.width` / `images.height` | 1024 × 576 | Lo que el proveedor entrega de verdad. Pedir más solo sirve para creerse una nitidez que no existe. |
+| `video.width` / `video.height` | 1280 × 720 | Estirar 1024 px a 1080p es un upscale de 1,875x y se ve blando; a 720p es 1,25x. |
+| `video.source_upscale` | 1.25 | Multiplica la resolución de **salida**, no la de la imagen: es el tamaño al que se escala el fotograma antes del `zoompan`. |
+| `video.zoom_max` | 1.18 | El `zoompan` recorta `iw/zoom`, así que `source_upscale` nunca puede ser menor que esto. |
+
+Dos guardas, porque este fallo es mudo por naturaleza:
+
+- `ShotClipRenderer` lanza en el constructor si `source_upscale < zoom_max`. Escalar por debajo del
+  zoom deja al recorte sin píxeles y todos los planos salen blandos sin avisar.
+- `PollinationsGenerator` compara el tamaño devuelto con el pedido y deja un warning por ejecución
+  cuando no coinciden. `story:doctor` imprime además la cuenta completa: fuente, píxeles necesarios
+  (`video.width × zoom_max`) y el estiramiento resultante. Es información, no un fallo: mientras el
+  techo sea del proveedor no hay nada que arreglar en la máquina.
+
+El modelo también pinta de vez en cuando la escena **como una copia enmarcada**, con bandas claras y
+planas arriba y abajo (una de cada treinta, más o menos). `PollinationsGenerator` las detecta por
+brillo y uniformidad (`images.letterbox`), recorta lo que queda dentro, lo ajusta al aspecto pedido y
+lo reescala al tamaño de `images`. Se pierde un poco de encuadre y se gana el plano entero. El
+recorte es idempotente y se aplica también al servir de la caché, así que las imágenes descargadas
+antes de esto se arreglan solas en la siguiente pasada. Si la banda clara ocupa más de
+`letterbox.max_ratio` de un lado ya no es un marco, es contenido: se deja intacta y se avisa.
+
+La resolución entra en el `sha1` de la caché de imágenes, así que cambiar `images.width` invalida lo
+cacheado y hay que regenerar. Subir de 720p exige, en este orden: cuenta en el proveedor, un modelo
+que devuelva de verdad más píxeles, `images.width` a lo que ese modelo entregue y `video.width`
+detrás. Cambiar solo `video.width` empeora la imagen.
 
 ## Librería de audio
 

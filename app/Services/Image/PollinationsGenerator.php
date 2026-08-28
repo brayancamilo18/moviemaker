@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Image;
 
 use App\Contracts\ImageGenerator;
+use GdImage;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -23,6 +24,9 @@ final class PollinationsGenerator implements ImageGenerator
 
     private const AVAILABLE_AT_KEY = 'images:pollinations:available_at';
 
+    /** Un marco ocupa cientos de píxeles: muestrear uno de cada ocho lo detecta igual y cuesta ocho veces menos. */
+    private const BAND_SAMPLE_STEP = 8;
+
     private readonly string $baseUrl;
 
     private readonly string $model;
@@ -39,6 +43,20 @@ final class PollinationsGenerator implements ImageGenerator
 
     private readonly string $cacheDirectory;
 
+    private readonly int $jpegQuality;
+
+    private readonly float $bandBrightness;
+
+    private readonly float $bandUniformity;
+
+    private readonly float $bandMaxRatio;
+
+    private readonly int $outageProbeSeconds;
+
+    private readonly int $outageMaxProbes;
+
+    private bool $sizeReported = false;
+
     public function __construct(
         private Factory $http,
         private Filesystem $files,
@@ -54,6 +72,12 @@ final class PollinationsGenerator implements ImageGenerator
         $this->maxRetries = (int) $config->get('stories.images.max_retries');
         $this->timeout = (int) $config->get('stories.images.timeout', 120);
         $this->cacheDirectory = storage_path('app/'.(string) $config->get('stories.images.cache_path', 'image-cache'));
+        $this->jpegQuality = (int) $config->get('stories.images.jpeg_quality');
+        $this->bandBrightness = (float) $config->get('stories.images.letterbox.brightness');
+        $this->bandUniformity = (float) $config->get('stories.images.letterbox.uniformity');
+        $this->bandMaxRatio = (float) $config->get('stories.images.letterbox.max_ratio');
+        $this->outageProbeSeconds = (int) $config->get('stories.images.outage.probe_seconds');
+        $this->outageMaxProbes = (int) $config->get('stories.images.outage.max_probes');
     }
 
     public function generate(string $prompt, int $seed): string
@@ -61,31 +85,78 @@ final class PollinationsGenerator implements ImageGenerator
         $path = $this->cachePath($prompt, $seed);
 
         if ($this->files->exists($path) && $this->isValidImageFile($path)) {
+            // También a la vuelta de la caché: recortar es idempotente y así se arreglan las que se
+            // descargaron antes de que existiera esta comprobación.
+            $this->trimLetterbox($path);
+
             return $path;
         }
 
+        $probes = 0;
+        $outcome = ['path' => null, 'error' => 'sin respuesta', 'outage' => false];
+
+        // Cuando el que falla es el proveedor, rendirse aquí no ahorra nada: el plano siguiente va
+        // a fallar igual y la historia acaba llena de marcadores por una caída de media hora. Así
+        // que se espera a que vuelva y se vuelve a pedir. Una respuesta mala de verdad no espera.
+        while (true) {
+            $outcome = $this->attempts($prompt, $seed, $path);
+
+            if ($outcome['path'] !== null) {
+                return $outcome['path'];
+            }
+
+            if (! $outcome['outage'] || $probes >= $this->outageMaxProbes) {
+                break;
+            }
+
+            $probes++;
+            $this->waitForProvider($probes, $outcome['error']);
+        }
+
+        $this->logger->warning('No se pudo generar la imagen. Se usará un marcador.', [
+            'seed' => $seed,
+            'error' => $outcome['error'],
+            'probes' => $probes,
+            'prompt' => mb_substr($prompt, 0, 160),
+        ]);
+
+        return $this->placeholder($prompt, $seed);
+    }
+
+    /**
+     * Una ronda completa de intentos sobre el mismo plano. `outage` distingue las dos cosas que se
+     * confundían antes: que el proveedor no esté (se espera) y que devuelva basura (se rinde).
+     *
+     * @return array{path: string|null, error: string, outage: bool}
+     */
+    private function attempts(string $prompt, int $seed, string $path): array
+    {
         $attemptSeed = $seed;
         $attempts = max(1, $this->maxRetries + 1);
         $lastError = 'sin respuesta';
+        $outage = false;
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
             try {
                 $bytes = $this->fetch($prompt, $attemptSeed);
             } catch (LockTimeoutException) {
                 $lastError = 'candado de rate limit agotado';
+                $outage = false;
                 $this->backoff($attempt, $attempts);
 
                 continue;
             } catch (ConnectionException) {
                 $lastError = 'timeout o conexión';
+                $outage = true;
                 $this->backoff($attempt, $attempts);
 
                 continue;
             } catch (RequestException $exception) {
                 $status = $exception->response->status();
                 $lastError = "HTTP {$status}";
+                $outage = $this->isRetryableStatus($status);
 
-                if (! $this->isRetryableStatus($status)) {
+                if (! $outage) {
                     break;
                 }
 
@@ -94,6 +165,7 @@ final class PollinationsGenerator implements ImageGenerator
                 continue;
             } catch (Throwable $exception) {
                 $lastError = $exception->getMessage();
+                $outage = false;
                 $this->backoff($attempt, $attempts);
 
                 continue;
@@ -102,22 +174,30 @@ final class PollinationsGenerator implements ImageGenerator
             if ($this->isValidImageData($bytes)) {
                 $this->files->ensureDirectoryExists($this->cacheDirectory);
                 $this->files->put($path, $bytes);
+                $this->reportSize($path, $prompt);
+                $this->trimLetterbox($path);
 
-                return $path;
+                return ['path' => $path, 'error' => '', 'outage' => false];
             }
 
             $lastError = 'el cuerpo no es una imagen válida';
+            $outage = false;
             $attemptSeed = $this->nextSeed($seed, $attempt);
             $this->backoff($attempt, $attempts);
         }
 
-        $this->logger->warning('No se pudo generar la imagen. Se usará un marcador.', [
-            'seed' => $seed,
-            'error' => $lastError,
-            'prompt' => mb_substr($prompt, 0, 160),
+        return ['path' => null, 'error' => $lastError, 'outage' => $outage];
+    }
+
+    private function waitForProvider(int $probe, string $error): void
+    {
+        $this->logger->warning('El proveedor de imágenes no responde: se espera en vez de escribir un marcador.', [
+            'error' => $error,
+            'intento' => $probe.'/'.$this->outageMaxProbes,
+            'espera' => $this->outageProbeSeconds.' s',
         ]);
 
-        return $this->placeholder($prompt, $seed);
+        Sleep::sleep($this->outageProbeSeconds);
     }
 
     public function isAvailable(): bool
@@ -233,7 +313,44 @@ final class PollinationsGenerator implements ImageGenerator
 
     private function cachePath(string $prompt, int $seed): string
     {
-        return $this->cacheDirectory.DIRECTORY_SEPARATOR.sha1($prompt.(string) $seed).'.jpg';
+        return $this->cacheDirectory.DIRECTORY_SEPARATOR.sha1($this->fingerprint($prompt, $seed)).'.jpg';
+    }
+
+    /**
+     * La resolución entra en la clave porque una imagen de 1024 px y otra de 1920 px con el mismo
+     * prompt y la misma semilla son ficheros distintos: sin ella, cambiar la resolución serviría
+     * las viejas y nadie sabría por qué el vídeo no mejora.
+     */
+    private function fingerprint(string $prompt, int $seed): string
+    {
+        return $prompt.(string) $seed.'|'.$this->width.'x'.$this->height;
+    }
+
+    /**
+     * El proveedor recorta la petición en silencio y responde 200, así que un catálogo entero por
+     * debajo de la resolución pedida pasa desapercibido hasta que el vídeo se ve blando. Un aviso
+     * por ejecución basta: el techo es del proveedor y repetirlo cien veces solo tapa el resto.
+     */
+    private function reportSize(string $path, string $prompt): void
+    {
+        if ($this->sizeReported) {
+            return;
+        }
+
+        $size = $this->dimensions($path);
+
+        if ($size === null || ($size[0] === $this->width && $size[1] === $this->height)) {
+            return;
+        }
+
+        $this->sizeReported = true;
+
+        $this->logger->warning('El proveedor devolvió la imagen a otro tamaño del pedido.', [
+            'requested' => $this->width.'x'.$this->height,
+            'returned' => $size[0].'x'.$size[1],
+            'model' => $this->model,
+            'prompt' => mb_substr($prompt, 0, 160),
+        ]);
     }
 
     private function isValidImageData(string $bytes): bool
@@ -255,16 +372,229 @@ final class PollinationsGenerator implements ImageGenerator
 
     private function isValidImageFile(string $path): bool
     {
+        return $this->dimensions($path) !== null;
+    }
+
+    /**
+     * @return array{0: int, 1: int}|null
+     */
+    private function dimensions(string $path): ?array
+    {
         $info = @getimagesize($path);
 
-        return $info !== false
-            && ($info[0] ?? 0) > 0
-            && ($info[1] ?? 0) > 0;
+        if ($info === false) {
+            return null;
+        }
+
+        $width = (int) ($info[0] ?? 0);
+        $height = (int) ($info[1] ?? 0);
+
+        if ($width <= 0 || $height <= 0) {
+            return null;
+        }
+
+        return [$width, $height];
+    }
+
+    /**
+     * El modelo pinta a veces la escena como una copia enmarcada: bandas claras y planas arriba y
+     * abajo que en el vídeo se ven como dos franjas blancas cruzando el plano. Se recorta lo que
+     * queda dentro, se ajusta al aspecto pedido y se reescala. La imagen pierde un poco de encuadre
+     * y gana el plano entero.
+     */
+    private function trimLetterbox(string $path): void
+    {
+        $image = @imagecreatefromjpeg($path);
+
+        if ($image === false) {
+            return;
+        }
+
+        $width = imagesx($image);
+        $height = imagesy($image);
+        $bands = $this->bands($image, $width, $height);
+
+        if ($bands['top'] + $bands['bottom'] + $bands['left'] + $bands['right'] === 0) {
+            return;
+        }
+
+        if ($this->bandsTooBig($bands, $width, $height)) {
+            $this->logger->warning('El borde claro de la imagen ocupa demasiado para ser un marco; se deja intacta.', [
+                'path' => basename($path),
+                'bands' => $bands,
+                'size' => $width.'x'.$height,
+            ]);
+
+            return;
+        }
+
+        $innerWidth = $width - $bands['left'] - $bands['right'];
+        $innerHeight = $height - $bands['top'] - $bands['bottom'];
+        [$cropWidth, $cropHeight] = $this->largestCrop($innerWidth, $innerHeight);
+
+        $canvas = imagecreatetruecolor($this->width, $this->height);
+
+        if ($canvas === false) {
+            return;
+        }
+
+        imagecopyresampled(
+            $canvas,
+            $image,
+            0,
+            0,
+            $bands['left'] + (int) round(($innerWidth - $cropWidth) / 2),
+            $bands['top'] + (int) round(($innerHeight - $cropHeight) / 2),
+            $this->width,
+            $this->height,
+            $cropWidth,
+            $cropHeight,
+        );
+
+        if (imagejpeg($canvas, $path, $this->jpegQuality) === false) {
+            $this->logger->warning('No se pudo reescribir la imagen recortada; se queda con su marco.', [
+                'path' => basename($path),
+            ]);
+
+            return;
+        }
+
+        $this->logger->info('Imagen con marco recortada.', [
+            'path' => basename($path),
+            'bands' => $bands,
+        ]);
+    }
+
+    /**
+     * @return array{top: int, bottom: int, left: int, right: int}
+     */
+    private function bands(GdImage $image, int $width, int $height): array
+    {
+        $top = 0;
+        while ($top < $height && $this->isBandRow($image, $top, $width)) {
+            $top++;
+        }
+
+        // Una imagen entera plana no tiene marco: no tiene nada, y bandsTooBig la deja en paz.
+        if ($top >= $height) {
+            return ['top' => $top, 'bottom' => 0, 'left' => 0, 'right' => 0];
+        }
+
+        $bottom = 0;
+        while ($bottom < $height - $top && $this->isBandRow($image, $height - 1 - $bottom, $width)) {
+            $bottom++;
+        }
+
+        $left = 0;
+        while ($left < $width && $this->isBandColumn($image, $left, $height)) {
+            $left++;
+        }
+
+        if ($left >= $width) {
+            return ['top' => $top, 'bottom' => $bottom, 'left' => $left, 'right' => 0];
+        }
+
+        $right = 0;
+        while ($right < $width - $left && $this->isBandColumn($image, $width - 1 - $right, $height)) {
+            $right++;
+        }
+
+        return ['top' => $top, 'bottom' => $bottom, 'left' => $left, 'right' => $right];
+    }
+
+    /**
+     * @param  array{top: int, bottom: int, left: int, right: int}  $bands
+     */
+    private function bandsTooBig(array $bands, int $width, int $height): bool
+    {
+        $vertical = (int) floor($height * $this->bandMaxRatio);
+        $horizontal = (int) floor($width * $this->bandMaxRatio);
+
+        return $bands['top'] > $vertical
+            || $bands['bottom'] > $vertical
+            || $bands['left'] > $horizontal
+            || $bands['right'] > $horizontal;
+    }
+
+    /**
+     * El rectángulo más grande con el aspecto pedido que cabe dentro de lo que quedó tras el marco.
+     * Reescalar sin esto deformaría la escena, que es peor que perder unos píxeles de encuadre.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private function largestCrop(int $innerWidth, int $innerHeight): array
+    {
+        $target = $this->width / max(1, $this->height);
+
+        if ($innerWidth / max(1, $innerHeight) > $target) {
+            return [max(1, (int) round($innerHeight * $target)), $innerHeight];
+        }
+
+        return [$innerWidth, max(1, (int) round($innerWidth / $target))];
+    }
+
+    private function isBandRow(GdImage $image, int $y, int $width): bool
+    {
+        $samples = [];
+
+        for ($x = 0; $x < $width; $x += self::BAND_SAMPLE_STEP) {
+            $samples[] = $this->brightness($image, $x, $y);
+        }
+
+        return $this->isBand($samples);
+    }
+
+    private function isBandColumn(GdImage $image, int $x, int $height): bool
+    {
+        $samples = [];
+
+        for ($y = 0; $y < $height; $y += self::BAND_SAMPLE_STEP) {
+            $samples[] = $this->brightness($image, $x, $y);
+        }
+
+        return $this->isBand($samples);
+    }
+
+    /**
+     * Un marco es claro y plano. Solo claro no basta: la niebla también lo es, pero tiene textura.
+     *
+     * @param  list<float>  $samples
+     */
+    private function isBand(array $samples): bool
+    {
+        $count = count($samples);
+
+        if ($count === 0) {
+            return false;
+        }
+
+        $mean = array_sum($samples) / $count;
+
+        if ($mean < $this->bandBrightness) {
+            return false;
+        }
+
+        $variance = 0.0;
+
+        foreach ($samples as $sample) {
+            $variance += ($sample - $mean) ** 2;
+        }
+
+        return sqrt($variance / $count) <= $this->bandUniformity;
+    }
+
+    private function brightness(GdImage $image, int $x, int $y): float
+    {
+        $color = imagecolorat($image, $x, $y);
+
+        return 0.299 * (($color >> 16) & 0xFF)
+            + 0.587 * (($color >> 8) & 0xFF)
+            + 0.114 * ($color & 0xFF);
     }
 
     private function placeholder(string $prompt, int $seed): string
     {
-        $path = $this->cacheDirectory.DIRECTORY_SEPARATOR.'placeholder-'.sha1($prompt.(string) $seed).'.jpg';
+        $path = $this->cacheDirectory.DIRECTORY_SEPARATOR.'placeholder-'.sha1($this->fingerprint($prompt, $seed)).'.jpg';
         $this->files->ensureDirectoryExists($this->cacheDirectory);
 
         try {

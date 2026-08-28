@@ -12,6 +12,12 @@ use Symfony\Component\Process\Process;
 
 final class LibraryClipProcessor
 {
+    /** Silencio mínimo que silencedetect tiene que ver para anunciarlo. Por debajo no es cabeza. */
+    private const ONSET_MIN_SILENCE = 0.01;
+
+    /** Margen para dar un silence_start por «pegado al principio» del clip. */
+    private const ONSET_START_TOLERANCE = 0.05;
+
     private readonly string $ffmpeg;
 
     private readonly string $ffprobe;
@@ -22,6 +28,10 @@ final class LibraryClipProcessor
 
     private readonly float $sfxCeilingDbtp;
 
+    private readonly float $onsetThresholdDb;
+
+    private readonly float $onsetMaxSeconds;
+
     public function __construct(
         private Filesystem $files,
         Repository $config,
@@ -31,6 +41,8 @@ final class LibraryClipProcessor
         $this->nice = (int) $config->get('stories.ffmpeg.nice');
         $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
         $this->sfxCeilingDbtp = (float) $config->get('stories.audio.mix.sfx_true_peak_dbtp', -20.0);
+        $this->onsetThresholdDb = (float) $config->get('stories.audio.sfx.onset_threshold_db', -40.0);
+        $this->onsetMaxSeconds = (float) $config->get('stories.audio.sfx.onset_max_seconds', 1.5);
     }
 
     public function assertAudio(string $path): void
@@ -149,6 +161,51 @@ final class LibraryClipProcessor
         }
 
         return round($this->sfxCeilingDbtp - $truePeak, 3);
+    }
+
+    /**
+     * Cuánto silencio trae el clip antes de su primer golpe audible. Quien coloca el efecto lo
+     * resta del arranque: sin esto, un golpe anclado a la palabra exacta suena tarde por lo que
+     * dure esa cabeza, y el desfase no lo ve nadie porque no está en ningún número del pipeline.
+     *
+     * Devuelve 0.0 cuando el clip ya arranca sonando y cuando la medición no es concluyente: sin
+     * medición fiable no se adelanta un clip a ciegas. Un clip mudo de principio a fin lo descarta
+     * SoundVerifier antes de llegar aquí.
+     */
+    public function onsetSeconds(string $path): float
+    {
+        if ($this->onsetMaxSeconds <= 0.0) {
+            return 0.0;
+        }
+
+        $process = $this->run([
+            $this->ffmpeg, '-nostdin', '-hide_banner',
+            '-i', $path,
+            '-af', sprintf(
+                'silencedetect=noise=%.1fdB:d=%.3f',
+                $this->onsetThresholdDb,
+                self::ONSET_MIN_SILENCE,
+            ),
+            '-f', 'null',
+            '-',
+        ]);
+
+        $stderr = $process->getErrorOutput();
+
+        if (preg_match('/silence_start:\s*(-?\d+\.?\d*)/', $stderr, $start) !== 1) {
+            return 0.0;
+        }
+
+        // El primer silencio del clip no está al principio: entonces el clip empieza sonando.
+        if (abs((float) $start[1]) > self::ONSET_START_TOLERANCE) {
+            return 0.0;
+        }
+
+        if (preg_match('/silence_end:\s*(\d+\.?\d*)/', $stderr, $end) !== 1) {
+            return 0.0;
+        }
+
+        return round(min(max(0.0, (float) $end[1]), $this->onsetMaxSeconds), 3);
     }
 
     public function isLoopable(string $path, float $duration): bool

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\Story;
 use App\Exceptions\InvalidStoryException;
 use App\Exceptions\LlmGenerationException;
 use App\Services\Story\StoryGenerator;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
 use Tests\TestCase;
@@ -170,9 +172,73 @@ final class StoryGeneratorTest extends TestCase
         $this->generator()->generate();
     }
 
+    public function test_the_anthropic_provider_writes_the_same_story(): void
+    {
+        $fixture = $this->fixture();
+        $this->useAnthropic();
+
+        Http::fake([
+            'api.anthropic.com/*' => Http::response([
+                'stop_reason' => 'end_turn',
+                'content' => [
+                    ['type' => 'text', 'text' => json_encode($fixture, JSON_UNESCAPED_UNICODE)],
+                ],
+            ], 200),
+        ]);
+
+        $story = $this->generator()->generate();
+
+        $this->assertSame($fixture['title'], $story->title);
+        $this->assertCount(8, $story->scenes);
+
+        Http::assertSent(function (Request $request): bool {
+            $body = $request->data();
+            $schema = $body['output_config']['format']['schema'];
+
+            return $request->url() === 'https://api.anthropic.com/v1/messages'
+                && $request->hasHeader('x-api-key', 'clave-de-anthropic')
+                && $request->hasHeader('anthropic-version', '2023-06-01')
+                && $body['model'] === 'claude-haiku-4-5'
+                // El guion es la única tarea con presupuesto de salida propio.
+                && $body['max_tokens'] === 24000
+                && $schema['type'] === 'object'
+                && $schema['additionalProperties'] === false;
+        });
+    }
+
+    public function test_a_truncated_anthropic_response_throws_llm_generation_exception(): void
+    {
+        $this->useAnthropic();
+
+        Http::fake([
+            'api.anthropic.com/*' => Http::response([
+                'stop_reason' => 'max_tokens',
+                'content' => [
+                    ['type' => 'text', 'text' => '{"title":'],
+                ],
+            ], 200),
+        ]);
+
+        $this->expectException(LlmGenerationException::class);
+        $this->expectExceptionMessage('max_tokens');
+
+        $this->generator()->generate();
+    }
+
     private function generator(): StoryGenerator
     {
         return $this->app->make(StoryGenerator::class);
+    }
+
+    private function useAnthropic(): void
+    {
+        $config = $this->app->make('config');
+        $config->set('stories.llm.provider', 'anthropic');
+        $config->set('stories.llm.fallback', '');
+        $config->set('stories.llm.anthropic.api_key', 'clave-de-anthropic');
+        $config->set('stories.llm.anthropic.models.default', 'claude-haiku-4-5');
+
+        $this->app->forgetInstance(JsonLlm::class);
     }
 
     /**

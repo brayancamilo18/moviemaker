@@ -181,9 +181,7 @@ final class ContactSheetCommand extends Command
     private function subjectAbbrev(string $subject): string
     {
         return match ($subject) {
-            'protagonist' => 'P',
             'threat' => 'T',
-            'both' => 'PT',
             'environment' => 'E',
             'detail' => 'D',
             default => '',
@@ -200,7 +198,7 @@ final class ContactSheetCommand extends Command
             return [255, 210, 70];
         }
 
-        if (in_array($shot['subject'], ['protagonist', 'threat', 'both'], true)) {
+        if ($shot['subject'] === 'threat') {
             return [70, 220, 110];
         }
 

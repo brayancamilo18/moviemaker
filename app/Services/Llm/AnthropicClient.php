@@ -14,16 +14,23 @@ use Illuminate\Http\Client\Response;
 use JsonException;
 use Throwable;
 
-final class GeminiClient implements JsonLlm
+final class AnthropicClient implements JsonLlm
 {
+    /** Temperatura máxima que acepta la API, frente al 2 que admite Gemini. */
+    private const MAX_TEMPERATURE = 1.0;
+
     /**
      * @param  array<string, string>  $models  modelo por tarea, con 'default' como respaldo
+     * @param  array<string, int>  $maxTokens  tope de salida por tarea, con 'default' como respaldo
      */
     public function __construct(
         private Factory $http,
         private string $apiKey,
         private array $models,
+        private array $maxTokens,
         private string $baseUrl,
+        private string $version,
+        private string $beta,
         private int $timeout,
         private int $maxRetries,
     ) {}
@@ -40,54 +47,52 @@ final class GeminiClient implements JsonLlm
         float $temperature = 1.0,
     ): array {
         $response = $this->send([
-            'systemInstruction' => [
-                'parts' => [
-                    ['text' => $systemInstruction],
-                ],
-            ],
-            'contents' => [
+            'model' => $this->model($task),
+            'max_tokens' => $this->tokenBudget($task),
+            'temperature' => min($temperature, self::MAX_TEMPERATURE),
+            'system' => $systemInstruction,
+            'messages' => [
                 [
                     'role' => 'user',
-                    'parts' => [
-                        ['text' => $userPrompt],
-                    ],
+                    'content' => $userPrompt,
                 ],
             ],
-            'generationConfig' => [
-                'temperature' => $temperature,
-                'responseMimeType' => 'application/json',
-                'responseSchema' => $schema,
+            'output_config' => [
+                'format' => [
+                    'type' => 'json_schema',
+                    'schema' => AnthropicSchema::translate($schema),
+                ],
             ],
-        ], $task);
+        ]);
 
         /** @var array<string, mixed> $payload */
         $payload = $response->json() ?? [];
 
-        $finishReason = $payload['candidates'][0]['finishReason'] ?? null;
+        $stopReason = $payload['stop_reason'] ?? null;
 
-        if (in_array($finishReason, ['MAX_TOKENS', 'SAFETY'], true)) {
+        if (in_array($stopReason, ['max_tokens', 'refusal'], true)) {
             throw new LlmGenerationException(
-                "La generación de Gemini terminó de forma incompleta. Motivo: {$finishReason}.",
+                "La generación de Anthropic terminó de forma incompleta. Motivo: {$stopReason}.",
             );
         }
 
-        $text = $payload['candidates'][0]['content']['parts'][0]['text'] ?? null;
+        $text = $this->text($payload);
 
-        if (! is_string($text) || $text === '') {
-            throw new LlmGenerationException('Gemini no devolvió texto en la respuesta.');
+        if ($text === null) {
+            throw new LlmGenerationException('Anthropic no devolvió texto en la respuesta.');
         }
 
         try {
             $decoded = json_decode($text, true, flags: JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
             throw new LlmGenerationException(
-                'Gemini devolvió JSON inválido.',
+                'Anthropic devolvió JSON inválido.',
                 previous: $exception,
             );
         }
 
         if (! is_array($decoded)) {
-            throw new LlmGenerationException('Gemini no devolvió un objeto JSON.');
+            throw new LlmGenerationException('Anthropic no devolvió un objeto JSON.');
         }
 
         return $decoded;
@@ -111,22 +116,44 @@ final class GeminiClient implements JsonLlm
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function send(array $payload, LlmTask $task): Response
+    private function text(array $payload): ?string
+    {
+        $blocks = is_array($payload['content'] ?? null) ? $payload['content'] : [];
+
+        foreach ($blocks as $block) {
+            if (! is_array($block) || ($block['type'] ?? '') !== 'text') {
+                continue;
+            }
+
+            $text = $block['text'] ?? null;
+
+            if (is_string($text) && $text !== '') {
+                return $text;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function send(array $payload): Response
     {
         try {
             return $this->http
                 ->timeout($this->timeout)
                 ->acceptJson()
                 ->asJson()
+                ->withHeaders($this->headers())
                 ->retry(
                     $this->retryBackoff(),
                     when: $this->shouldRetry(...),
                 )
-                ->withQueryParameters(['key' => $this->apiKey])
-                ->post($this->endpoint($task), $payload);
+                ->post(rtrim($this->baseUrl, '/').'/messages', $payload);
         } catch (ConnectionException $exception) {
             throw new LlmUnavailableException(
-                'No se pudo conectar con Gemini.',
+                'No se pudo conectar con Anthropic.',
                 previous: $exception,
             );
         } catch (RequestException $exception) {
@@ -134,18 +161,31 @@ final class GeminiClient implements JsonLlm
         }
     }
 
-    private function endpoint(LlmTask $task): string
+    /**
+     * @return array<string, string>
+     */
+    private function headers(): array
     {
-        return sprintf(
-            '%s/models/%s:generateContent',
-            rtrim($this->baseUrl, '/'),
-            $this->model($task),
-        );
+        $headers = [
+            'x-api-key' => $this->apiKey,
+            'anthropic-version' => $this->version,
+        ];
+
+        if ($this->beta !== '') {
+            $headers['anthropic-beta'] = $this->beta;
+        }
+
+        return $headers;
     }
 
     private function model(LlmTask $task): string
     {
         return $this->models[$task->value] ?? $this->models['default'];
+    }
+
+    private function tokenBudget(LlmTask $task): int
+    {
+        return $this->maxTokens[$task->value] ?? $this->maxTokens['default'];
     }
 
     /**
@@ -169,13 +209,10 @@ final class GeminiClient implements JsonLlm
             return false;
         }
 
-        return in_array($exception->response->status(), [429, 500, 503], true);
+        // 529 es el overloaded_error propio de Anthropic, que no existe en el resto de APIs.
+        return in_array($exception->response->status(), [429, 500, 503, 529], true);
     }
 
-    /**
-     * Separa «este proveedor no está disponible», que justifica ir al respaldo, de «ha contestado
-     * y la respuesta no sirve», que es cosa nuestra y en otro proveedor fallaría igual.
-     */
     private function httpError(RequestException $exception): LlmGenerationException
     {
         $status = $exception->response->status();
@@ -183,23 +220,23 @@ final class GeminiClient implements JsonLlm
 
         return match ($status) {
             400 => new LlmGenerationException(
-                "La petición a Gemini es inválida (HTTP 400): {$detail}",
+                "La petición a Anthropic es inválida (HTTP 400): {$detail}",
                 previous: $exception,
             ),
-            403 => new LlmUnavailableException(
-                'Gemini rechazó la autenticación (HTTP 403). Revisa la clave API.',
+            401, 403 => new LlmUnavailableException(
+                "Anthropic rechazó la autenticación (HTTP {$status}). Revisa ANTHROPIC_API_KEY.",
                 previous: $exception,
             ),
-            429 => new LlmUnavailableException(
-                'Gemini está saturado (HTTP 429) tras varios reintentos.',
+            402, 429 => new LlmUnavailableException(
+                "Anthropic no atiende (HTTP {$status}): saturado o sin crédito.",
                 previous: $exception,
             ),
-            500, 503 => new LlmUnavailableException(
-                "Gemini no está disponible (HTTP {$status}) tras varios reintentos.",
+            500, 503, 529 => new LlmUnavailableException(
+                "Anthropic no está disponible (HTTP {$status}) tras varios reintentos.",
                 previous: $exception,
             ),
             default => new LlmUnavailableException(
-                "Gemini respondió con HTTP {$status}: {$detail}",
+                "Anthropic respondió con HTTP {$status}: {$detail}",
                 previous: $exception,
             ),
         };

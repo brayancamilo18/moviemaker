@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\Story;
 use App\DataObjects\StoryReview;
 use App\Exceptions\InvalidStoryException;
@@ -35,6 +36,7 @@ final class GenerateStoryCommand extends Command
         private StoryGenerator $generator,
         private StoryReviewer $reviewer,
         private StoryPromptBuilder $promptBuilder,
+        private JsonLlm $llm,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -116,6 +118,17 @@ final class GenerateStoryCommand extends Command
 
         $bar->finish();
         $this->newLine(2);
+
+        if ($succeeded > 0) {
+            $this->line('Escrito con '.$this->llm->name().'.');
+        }
+
+        $notice = $this->llm->fallbackNotice();
+
+        if ($notice !== null) {
+            $this->warn($notice);
+        }
+
         $this->renderVerdictSummary($verdicts);
 
         if ($succeeded === 0) {

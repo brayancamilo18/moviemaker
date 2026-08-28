@@ -42,10 +42,14 @@ final class SentenceSplitter
     /**
      * Parte narración por escenas para aplicar la pausa entre_escenas al final de cada una.
      *
+     * Se parte siempre el texto del guion. La fonética se aplica frase a frase con $ttsText, así
+     * que cada frase lleva su propia versión hablada y no hay dos listas que emparejar.
+     *
      * @param  list<array{order?: int, text?: string, narration?: string}>  $scenes
+     * @param  (callable(string): string)|null  $ttsText
      * @return list<NarrationSentence>
      */
-    public function splitScenes(array $scenes): array
+    public function splitScenes(array $scenes, ?callable $ttsText = null): array
     {
         $sentences = [];
         $order = 1;
@@ -65,6 +69,7 @@ final class SentenceSplitter
                     sceneOrder: $sceneOrder,
                     text: $part,
                     pauseAfter: $this->pauseAfter($part, $betweenScenes),
+                    ttsText: $ttsText === null ? $part : $ttsText($part),
                 );
                 $order++;
             }

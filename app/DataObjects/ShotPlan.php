@@ -9,8 +9,8 @@ namespace App\DataObjects;
  */
 final readonly class ShotPlan
 {
-    /** Esquema del fichero. */
-    public const VERSION = 1;
+    /** Esquema del fichero. Subió a 2 al añadir journeyLeg y lightStage a cada plano. */
+    public const VERSION = 2;
 
     /** Tolerancia al comparar los cortes persistidos con los recién planificados (1 ms). */
     private const TIME_TOLERANCE = 0.001;

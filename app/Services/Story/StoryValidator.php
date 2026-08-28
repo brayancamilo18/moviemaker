@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace App\Services\Story;
 
 use App\DataObjects\DirectedSfx;
+use App\DataObjects\NarrationWord;
 use App\DataObjects\Shot;
 use App\Services\Audio\NarrationClock;
+use App\Services\Audio\SfxAnchor;
+use App\Services\Audio\TranscriptTimer;
 use App\Services\Image\ShotPlanner;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
@@ -21,22 +24,26 @@ final class StoryValidator
 
     private const SHOT_SUM_TOLERANCE = 0.01;
 
-    /**
-     * @var list<string>
-     */
-    private const FIGURE_SUBJECTS = ['protagonist', 'threat', 'both'];
-
     private readonly string $storiesDirectory;
 
     private readonly float $tailSeconds;
 
+    private readonly float $maxShotDuration;
+
+    private readonly float $threatRatioMax;
+
     public function __construct(
         private NarrationClock $clock,
+        private TranscriptTimer $timer,
+        private SfxAnchor $anchor,
         private Filesystem $files,
         Repository $config,
     ) {
         $this->storiesDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds', 10.0);
+        $this->maxShotDuration = (float) $config->get('stories.shots.max_duration')
+            + (float) $config->get('stories.shots.max_hold_slack');
+        $this->threatRatioMax = (float) $config->get('stories.images.direction.threat_ratio_max');
     }
 
     /**
@@ -50,7 +57,9 @@ final class StoryValidator
         $context = $this->context($slug);
         $checks = [
             $this->checkMixDuration($context),
+            $this->checkTimingsCoverage($context),
             $this->checkShotSum($context),
+            $this->checkShotDuration($context),
             $this->checkDescriptions($context),
             $this->checkPlannerVersion($context),
             $this->checkPlaceholders($context),
@@ -58,6 +67,7 @@ final class StoryValidator
             $this->checkDetailRatio($context),
             $this->checkRevealTiming($context),
             $this->checkEffectsInShots($context),
+            $this->checkEffectAnchors($context),
         ];
 
         $passed = true;
@@ -86,7 +96,10 @@ final class StoryValidator
      *     shots: list<Shot>,
      *     placeholders: list<int>,
      *     directedSfx: list<DirectedSfx>,
-     *     shotsError: ?string
+     *     shotsError: ?string,
+     *     timings: list<array{start: float, end: float, alignment: string}>,
+     *     narrationWords: list<NarrationWord>,
+     *     timingsError: ?string
      * }
      */
     private function context(string $slug): array
@@ -101,8 +114,86 @@ final class StoryValidator
             'shotsPath' => $directory.DIRECTORY_SEPARATOR.'shots.json',
             'soundsPath' => $directory.DIRECTORY_SEPARATOR.'sounds.json',
             ...$this->loadShots($directory.DIRECTORY_SEPARATOR.'shots.json'),
+            ...$this->loadTimings($directory.DIRECTORY_SEPARATOR.'timings.json'),
             'directedSfx' => $this->loadDirectedSfx($directory.DIRECTORY_SEPARATOR.'sounds.json'),
         ];
+    }
+
+    /**
+     * Protege a las historias ya narradas: si la alineación se fue por posición o dejó cola de
+     * máster sin habla, todo lo que cuelga de timings.json va desplazado.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    private function checkTimingsCoverage(array $context): array
+    {
+        $label = 'timings.json ancla por texto y cubre el máster';
+
+        if (is_string($context['timingsError'] ?? null)) {
+            return $this->warn('timings_coverage', $label, (string) $context['timingsError']);
+        }
+
+        /** @var list<array{start: float, end: float, alignment: string}> $sentences */
+        $sentences = is_array($context['timings'] ?? null) ? $context['timings'] : [];
+
+        try {
+            $report = $this->timer->alignmentReport($sentences, (string) $context['narration']);
+        } catch (InvalidArgumentException|RuntimeException $exception) {
+            return $this->warn('timings_coverage', $label, $exception->getMessage());
+        }
+
+        $problems = $this->timer->alignmentProblems($report);
+
+        if ($problems !== []) {
+            return $this->fail(
+                'timings_coverage',
+                $label,
+                implode(' ', $problems).' Vuelve a alinear con story:narrate --timings-only.',
+                true,
+            );
+        }
+
+        return $this->ok('timings_coverage', $label, sprintf(
+            '%d/%d frases por texto, %.3f s sin cubrir.',
+            $report['textAligned'],
+            $report['sentences'],
+            $report['uncovered'],
+        ));
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    private function checkShotDuration(array $context): array
+    {
+        $label = sprintf('Ningún plano pasa de %.1f s', $this->maxShotDuration);
+
+        if (is_string($context['shotsError'] ?? null)) {
+            return $this->fail('shot_duration', $label, (string) $context['shotsError'], true);
+        }
+
+        $long = [];
+
+        foreach ($this->shots($context) as $shot) {
+            $duration = $shot->end - $shot->start;
+
+            if ($duration > $this->maxShotDuration + 0.0005) {
+                $long[] = sprintf('#%d (%.3f s)', $shot->order, $duration);
+            }
+        }
+
+        if ($long !== []) {
+            return $this->fail(
+                'shot_duration',
+                $label,
+                'Planos demasiado largos: '.implode(', ', $long).'. Regenera con story:images.',
+                true,
+            );
+        }
+
+        return $this->ok('shot_duration', $label, sprintf('%d plano(s) por debajo del techo.', count($this->shots($context))));
     }
 
     /**
@@ -271,7 +362,11 @@ final class StoryValidator
      */
     private function checkFigureRatio(array $context): array
     {
-        $label = 'Planos con figura ≥ 55%';
+        // La cámara es el oyente, así que la única figura posible es el ente y lo que hay que
+        // vigilar es el techo, no el suelo: un ente en uno de cada tres planos deja de acechar, y
+        // además son los planos que peor resuelve el proveedor gratuito.
+        $ceiling = (int) round($this->threatRatioMax * 100);
+        $label = "Planos con el ente ≤ {$ceiling}%";
 
         if (is_string($context['shotsError'] ?? null) || $this->shots($context) === []) {
             return $this->warn('figure_ratio', $label, is_string($context['shotsError'] ?? null) ? (string) $context['shotsError'] : 'No hay planos.');
@@ -281,16 +376,16 @@ final class StoryValidator
         $figures = 0;
 
         foreach ($shots as $shot) {
-            if (in_array($shot->subject, self::FIGURE_SUBJECTS, true)) {
+            if ($shot->subject === 'threat') {
                 $figures++;
             }
         }
 
         $ratio = $figures / count($shots);
         $percent = (int) round($ratio * 100);
-        $detail = sprintf('%d/%d planos con figura (%d%%).', $figures, count($shots), $percent);
+        $detail = sprintf('%d/%d planos con el ente (%d%%).', $figures, count($shots), $percent);
 
-        if ($ratio < 0.55) {
+        if ($ratio > $this->threatRatioMax) {
             return $this->warn('figure_ratio', $label, $detail);
         }
 
@@ -432,6 +527,87 @@ final class StoryValidator
     }
 
     /**
+     * Cuántos golpes van a sonar de verdad. Un efecto cuya palabra no está alineada no se coloca, así
+     * que sin este recuento la historia pierde sonidos y el informe de la mezcla es el único sitio
+     * donde se nota. Es aviso y no bloqueante: quedarse sin un golpe no rompe el vídeo.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    private function checkEffectAnchors(array $context): array
+    {
+        $label = 'Todo efecto cuelga de su palabra en la narración';
+        $effects = $this->effects($context);
+
+        if ($effects === []) {
+            return $this->ok('effect_anchors', $label, 'No hay efectos dirigidos.');
+        }
+
+        if (is_string($context['shotsError'] ?? null)) {
+            return $this->warn('effect_anchors', $label, (string) $context['shotsError']);
+        }
+
+        if (is_string($context['timingsError'] ?? null)) {
+            return $this->warn('effect_anchors', $label, (string) $context['timingsError']);
+        }
+
+        $byOrder = [];
+
+        foreach ($this->shots($context) as $shot) {
+            $byOrder[$shot->order] = $shot;
+        }
+
+        $words = $this->narrationWords($context);
+        $anchored = 0;
+        $lost = [];
+
+        foreach ($effects as $effect) {
+            $shot = $byOrder[$effect->shotIndex] ?? null;
+
+            // El plano inexistente ya lo denuncia checkEffectsInShots; aquí no se cuenta dos veces.
+            if (! $shot instanceof Shot) {
+                continue;
+            }
+
+            if ($this->anchor->resolve($shot, $effect, $words) !== null) {
+                $anchored++;
+
+                continue;
+            }
+
+            $lost[] = sprintf(
+                'plano %d «%s»',
+                $effect->shotIndex,
+                $effect->anchorWord === '' ? 'sin ancla' : $effect->anchorWord,
+            );
+        }
+
+        $detail = sprintf('%d de %d efecto(s) anclados.', $anchored, count($effects));
+
+        if ($lost !== []) {
+            return $this->warn(
+                'effect_anchors',
+                $label,
+                $detail.' No van a sonar: '.implode('; ', $lost).'.',
+            );
+        }
+
+        return $this->ok('effect_anchors', $label, $detail);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @return list<NarrationWord>
+     */
+    private function narrationWords(array $context): array
+    {
+        /** @var list<NarrationWord> $words */
+        $words = is_array($context['narrationWords'] ?? null) ? $context['narrationWords'] : [];
+
+        return $words;
+    }
+
+    /**
      * @return array{plannerVersion: ?int, shots: list<Shot>, placeholders: list<int>, shotsError: ?string}
      */
     private function loadShots(string $path): array
@@ -506,6 +682,79 @@ final class StoryValidator
             'shots' => $shots,
             'placeholders' => $placeholders,
             'shotsError' => null,
+        ];
+    }
+
+    /**
+     * @return array{timings: list<array{start: float, end: float, alignment: string}>, narrationWords: list<NarrationWord>, timingsError: ?string}
+     */
+    private function loadTimings(string $path): array
+    {
+        if (! $this->files->isFile($path)) {
+            return [
+                'timings' => [],
+                'narrationWords' => [],
+                'timingsError' => 'No hay timings.json. Ejecuta story:narrate primero.',
+            ];
+        }
+
+        try {
+            /** @var array<string, mixed> $decoded */
+            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return [
+                'timings' => [],
+                'narrationWords' => [],
+                'timingsError' => 'timings.json no es un JSON válido.',
+            ];
+        }
+
+        if (! isset($decoded['sentences']) || ! is_array($decoded['sentences'])) {
+            return [
+                'timings' => [],
+                'narrationWords' => [],
+                'timingsError' => 'timings.json no tiene el esquema esperado.',
+            ];
+        }
+
+        $sentences = [];
+        $words = [];
+
+        foreach ($decoded['sentences'] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $sentences[] = [
+                'start' => (float) ($row['start'] ?? 0),
+                'end' => (float) ($row['end'] ?? 0),
+                'alignment' => (string) ($row['alignment'] ?? ''),
+            ];
+
+            foreach (is_array($row['words'] ?? null) ? $row['words'] : [] as $word) {
+                if (is_array($word)) {
+                    $words[] = NarrationWord::fromArray($word);
+                }
+            }
+        }
+
+        if ($sentences === []) {
+            return [
+                'timings' => [],
+                'narrationWords' => [],
+                'timingsError' => 'timings.json no contiene frases.',
+            ];
+        }
+
+        usort(
+            $words,
+            static fn (NarrationWord $left, NarrationWord $right): int => $left->start <=> $right->start,
+        );
+
+        return [
+            'timings' => $sentences,
+            'narrationWords' => $words,
+            'timingsError' => null,
         ];
     }
 

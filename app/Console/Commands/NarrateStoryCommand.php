@@ -109,8 +109,7 @@ final class NarrateStoryCommand extends Command
             'skip_cache' => $skipCache,
         ];
 
-        // Fonética de narrationForTts(), partida por escena para conservar la pausa entre planos.
-        $sentences = $this->splitter->splitScenes($story->scenesForTts());
+        $sentences = $this->splitSentences($story);
 
         if ($sentences === []) {
             $this->error('El guion no tiene frases que narrar.');
@@ -121,6 +120,7 @@ final class NarrateStoryCommand extends Command
         $startedAt = microtime(true);
         $cacheHits = 0;
         $clips = [];
+        $alignment = null;
 
         try {
             $clips = $this->synthesizeSentences($sentences, $options, $skipCache, $cacheHits);
@@ -129,8 +129,9 @@ final class NarrateStoryCommand extends Command
             $timingsPath = null;
 
             if (! $skipTimings) {
-                $this->timer->time($slug, $master['wav'], $sentences);
+                $aligned = $this->timer->time($slug, $master['wav'], $sentences);
                 $timingsPath = $outputDirectory.DIRECTORY_SEPARATOR.'timings.json';
+                $alignment = $this->timer->alignmentReport($aligned, $master['wav']);
             }
 
             $this->writeAudioMetadata($storyFile, $payload, $master, $timingsPath, $voice, $speed, count($sentences));
@@ -152,7 +153,11 @@ final class NarrateStoryCommand extends Command
         $elapsed = microtime(true) - $startedAt;
         $this->renderSummary($master['duration'], count($sentences), $cacheHits, $elapsed);
 
-        return self::SUCCESS;
+        if ($alignment === null) {
+            return self::SUCCESS;
+        }
+
+        return $this->renderAlignmentReport($alignment);
     }
 
     /**
@@ -179,7 +184,7 @@ final class NarrateStoryCommand extends Command
             return self::FAILURE;
         }
 
-        $sentences = $this->splitter->splitScenes($story->scenesForTts());
+        $sentences = $this->splitSentences($story);
 
         if ($sentences === []) {
             $this->error('El guion no tiene frases que narrar.');
@@ -190,7 +195,7 @@ final class NarrateStoryCommand extends Command
         $this->info('Alineando el máster existente con whisper.cpp…');
 
         try {
-            $this->timer->time($slug, $wav, $sentences);
+            $aligned = $this->timer->time($slug, $wav, $sentences);
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
@@ -205,7 +210,62 @@ final class NarrateStoryCommand extends Command
 
         $this->info('timings.json listo: '.$timingsPath);
 
-        return self::SUCCESS;
+        return $this->renderAlignmentReport($this->timer->alignmentReport($aligned, $wav));
+    }
+
+    /**
+     * Presenta la calidad de la alineación y decide el código de salida: unos timings derivados
+     * arrastran a shots.json, sounds.json y al render, así que no pueden pasar por buenos.
+     *
+     * @param  array{sentences: int, textAligned: int, sequential: int, textRatio: float, speechEnd: float, narrationEnd: float, uncovered: float}  $report
+     */
+    private function renderAlignmentReport(array $report): int
+    {
+        $this->newLine();
+        $this->line(sprintf(
+            '  Alineación: %d/%d frases por texto (%.0f%%), %d por posición',
+            $report['textAligned'],
+            $report['sentences'],
+            $report['textRatio'] * 100,
+            $report['sequential'],
+        ));
+        $this->line(sprintf(
+            '  Habla hasta %.3f s de %.3f s (%.3f s sin cubrir)',
+            $report['speechEnd'],
+            $report['narrationEnd'],
+            $report['uncovered'],
+        ));
+
+        $problems = $this->timer->alignmentProblems($report);
+
+        if ($problems === []) {
+            return self::SUCCESS;
+        }
+
+        $this->newLine();
+
+        foreach ($problems as $problem) {
+            $this->error($problem);
+        }
+
+        $this->line('El máster de audio es válido y se conserva; lo sospechoso son los timings.');
+        $this->line('Vuelve a alinear con: story:narrate <guion> --timings-only');
+
+        return self::FAILURE;
+    }
+
+    /**
+     * Parte el guion original por escenas y le pega la fonética frase a frase: lo que se sintetiza
+     * y lo que se publica en timings.json salen de la misma frase.
+     *
+     * @return list<NarrationSentence>
+     */
+    private function splitSentences(Story $story): array
+    {
+        return $this->splitter->splitScenes(
+            $story->scenesForNarration(),
+            static fn (string $sentence): string => $story->textForTts($sentence),
+        );
     }
 
     /**
@@ -225,13 +285,14 @@ final class NarrateStoryCommand extends Command
         try {
             foreach ($sentences as $sentence) {
                 $bar->setMessage($this->truncate($sentence->text));
+                $spoken = $sentence->forTts();
 
-                if (! $skipCache && $this->tts->isCached($sentence->text, $options)) {
+                if (! $skipCache && $this->tts->isCached($spoken, $options)) {
                     $cacheHits++;
                 }
 
                 $clips[] = [
-                    'path' => $this->tts->synthesize($sentence->text, $options),
+                    'path' => $this->tts->synthesize($spoken, $options),
                     'pauseAfter' => $sentence->pauseAfter,
                 ];
 

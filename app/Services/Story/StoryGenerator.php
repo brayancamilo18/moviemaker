@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\Services\Story;
 
+use App\Contracts\JsonLlm;
 use App\DataObjects\Story;
 use App\DataObjects\StoryScene;
 use App\Exceptions\InvalidStoryException;
-use App\Services\Llm\GeminiClient;
+use App\Services\Llm\LlmTask;
 use Illuminate\Contracts\Config\Repository;
 
 final class StoryGenerator
@@ -20,7 +21,7 @@ final class StoryGenerator
 
     public function __construct(
         private StoryPromptBuilder $promptBuilder,
-        private GeminiClient $gemini,
+        private JsonLlm $llm,
         Repository $config,
     ) {
         $this->minScenes = (int) $config->get('stories.story.min_scenes');
@@ -30,10 +31,11 @@ final class StoryGenerator
 
     public function generate(string $premise = '', string $mode = 'folklore', ?string $loreSlug = null): Story
     {
-        $data = $this->gemini->generateJson(
+        $data = $this->llm->generateJson(
             $this->promptBuilder->systemInstruction(),
             $this->promptBuilder->userPrompt($premise, $mode, $loreSlug),
             StorySchema::get(),
+            task: LlmTask::Script,
         );
 
         $story = $this->hydrate($data);

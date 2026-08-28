@@ -5,13 +5,18 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Contracts\ImageGenerator;
+use App\Services\Image\PollinationsGenerator;
 use App\Services\Image\ShotPlanner;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
+use Psr\Log\AbstractLogger;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
+use Stringable;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
@@ -69,7 +74,7 @@ final class ImageGenerationTest extends TestCase
 
         $decoded = $this->plan($file);
         $this->assertSame(ShotPlanner::VERSION, $decoded['plannerVersion'] ?? null);
-        $this->assertSame(3, $decoded['plannerVersion']);
+        $this->assertSame(4, $decoded['plannerVersion']);
         $this->assertSame(
             'Directed hallway fog at dusk 1',
             $decoded['shots'][0]['description'] ?? null,
@@ -223,6 +228,260 @@ final class ImageGenerationTest extends TestCase
         $this->assertIsString($shot['imagePath']);
         $this->assertStringStartsWith('placeholder-', basename((string) $shot['imagePath']));
         $this->assertNotFalse(getimagesize((string) $shot['imagePath']));
+    }
+
+    public function test_asking_for_another_resolution_writes_another_cache_entry(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+
+        $first = $this->generatorAt(1024, 576)->generate('a dim hallway in fog', 7);
+        $second = $this->generatorAt(1920, 1080)->generate('a dim hallway in fog', 7);
+
+        $this->assertNotSame($first, $second);
+        $this->assertFileExists($first);
+        $this->assertFileExists($second);
+    }
+
+    public function test_the_placeholder_also_depends_on_the_resolution(): void
+    {
+        $this->fakePromptResponses('not-an-image');
+
+        $first = $this->generatorAt(1024, 576)->generate('a dim hallway in fog', 7);
+        $second = $this->generatorAt(1920, 1080)->generate('a dim hallway in fog', 7);
+
+        $this->assertStringStartsWith('placeholder-', basename($first));
+        $this->assertStringStartsWith('placeholder-', basename($second));
+        $this->assertNotSame($first, $second);
+    }
+
+    public function test_it_warns_once_when_the_provider_returns_another_size(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+        $logger = $this->fakeLogger();
+
+        $generator = $this->generatorAt(1024, 576);
+        $generator->generate('a dim hallway in fog', 7);
+        $generator->generate('another dim hallway in fog', 8);
+
+        $this->assertCount(1, $logger->warnings);
+        $this->assertSame('El proveedor devolvió la imagen a otro tamaño del pedido.', $logger->warnings[0]['message']);
+        $this->assertSame('1024x576', $logger->warnings[0]['context']['requested'] ?? null);
+        $this->assertSame('16x16', $logger->warnings[0]['context']['returned'] ?? null);
+    }
+
+    public function test_it_stays_quiet_when_the_provider_honours_the_size(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+        $logger = $this->fakeLogger();
+
+        $this->generatorAt(16, 16)->generate('a dim hallway in fog', 7);
+
+        $this->assertSame([], $logger->warnings);
+    }
+
+    public function test_it_waits_for_a_fallen_provider_instead_of_writing_a_placeholder(): void
+    {
+        config([
+            'stories.images.outage.probe_seconds' => 1,
+            'stories.images.outage.max_probes' => 5,
+        ]);
+
+        $jpeg = $this->jpeg();
+        $hits = 0;
+
+        $this->fakeHttp(function (Request $request) use (&$hits, $jpeg) {
+            if (! str_contains($request->url(), '/prompt/')) {
+                return Http::response('ok', 200);
+            }
+
+            $hits++;
+
+            // Dos rondas enteras de intentos sin que el proveedor conteste, y a la tercera vuelve.
+            if ($hits <= 6) {
+                throw new ConnectionException('el proveedor no responde');
+            }
+
+            return Http::response($jpeg, 200);
+        });
+
+        $logger = $this->fakeLogger();
+        $path = $this->generatorAt(16, 16)->generate('a dim hallway in fog', 7);
+
+        $this->assertStringNotContainsString('placeholder-', basename($path));
+        $this->assertNotFalse(getimagesize($path));
+        $this->assertSame(
+            'El proveedor de imágenes no responde: se espera en vez de escribir un marcador.',
+            $logger->warnings[0]['message'] ?? null,
+        );
+        $this->assertSame('1/5', $logger->warnings[0]['context']['intento'] ?? null);
+    }
+
+    public function test_it_settles_for_a_placeholder_when_the_outage_never_ends(): void
+    {
+        config([
+            'stories.images.outage.probe_seconds' => 1,
+            'stories.images.outage.max_probes' => 2,
+        ]);
+
+        $this->fakeHttp(function (Request $request) {
+            if (! str_contains($request->url(), '/prompt/')) {
+                return Http::response('ok', 200);
+            }
+
+            throw new ConnectionException('el proveedor no responde');
+        });
+
+        $path = $this->generatorAt(16, 16)->generate('a dim hallway in fog', 7);
+
+        $this->assertStringStartsWith('placeholder-', basename($path));
+    }
+
+    public function test_a_corrupt_body_does_not_wait_for_the_provider(): void
+    {
+        config([
+            'stories.images.outage.probe_seconds' => 1,
+            'stories.images.outage.max_probes' => 5,
+        ]);
+
+        $this->fakePromptResponses('not-an-image');
+        $logger = $this->fakeLogger();
+
+        $path = $this->generatorAt(16, 16)->generate('a dim hallway in fog', 7);
+
+        $this->assertStringStartsWith('placeholder-', basename($path));
+        $this->assertSame(
+            'No se pudo generar la imagen. Se usará un marcador.',
+            $logger->warnings[0]['message'] ?? null,
+        );
+        $this->assertSame(0, $logger->warnings[0]['context']['probes'] ?? null);
+    }
+
+    public function test_it_trims_the_white_frame_the_model_paints(): void
+    {
+        $this->fakePromptResponses($this->letterboxedJpeg(256, 144, 20));
+
+        $path = $this->generatorAt(256, 144)->generate('a dim hallway in fog', 7);
+
+        $this->assertSame([256, 144], $this->sizeOf($path));
+        $this->assertSame(0, $this->topBandOf($path));
+    }
+
+    public function test_it_leaves_a_clean_image_byte_for_byte(): void
+    {
+        $bytes = $this->letterboxedJpeg(256, 144, 0);
+        $this->fakePromptResponses($bytes);
+
+        $path = $this->generatorAt(256, 144)->generate('a dim hallway in fog', 7);
+
+        $this->assertSame(sha1($bytes), sha1((string) file_get_contents($path)));
+    }
+
+    public function test_a_light_border_too_wide_to_be_a_frame_is_left_alone(): void
+    {
+        $bytes = $this->letterboxedJpeg(256, 144, 60);
+        $this->fakePromptResponses($bytes);
+        $logger = $this->fakeLogger();
+
+        $path = $this->generatorAt(256, 144)->generate('a dim hallway in fog', 7);
+
+        $this->assertSame(sha1($bytes), sha1((string) file_get_contents($path)));
+        $this->assertSame(
+            'El borde claro de la imagen ocupa demasiado para ser un marco; se deja intacta.',
+            $logger->warnings[0]['message'] ?? null,
+        );
+    }
+
+    /**
+     * @return array{0: int, 1: int}
+     */
+    private function sizeOf(string $path): array
+    {
+        $info = getimagesize($path);
+        $this->assertNotFalse($info);
+
+        return [(int) $info[0], (int) $info[1]];
+    }
+
+    private function topBandOf(string $path): int
+    {
+        $image = imagecreatefromjpeg($path);
+        $this->assertNotFalse($image);
+
+        $width = imagesx($image);
+        $rows = 0;
+
+        while ($rows < imagesy($image)) {
+            $sum = 0.0;
+
+            for ($x = 0; $x < $width; $x += 8) {
+                $color = imagecolorat($image, $x, $rows);
+                $sum += 0.299 * (($color >> 16) & 0xFF)
+                    + 0.587 * (($color >> 8) & 0xFF)
+                    + 0.114 * ($color & 0xFF);
+            }
+
+            if ($sum / max(1, (int) ceil($width / 8)) < 200) {
+                break;
+            }
+
+            $rows++;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Una escena de gradiente con bandas blancas planas arriba y abajo, como las que devuelve el
+     * proveedor cuando decide pintar la imagen enmarcada.
+     */
+    private function letterboxedJpeg(int $width, int $height, int $band): string
+    {
+        $image = imagecreatetruecolor($width, $height);
+
+        for ($y = 0; $y < $height; $y++) {
+            $tone = 20 + (int) round(60 * $y / max(1, $height - 1));
+            $inBand = $y < $band || $y >= $height - $band;
+            $color = $inBand
+                ? imagecolorallocate($image, 254, 254, 254)
+                : imagecolorallocate($image, $tone, $tone, $tone + 10);
+
+            imageline($image, 0, $y, $width - 1, $y, (int) $color);
+        }
+
+        ob_start();
+        imagejpeg($image, null, 100);
+
+        return (string) ob_get_clean();
+    }
+
+    private function generatorAt(int $width, int $height): PollinationsGenerator
+    {
+        config([
+            'stories.images.width' => $width,
+            'stories.images.height' => $height,
+        ]);
+
+        return $this->app->make(PollinationsGenerator::class);
+    }
+
+    private function fakeLogger(): object
+    {
+        $logger = new class extends AbstractLogger
+        {
+            /** @var list<array{message: string, context: array<string, mixed>}> */
+            public array $warnings = [];
+
+            public function log(mixed $level, string|Stringable $message, array $context = []): void
+            {
+                if ((string) $level === 'warning') {
+                    $this->warnings[] = ['message' => (string) $message, 'context' => $context];
+                }
+            }
+        };
+
+        $this->app->instance(LoggerInterface::class, $logger);
+
+        return $logger;
     }
 
     /**
