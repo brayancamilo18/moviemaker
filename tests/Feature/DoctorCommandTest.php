@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Contracts\TextToSpeech;
 use App\Services\Diagnostics\EnvironmentDoctor;
+use App\Services\Llm\ProviderHealthStore;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
@@ -245,9 +246,11 @@ final class DoctorCommandTest extends TestCase
 
         $this->assertTrue($checks['salida a Gemini']['ok']);
         $this->assertSame('green', $checks['salida a Gemini']['status']);
+        $this->assertStringContainsString('Mide este proceso, no el worker.', $checks['salida a Gemini']['detail']);
         $this->assertStringContainsString('HTTP 404', $checks['salida a Gemini']['detail']);
         $this->assertTrue($checks['salida a Anthropic']['ok']);
         $this->assertStringContainsString('HTTP 401', $checks['salida a Anthropic']['detail']);
+        $this->assertStringContainsString('Sin informe', $checks['salud LLM guardada']['detail']);
     }
 
     public function test_a_connection_exception_is_a_blocking_network_failure(): void
@@ -271,6 +274,26 @@ final class DoctorCommandTest extends TestCase
         $this->assertSame('red', $gemini['status']);
         $this->assertStringContainsString('Could not resolve host', $gemini['detail']);
         $this->assertStringContainsString('Sin DNS', $gemini['detail']);
+        $this->assertStringContainsString('Mide este proceso, no el worker.', $gemini['detail']);
+    }
+
+    public function test_doctor_shows_the_last_stored_llm_health_and_who_measured_it(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+        $this->app->make(ProviderHealthStore::class)->put([
+            'gemini' => ['reachable' => true],
+            'anthropic' => ['reachable' => false],
+        ], measuredBy: 'pipeline');
+
+        $this->app->forgetInstance(EnvironmentDoctor::class);
+
+        $salud = $this->checksByName()['salud LLM guardada'];
+
+        $this->assertTrue($salud['ok']);
+        $this->assertStringContainsString('medido por pipeline', $salud['detail']);
+        $this->assertStringContainsString('Gemini: alcanzable', $salud['detail']);
+        $this->assertStringContainsString('Anthropic: no alcanzable', $salud['detail']);
     }
 
     public function test_a_stale_queue_job_is_an_amber_warning_with_the_worker_command(): void

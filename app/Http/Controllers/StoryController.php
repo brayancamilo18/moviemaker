@@ -7,7 +7,9 @@ namespace App\Http\Controllers;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
 use App\Models\Story;
-use App\Services\Llm\ProviderHealth;
+use App\Services\Llm\AnthropicClient;
+use App\Services\Llm\GeminiClient;
+use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
@@ -26,7 +28,9 @@ final class StoryController extends Controller
     public function __construct(
         private readonly ResponseFactory $inertia,
         private readonly StoryPromptBuilder $prompts,
-        private readonly ProviderHealth $health,
+        private readonly ProviderHealthStore $store,
+        private readonly GeminiClient $gemini,
+        private readonly AnthropicClient $anthropic,
         private readonly PipelineDispatcher $dispatcher,
         private readonly PipelineProgress $progress,
         private readonly QueueHealth $queue,
@@ -35,9 +39,16 @@ final class StoryController extends Controller
 
     public function create(): Response
     {
+        $stored = $this->store->get();
+
         return $this->inertia->render('NewStory', [
             'creatures' => $this->creatures(),
-            'providers' => $this->health->check(live: false),
+            'providers' => $this->providers($stored),
+            'health' => $stored === null ? null : [
+                'measuredAt' => $stored['measuredAt'],
+                'ageSeconds' => $stored['ageSeconds'],
+                'measuredBy' => $stored['measuredBy'],
+            ],
             'defaults' => [
                 'mode' => (string) $this->config->get('stories.story.default_mode'),
             ],
@@ -211,6 +222,59 @@ final class StoryController extends Controller
         );
 
         return $creatures;
+    }
+
+    /**
+     * @param  array{report: array<string, mixed>, measuredAt: string, ageSeconds: int, measuredBy: string}|null  $stored
+     * @return array{gemini: array<string, mixed>, anthropic: array<string, mixed>}
+     */
+    private function providers(?array $stored): array
+    {
+        $providers = [
+            'gemini' => $this->unmeasured($this->gemini),
+            'anthropic' => $this->unmeasured($this->anthropic),
+        ];
+
+        if ($stored === null) {
+            return $providers;
+        }
+
+        foreach (['gemini', 'anthropic'] as $key) {
+            $entry = $stored['report'][$key] ?? null;
+
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            $providers[$key] = array_merge($providers[$key], $entry);
+            $providers[$key]['ageSeconds'] = $stored['ageSeconds'];
+            $providers[$key]['measuredAt'] = $stored['measuredAt'];
+
+            if (! isset($providers[$key]['measuredBy']) || $providers[$key]['measuredBy'] === null || $providers[$key]['measuredBy'] === '') {
+                $providers[$key]['measuredBy'] = $stored['measuredBy'];
+            }
+        }
+
+        return $providers;
+    }
+
+    /**
+     * @return array{name: string, configured: bool, reachable: null, latencyMs: null, error: null, errorClass: null, hint: null, measuredBy: null, ageSeconds: null, measuredAt: null}
+     */
+    private function unmeasured(GeminiClient|AnthropicClient $client): array
+    {
+        return [
+            'name' => $client->name(),
+            'configured' => $client->isAvailable(),
+            'reachable' => null,
+            'latencyMs' => null,
+            'error' => null,
+            'errorClass' => null,
+            'hint' => null,
+            'measuredBy' => null,
+            'ageSeconds' => null,
+            'measuredAt' => null,
+        ];
     }
 
     private function loreName(string $slug): string

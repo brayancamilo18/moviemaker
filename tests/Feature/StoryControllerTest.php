@@ -7,9 +7,11 @@ namespace Tests\Feature;
 use App\Enums\ReviewVerdict;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
+use App\Jobs\CheckProviderHealth;
 use App\Jobs\RunPipelineStep;
 use App\Models\Story;
 use App\Models\StoryEvent;
+use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\PipelineProgress;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
@@ -43,6 +45,7 @@ final class StoryControllerTest extends TestCase
                 ->where('defaults.mode', 'folklore')
                 ->has('providers.gemini.name')
                 ->where('providers.gemini.reachable', null)
+                ->where('health', null)
                 ->has('providers.anthropic.name')
                 ->has('creatures')
                 ->where('creatures.0.name', fn (string $name): bool => $name !== '')
@@ -65,6 +68,44 @@ final class StoryControllerTest extends TestCase
             );
 
         $this->assertNotNull($used->created_at);
+    }
+
+    public function test_the_create_page_reads_stored_provider_health(): void
+    {
+        $this->app->make(ProviderHealthStore::class)->put([
+            'gemini' => [
+                'name' => 'gemini-3.6-flash',
+                'configured' => true,
+                'reachable' => true,
+                'latencyMs' => 180,
+                'error' => null,
+                'errorClass' => null,
+                'hint' => null,
+                'measuredBy' => 'pipeline',
+            ],
+            'anthropic' => [
+                'name' => 'claude-haiku-4-5',
+                'configured' => true,
+                'reachable' => false,
+                'latencyMs' => 40,
+                'error' => 'saturado',
+                'errorClass' => null,
+                'hint' => null,
+                'measuredBy' => 'worker',
+            ],
+        ], measuredBy: 'worker');
+
+        $this->get(route('stories.create'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->component('NewStory')
+                ->where('providers.gemini.reachable', true)
+                ->where('providers.gemini.latencyMs', 180)
+                ->where('providers.gemini.measuredBy', 'pipeline')
+                ->where('providers.anthropic.reachable', false)
+                ->where('providers.anthropic.measuredBy', 'worker')
+                ->where('health.measuredBy', 'worker')
+                ->where('health.ageSeconds', 0));
     }
 
     public function test_store_creates_a_draft_and_queues_script_without_chaining_by_default(): void
@@ -317,17 +358,26 @@ final class StoryControllerTest extends TestCase
                 ->where('queue.failed', 0));
     }
 
-    public function test_live_llm_health_returns_json_without_throwing(): void
+    public function test_posting_llm_health_queues_a_check_without_calling_providers(): void
     {
-        Http::fake(['*' => Http::response(['unexpected' => true], 200)]);
+        Bus::fake();
+        Http::fake();
         Http::preventStrayRequests();
 
-        $this->post(route('llm.health'))
+        $this->post(route('llm.health.check'))
             ->assertOk()
-            ->assertJsonStructure([
-                'gemini' => ['name', 'configured', 'reachable', 'latencyMs', 'error', 'errorClass', 'hint'],
-                'anthropic' => ['name', 'configured', 'reachable', 'latencyMs', 'error', 'errorClass', 'hint'],
-            ]);
+            ->assertJsonPath('queued', true)
+            ->assertJsonPath('last', null);
+
+        Bus::assertDispatched(CheckProviderHealth::class);
+        Http::assertNothingSent();
+    }
+
+    public function test_getting_llm_health_reads_the_store(): void
+    {
+        $this->get(route('llm.health'))
+            ->assertOk()
+            ->assertExactJson(['report' => null]);
     }
 
     /**

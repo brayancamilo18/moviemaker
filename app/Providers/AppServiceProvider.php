@@ -16,6 +16,8 @@ use App\Services\Image\PollinationsGenerator;
 use App\Services\Llm\AnthropicClient;
 use App\Services\Llm\FailoverJsonLlm;
 use App\Services\Llm\GeminiClient;
+use App\Services\Llm\ProviderHealth;
+use App\Services\Llm\ProviderHealthStore;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
@@ -55,6 +57,8 @@ class AppServiceProvider extends ServiceProvider
                 primary: $primary,
                 fallback: $fallback,
                 logger: $app->make(LoggerInterface::class),
+                store: $app->make(ProviderHealthStore::class),
+                health: $app->make(ProviderHealth::class),
             );
         });
 

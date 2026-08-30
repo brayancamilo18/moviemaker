@@ -104,9 +104,18 @@ final class ProviderHealth
         return $report;
     }
 
+    public function hintFor(string $message): ?string
+    {
+        return $this->hint($message);
+    }
+
     private function hint(string $message): ?string
     {
         $haystack = strtolower($message);
+
+        if (str_contains($haystack, '429') || str_contains($haystack, 'saturado')) {
+            return 'Cuota diaria de Gemini agotada. Se renueva a medianoche del Pacífico, las 9:00 en España.';
+        }
 
         if (str_contains($haystack, 'could not resolve host')) {
             return 'Sin DNS. Comprueba la conexión de red de la máquina.';

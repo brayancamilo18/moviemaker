@@ -6,7 +6,8 @@ use App\Http\Controllers\QueueController;
 use App\Http\Controllers\StoryController;
 use App\Http\Controllers\StoryInspectionController;
 use App\Http\Controllers\StoryMediaController;
-use App\Services\Llm\ProviderHealth;
+use App\Jobs\CheckProviderHealth;
+use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\QueueHealth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -24,8 +25,13 @@ Route::post('/stories/{story:id}/discard', [StoryController::class, 'discard'])-
 Route::get('/stories/{story}/inspection/script', [StoryInspectionController::class, 'script'])
     ->name('stories.inspection.script');
 Route::get('/stories/{story}/review', [StoryController::class, 'review'])->name('review.show');
-Route::post('/llm/health', function (ProviderHealth $health) {
-    return response()->json($health->check(live: true));
+Route::post('/llm/health', function (ProviderHealthStore $store) {
+    CheckProviderHealth::dispatch();
+
+    return response()->json(['queued' => true, 'last' => $store->get()]);
+})->name('llm.health.check');
+Route::get('/llm/health', function (ProviderHealthStore $store) {
+    return response()->json($store->get() ?? ['report' => null]);
 })->name('llm.health');
 Route::get('/pipeline', function (QueueHealth $queue) {
     return Inertia::render('Pipeline', [

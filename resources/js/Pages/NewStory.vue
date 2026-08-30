@@ -1,10 +1,14 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, onUnmounted, ref } from 'vue';
 import { Head, useForm } from '@inertiajs/vue3';
+
+const POLL_MS = 2000;
+const POLL_MAX_MS = 30000;
 
 const props = defineProps({
     creatures: { type: Array, required: true },
     providers: { type: Object, required: true },
+    health: { type: Object, default: null },
     defaults: { type: Object, required: true },
 });
 
@@ -36,6 +40,11 @@ const status = ref({
     gemini: { ...props.providers.gemini },
     anthropic: { ...props.providers.anthropic },
 });
+const healthMeasuredAt = ref(props.health?.measuredAt ?? null);
+const healthAgeSeconds = ref(props.health?.ageSeconds ?? null);
+const healthMeasuredBy = ref(props.health?.measuredBy ?? null);
+
+let pollTimer = null;
 
 const filteredCreatures = computed(() => {
     const needle = query.value.trim().toLowerCase();
@@ -111,19 +120,65 @@ function xsrfToken() {
     return decodeURIComponent(cookie.slice('XSRF-TOKEN='.length));
 }
 
+function jsonHeaders() {
+    return {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-XSRF-TOKEN': xsrfToken(),
+    };
+}
+
+function applyHealth(payload) {
+    if (!payload?.report) {
+        return;
+    }
+
+    status.value = {
+        gemini: { ...status.value.gemini, ...payload.report.gemini },
+        anthropic: { ...status.value.anthropic, ...payload.report.anthropic },
+    };
+    healthMeasuredAt.value = payload.measuredAt ?? null;
+    healthAgeSeconds.value = payload.ageSeconds ?? null;
+    healthMeasuredBy.value = payload.measuredBy ?? null;
+}
+
+function hasNewMeasurement(payload, before) {
+    return Boolean(payload?.measuredAt) && payload.measuredAt !== before;
+}
+
+function stopPoll() {
+    if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+function measuredLabel(row) {
+    const age = row.ageSeconds ?? healthAgeSeconds.value;
+    const who = row.measuredBy || healthMeasuredBy.value;
+
+    if (age === null || age === undefined || age > 3600) {
+        return { stale: true, text: 'sin medir recientemente' };
+    }
+
+    const when = age < 60 ? `medido hace ${age} s` : `medido hace ${Math.floor(age / 60)} min`;
+    const suffix = who ? ` (${who})` : '';
+
+    return { stale: false, text: when + suffix };
+}
+
 async function checkNow() {
     checking.value = true;
     checkFailed.value = '';
+    stopPoll();
+
+    const before = healthMeasuredAt.value;
 
     try {
         const response = await fetch('/llm/health', {
             method: 'POST',
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest',
-                'X-XSRF-TOKEN': xsrfToken(),
-            },
+            headers: jsonHeaders(),
             credentials: 'same-origin',
         });
 
@@ -131,17 +186,62 @@ async function checkNow() {
             throw new Error(`HTTP ${response.status}`);
         }
 
-        const payload = await response.json();
-        status.value = {
-            gemini: { ...payload.gemini },
-            anthropic: { ...payload.anthropic },
-        };
+        const posted = await response.json();
+
+        if (hasNewMeasurement(posted.last, before)) {
+            applyHealth(posted.last);
+            checking.value = false;
+
+            return;
+        }
+
+        let elapsed = 0;
+
+        pollTimer = setInterval(async () => {
+            elapsed += POLL_MS;
+
+            if (elapsed >= POLL_MAX_MS) {
+                stopPoll();
+                checkFailed.value = 'El worker no ha respondido. Comprueba que esté corriendo.';
+                checking.value = false;
+
+                return;
+            }
+
+            try {
+                const get = await fetch('/llm/health', {
+                    method: 'GET',
+                    headers: jsonHeaders(),
+                    credentials: 'same-origin',
+                });
+
+                if (!get.ok) {
+                    throw new Error(`HTTP ${get.status}`);
+                }
+
+                const payload = await get.json();
+
+                if (hasNewMeasurement(payload, before)) {
+                    applyHealth(payload);
+                    stopPoll();
+                    checking.value = false;
+                }
+            } catch (error) {
+                stopPoll();
+                checkFailed.value = error instanceof Error ? error.message : 'La comprobación falló.';
+                checking.value = false;
+            }
+        }, POLL_MS);
     } catch (error) {
         checkFailed.value = error instanceof Error ? error.message : 'La comprobación falló.';
-    } finally {
         checking.value = false;
+        stopPoll();
     }
 }
+
+onUnmounted(() => {
+    stopPoll();
+});
 
 function submit() {
     if (!canSubmit.value) {
@@ -187,6 +287,12 @@ function submit() {
                         </span>
                     </div>
                     <p v-if="row.hint" class="pl-5 text-[11px] text-warn">{{ row.hint }}</p>
+                    <p
+                        class="pl-5 text-[11px]"
+                        :class="measuredLabel(row).stale ? 'text-text-dim' : 'text-text-muted'"
+                    >
+                        {{ measuredLabel(row).text }}
+                    </p>
                 </div>
             </div>
 

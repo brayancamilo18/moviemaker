@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\Llm\ProviderHealth;
+use App\Services\Llm\ProviderHealthStore;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 
@@ -18,6 +19,7 @@ final class LlmHealthCommand extends Command
 
     public function __construct(
         private ProviderHealth $health,
+        private ProviderHealthStore $store,
     ) {
         parent::__construct();
     }
@@ -65,6 +67,8 @@ final class LlmHealthCommand extends Command
         foreach ($hints as $hint) {
             $this->warn($hint);
         }
+
+        $this->store->put($report, measuredBy: 'cli');
 
         return self::SUCCESS;
     }

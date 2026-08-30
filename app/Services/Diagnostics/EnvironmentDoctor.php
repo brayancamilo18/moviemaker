@@ -8,6 +8,7 @@ use App\Contracts\TextToSpeech;
 use App\Models\Story;
 use App\Services\Audio\AudioLibrary;
 use App\Services\Audio\TranscriptTimer;
+use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\QueueHealth;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Config\Repository;
@@ -58,6 +59,7 @@ final class EnvironmentDoctor
         private readonly DatabaseManager $db,
         private readonly QueueHealth $queue,
         private readonly Factory $http,
+        private readonly ProviderHealthStore $store,
     ) {
         $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
         $this->ffprobe = (string) $config->get('stories.ffmpeg.ffprobe');
@@ -111,6 +113,7 @@ final class EnvironmentDoctor
             ),
             $this->internet('salida a Gemini', $this->geminiProbe),
             $this->internet('salida a Anthropic', $this->anthropicProbe),
+            $this->storedLlmHealth(),
             $this->configCache(),
             $this->manifest(),
             $this->sourceResolution(),
@@ -237,7 +240,7 @@ final class EnvironmentDoctor
                 $name,
                 false,
                 true,
-                ($hint !== null ? $hint.' ' : '').$message,
+                'Mide este proceso, no el worker. '.($hint !== null ? $hint.' ' : '').$message,
                 'php artisan config:clear && php artisan cache:clear',
             );
         }
@@ -246,8 +249,60 @@ final class EnvironmentDoctor
             $name,
             true,
             true,
-            'HTTP '.$response->status(),
+            'Mide este proceso, no el worker. HTTP '.$response->status(),
         );
+    }
+
+    /**
+     * @return array{name: string, ok: bool, blocking: bool, status: string, detail: string, fix: string}
+     */
+    private function storedLlmHealth(): array
+    {
+        $stored = $this->store->get();
+
+        if ($stored === null) {
+            return $this->check(
+                'salud LLM guardada',
+                true,
+                false,
+                'Sin informe. El worker aún no ha medido (o la caché está vacía).',
+            );
+        }
+
+        return $this->check(
+            'salud LLM guardada',
+            true,
+            false,
+            sprintf(
+                'Último informe medido por %s hace %s. Gemini: %s. Anthropic: %s.',
+                $stored['measuredBy'],
+                $this->agePhrase($stored['ageSeconds']),
+                $this->reachablePhrase($stored['report']['gemini'] ?? null),
+                $this->reachablePhrase($stored['report']['anthropic'] ?? null),
+            ),
+        );
+    }
+
+    private function reachablePhrase(mixed $entry): string
+    {
+        if (! is_array($entry) || ! array_key_exists('reachable', $entry)) {
+            return 'sin dato';
+        }
+
+        return match ($entry['reachable']) {
+            true => 'alcanzable',
+            false => 'no alcanzable',
+            default => 'sin dato',
+        };
+    }
+
+    private function agePhrase(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return $seconds.' s';
+        }
+
+        return intdiv($seconds, 60).' min';
     }
 
     /**
