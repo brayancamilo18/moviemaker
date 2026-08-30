@@ -193,9 +193,10 @@ final class EnvironmentDoctor
         }
 
         $detail = sprintf(
-            'QUEUE_CONNECTION=%s: %d pendientes, %d fallidos.',
+            'QUEUE_CONNECTION=%s: %d en espera, %d en curso, %d fallidos.',
             $connection,
-            $status['pending'],
+            $status['waiting'],
+            $status['running'],
             $status['failed'],
         );
 
@@ -204,8 +205,17 @@ final class EnvironmentDoctor
                 'cola',
                 false,
                 false,
-                $this->workerCommand.' — '.$detail.' Ninguno se está ejecutando.',
+                $this->workerCommand.' — '.$detail.' Worker parado.',
                 $this->workerCommand,
+            );
+        }
+
+        if ($status['workerBusy']) {
+            return $this->check(
+                'cola',
+                false,
+                false,
+                $detail.' Worker ocupado; hay cola detrás.',
             );
         }
 

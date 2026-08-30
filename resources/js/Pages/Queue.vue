@@ -6,9 +6,12 @@ defineProps({
         type: Object,
         default: () => ({
             pending: 0,
-            oldestPendingSeconds: null,
+            waiting: 0,
+            running: 0,
+            oldestWaitingSeconds: null,
             failed: 0,
             likelyNoWorker: false,
+            workerBusy: false,
         }),
     },
 });
@@ -28,6 +31,13 @@ defineProps({
             >
                 <span class="h-2 w-2 rounded-full bg-amber" />
                 worker parado
+            </span>
+            <span
+                v-else-if="queue.workerBusy"
+                class="flex items-center gap-2 text-text-muted"
+            >
+                <span class="h-2 w-2 rounded-full bg-text-dim" />
+                worker ocupado
             </span>
         </div>
     </div>

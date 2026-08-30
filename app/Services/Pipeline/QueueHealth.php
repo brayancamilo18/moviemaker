@@ -15,16 +15,19 @@ final class QueueHealth
     ) {}
 
     /**
-     * @return array{pending: int, oldestPendingSeconds: int|null, failed: int, likelyNoWorker: bool}
+     * @return array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}
      */
     public function status(): array
     {
         if ((string) $this->config->get('queue.default') !== 'database') {
             return [
                 'pending' => 0,
-                'oldestPendingSeconds' => null,
+                'waiting' => 0,
+                'running' => 0,
+                'oldestWaitingSeconds' => null,
                 'failed' => 0,
                 'likelyNoWorker' => false,
+                'workerBusy' => false,
             ];
         }
 
@@ -38,24 +41,27 @@ final class QueueHealth
             $this->config->get('queue.failed.database'),
         );
 
-        $pending = (int) $jobsConnection->table($jobsTable)->count();
-        // reserved_at relleno = un worker ya lo tiene; no cuenta como espera.
+        $waiting = (int) $jobsConnection->table($jobsTable)->whereNull('reserved_at')->count();
+        $running = (int) $jobsConnection->table($jobsTable)->whereNotNull('reserved_at')->count();
         $oldestAvailableAt = $jobsConnection->table($jobsTable)
             ->whereNull('reserved_at')
             ->min('available_at');
-        $waiting = (int) $jobsConnection->table($jobsTable)->whereNull('reserved_at')->count();
 
-        $oldestPendingSeconds = $oldestAvailableAt === null
+        $oldestWaitingSeconds = $oldestAvailableAt === null
             ? null
             : max(0, now()->getTimestamp() - (int) $oldestAvailableAt);
 
         return [
-            'pending' => $pending,
-            'oldestPendingSeconds' => $oldestPendingSeconds,
+            'pending' => $waiting + $running,
+            'waiting' => $waiting,
+            'running' => $running,
+            'oldestWaitingSeconds' => $oldestWaitingSeconds,
             'failed' => (int) $failedConnection->table($failedTable)->count(),
-            'likelyNoWorker' => $waiting >= 1
-                && $oldestPendingSeconds !== null
-                && $oldestPendingSeconds > $staleAfter,
+            'likelyNoWorker' => $waiting > 0
+                && $running === 0
+                && $oldestWaitingSeconds !== null
+                && $oldestWaitingSeconds > $staleAfter,
+            'workerBusy' => $running > 0 && $waiting > 0,
         ];
     }
 }

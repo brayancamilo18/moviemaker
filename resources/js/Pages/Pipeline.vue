@@ -43,9 +43,12 @@ const WORKER_COMMAND = 'php artisan queue:work --tries=1';
 
 const EMPTY_QUEUE = {
     pending: 0,
-    oldestPendingSeconds: null,
+    waiting: 0,
+    running: 0,
+    oldestWaitingSeconds: null,
     failed: 0,
     likelyNoWorker: false,
+    workerBusy: false,
 };
 
 const props = defineProps({
@@ -82,23 +85,6 @@ const scriptReadyIdle = computed(
 const fallbackOn = computed(() => Boolean(snapshot.value?.used_fallback));
 
 const queue = computed(() => snapshot.value?.queue ?? props.queue ?? EMPTY_QUEUE);
-
-const staleDraft = computed(() => {
-    if (!props.story || snapshot.value?.status !== 'borrador' || inProgress.value) {
-        return false;
-    }
-
-    const created = snapshot.value?.created_at ?? props.story.created_at;
-    const limit = snapshot.value?.stale_draft_seconds ?? 30;
-
-    if (!created) {
-        return false;
-    }
-
-    return (Date.now() - new Date(created).getTime()) / 1000 > limit;
-});
-
-const showWorkerWarning = computed(() => Boolean(queue.value.likelyNoWorker) || staleDraft.value);
 
 const verdictMeta = computed(() => {
     const key = snapshot.value?.verdict;
@@ -293,7 +279,7 @@ onUnmounted(() => {
             </div>
 
             <div
-                v-if="showWorkerWarning"
+                v-if="queue.likelyNoWorker"
                 class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
             >
                 <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
@@ -312,6 +298,16 @@ onUnmounted(() => {
                         </button>
                     </div>
                 </div>
+            </div>
+
+            <div
+                v-else-if="queue.workerBusy"
+                class="mb-5 flex items-start gap-3.5 border border-border bg-surface-2 px-4 py-3.5"
+            >
+                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-text-dim" />
+                <p class="text-[12.5px] font-extrabold text-text-muted">
+                    El worker está ocupado con otro trabajo. Hay {{ queue.waiting }} en cola por delante.
+                </p>
             </div>
 
             <div
@@ -415,7 +411,7 @@ onUnmounted(() => {
                 </div>
                 <div class="mt-4 flex flex-wrap gap-2">
                     <Link
-                        :href="`/review?story=${story.id}&tab=script`"
+                        :href="`/stories/${story.slug}/review`"
                         class="border border-border px-3.5 py-2 text-[12px] text-text-muted hover:border-[#3A3B40] hover:text-text"
                     >
                         Leer el guion

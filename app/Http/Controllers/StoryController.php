@@ -102,6 +102,15 @@ final class StoryController extends Controller
         ]);
     }
 
+    public function review(Story $story): Response
+    {
+        return $this->inertia->render('Review', [
+            'story' => $story,
+            'status_label' => $story->status->label(),
+            'status_color' => $story->status->color(),
+        ]);
+    }
+
     public function progress(Story $story): JsonResponse
     {
         return response()->json($this->snapshot($story->fresh() ?? $story));
@@ -198,7 +207,7 @@ final class StoryController extends Controller
     }
 
     /**
-     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, oldestPendingSeconds: int|null, failed: int, likelyNoWorker: bool}}
+     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}}
      */
     private function snapshot(Story $story): array
     {

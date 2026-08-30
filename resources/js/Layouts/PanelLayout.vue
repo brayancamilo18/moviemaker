@@ -17,7 +17,15 @@ const links = [
     { n: '7', label: 'Paquete', href: '/package' },
 ];
 
-const isActive = (href) => page.url.split('?')[0] === href;
+const isActive = (href) => {
+    const path = page.url.split('?')[0];
+
+    if (href === '/review') {
+        return path === '/review' || /\/stories\/.+\/review$/.test(path);
+    }
+
+    return path === href;
+};
 </script>
 
 <template>

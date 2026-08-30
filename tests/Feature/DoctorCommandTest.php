@@ -293,7 +293,41 @@ final class DoctorCommandTest extends TestCase
         $this->assertFalse($cola['ok']);
         $this->assertSame('amber', $cola['status']);
         $this->assertStringContainsString('QUEUE_CONNECTION=database', $cola['detail']);
+        $this->assertStringContainsString('Worker parado', $cola['detail']);
         $this->assertSame('php artisan queue:work --tries=1', $cola['fix']);
+    }
+
+    public function test_a_busy_worker_is_distinguished_from_a_missing_one(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+        $this->app->make('config')->set('queue.default', 'database');
+
+        DB::table('jobs')->insert([
+            [
+                'queue' => 'default',
+                'payload' => '{}',
+                'attempts' => 1,
+                'reserved_at' => now()->getTimestamp(),
+                'available_at' => now()->getTimestamp() - 60,
+                'created_at' => now()->getTimestamp() - 60,
+            ],
+            [
+                'queue' => 'default',
+                'payload' => '{}',
+                'attempts' => 0,
+                'reserved_at' => null,
+                'available_at' => now()->getTimestamp() - 60,
+                'created_at' => now()->getTimestamp() - 60,
+            ],
+        ]);
+
+        $cola = $this->checksByName()['cola'];
+
+        $this->assertFalse($cola['ok']);
+        $this->assertSame('amber', $cola['status']);
+        $this->assertStringContainsString('Worker ocupado', $cola['detail']);
+        $this->assertSame('', $cola['fix']);
     }
 
     public function test_a_cached_config_file_is_an_amber_warning(): void

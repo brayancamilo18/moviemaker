@@ -190,9 +190,12 @@ final class StoryControllerTest extends TestCase
             ->assertJsonPath('used_fallback', true)
             ->assertJsonPath('failed_step', null)
             ->assertJsonPath('queue.pending', 0)
-            ->assertJsonPath('queue.oldestPendingSeconds', null)
+            ->assertJsonPath('queue.waiting', 0)
+            ->assertJsonPath('queue.running', 0)
+            ->assertJsonPath('queue.oldestWaitingSeconds', null)
             ->assertJsonPath('queue.failed', 0)
-            ->assertJsonPath('queue.likelyNoWorker', false);
+            ->assertJsonPath('queue.likelyNoWorker', false)
+            ->assertJsonPath('queue.workerBusy', false);
     }
 
     public function test_retry_queues_the_failed_step_without_chaining(): void
@@ -246,6 +249,30 @@ final class StoryControllerTest extends TestCase
             ->assertRedirect(route('queue'));
 
         $this->assertSame(StoryStatus::Discarded, $story->fresh()?->status);
+    }
+
+    public function test_the_review_page_receives_the_story(): void
+    {
+        $story = Story::factory()->create([
+            'status' => StoryStatus::ScriptReady,
+            'title' => 'The mill chain',
+            'mode' => StoryMode::Folklore,
+            'lore_name' => 'El Silbón',
+        ]);
+
+        $this->get(route('review.show', $story))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->component('Review')
+                ->where('story.id', $story->id)
+                ->where('story.slug', $story->slug)
+                ->where('status_label', StoryStatus::ScriptReady->label())
+                ->where('status_color', StoryStatus::ScriptReady->color()));
+    }
+
+    public function test_the_bare_review_route_redirects_to_the_queue(): void
+    {
+        $this->get(route('review'))->assertRedirect(route('queue'));
     }
 
     public function test_the_listing_pipeline_route_still_renders(): void
