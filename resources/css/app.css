@@ -2,8 +2,65 @@
 
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
+@source '../js/**/*.vue';
 
 @theme {
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
+    --color-bg: #0b0b0c;
+    --color-surface: #0e0e10;
+    --color-surface-2: #131316;
+    --color-surface-3: #191a1d;
+    --color-border: #2a2b2f;
+    --color-border-soft: #1b1c1f;
+    --color-text: #e8e6e3;
+    --color-text-muted: #8e8d8a;
+    --color-text-dim: #605f5d;
+    --color-amber: #e2a044;
+    --color-amber-hover: #f0bc72;
+    --color-ok: #4fa265;
+    --color-warn: #d6c044;
+    --color-bad: #d24a3c;
+}
+
+html,
+body,
+#app {
+    height: 100%;
+}
+
+body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+:focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 2px;
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2b2f #0b0b0c;
+}
+
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: #0b0b0c;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: #2a2b2f;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: #3a3b40;
 }
