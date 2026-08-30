@@ -19,7 +19,7 @@ final class PipelineDispatcher
 
     public function __construct(private Dispatcher $bus) {}
 
-    public function advance(Story $story): void
+    public function advance(Story $story, bool $chain = true): void
     {
         $step = match ($story->status) {
             StoryStatus::Draft => 'script',
@@ -34,15 +34,15 @@ final class PipelineDispatcher
             return;
         }
 
-        $this->bus->dispatch(new RunPipelineStep($story->id, $step));
+        $this->bus->dispatch(new RunPipelineStep($story->id, $step, $chain));
     }
 
-    public function runFrom(Story $story, string $step): void
+    public function runFrom(Story $story, string $step, bool $chain = true): void
     {
         if (! in_array($step, self::STEPS, true)) {
             throw new InvalidArgumentException("Paso de pipeline desconocido: {$step}.");
         }
 
-        $this->bus->dispatch(new RunPipelineStep($story->id, $step));
+        $this->bus->dispatch(new RunPipelineStep($story->id, $step, $chain));
     }
 }

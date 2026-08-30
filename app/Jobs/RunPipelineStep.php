@@ -32,6 +32,7 @@ final class RunPipelineStep implements ShouldQueue
      * @var list<string>
      */
     private const METRIC_KEYS = [
+        'slug',
         'title',
         'verdict',
         'score',
@@ -52,6 +53,7 @@ final class RunPipelineStep implements ShouldQueue
     public function __construct(
         public int $storyId,
         public string $step,
+        public bool $chain = true,
     ) {}
 
     public function handle(
@@ -88,7 +90,9 @@ final class RunPipelineStep implements ShouldQueue
         $this->transitionAfterStep($story);
         $progress->clear($this->storyId);
 
-        $dispatcher->advance($story->fresh() ?? $story);
+        if ($this->chain) {
+            $dispatcher->advance($story->fresh() ?? $story, $this->chain);
+        }
     }
 
     public function failed(?Throwable $e): void
@@ -148,9 +152,15 @@ final class RunPipelineStep implements ShouldQueue
         $updates = [];
 
         foreach (self::METRIC_KEYS as $key) {
-            if (array_key_exists($key, $result) && $result[$key] !== null) {
-                $updates[$key] = $result[$key];
+            if (! array_key_exists($key, $result) || $result[$key] === null) {
+                continue;
             }
+
+            if ($key === 'slug' && trim((string) $story->slug) !== '') {
+                continue;
+            }
+
+            $updates[$key] = $result[$key];
         }
 
         if ($updates !== []) {
