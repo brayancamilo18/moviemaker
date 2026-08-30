@@ -92,6 +92,9 @@ return [
         'failed_message_max' => 2000,
         'stale_job_seconds' => 15,
         'stale_draft_seconds' => 30,
+        // El render deja intermedios en storage/app. Por debajo de esto el paso ni se encola.
+        'work_path' => storage_path('app'),
+        'min_free_disk_bytes' => 5 * 1024 * 1024 * 1024,
     ],
 
     'doctor' => [

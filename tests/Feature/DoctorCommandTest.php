@@ -383,6 +383,22 @@ final class DoctorCommandTest extends TestCase
             ->expectsOutputToContain('php artisan config:clear && php artisan cache:clear');
     }
 
+    public function test_step_preflight_is_printed_grouped_by_step(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $this->artisan('story:doctor')
+            ->expectsOutputToContain('Comprobación previa por paso')
+            ->expectsOutputToContain('Narración')
+            ->expectsOutputToContain('Imágenes')
+            ->expectsOutputToContain('Sonido')
+            ->expectsOutputToContain('Render')
+            ->expectsOutputToContain('sidecar de Kokoro')
+            ->expectsOutputToContain('core kit')
+            ->expectsOutputToContain('filtros de ffmpeg');
+    }
+
     public function test_the_stories_table_is_reported_as_queryable(): void
     {
         $this->writeWhisperModel();

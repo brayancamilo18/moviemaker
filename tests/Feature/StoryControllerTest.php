@@ -14,6 +14,7 @@ use App\Models\Story;
 use App\Models\StoryEvent;
 use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\PipelineProgress;
+use App\Services\Tts\KokoroTts;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Bus;
@@ -206,6 +207,8 @@ final class StoryControllerTest extends TestCase
                 ->where('snapshot.progress.label', 'guion')
                 ->where('queue.likelyNoWorker', false)
                 ->where('snapshot.queue.likelyNoWorker', false)
+                ->where('snapshot.preflight.step', null)
+                ->where('snapshot.preflight.checks', [])
             );
     }
 
@@ -218,6 +221,13 @@ final class StoryControllerTest extends TestCase
             'score' => 8.4,
             'scene_count' => 12,
             'used_fallback' => true,
+        ]);
+
+        Http::fake([
+            'http://127.0.0.1:8020/health' => Http::response([
+                'status' => 'ok',
+                'model_loaded' => true,
+            ], 200),
         ]);
 
         $this->get(route('stories.progress', $story))
@@ -237,7 +247,66 @@ final class StoryControllerTest extends TestCase
             ->assertJsonPath('queue.oldestWaitingSeconds', null)
             ->assertJsonPath('queue.failed', 0)
             ->assertJsonPath('queue.likelyNoWorker', false)
-            ->assertJsonPath('queue.workerBusy', false);
+            ->assertJsonPath('queue.workerBusy', false)
+            ->assertJsonPath('preflight.step', 'narration')
+            ->assertJsonPath('preflight.checks.0.name', 'sidecar de Kokoro')
+            ->assertJsonPath('preflight.checks.0.ok', true);
+    }
+
+    public function test_progress_preflight_lists_failures_for_the_next_step(): void
+    {
+        Http::fake([
+            'http://127.0.0.1:8020/health' => Http::response('boom', 500),
+        ]);
+
+        $story = Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+
+        $this->get(route('stories.progress', $story))
+            ->assertOk()
+            ->assertJsonPath('preflight.step', 'narration')
+            ->assertJsonPath('preflight.checks.0.name', 'sidecar de Kokoro')
+            ->assertJsonPath('preflight.checks.0.ok', false)
+            ->assertJsonPath('preflight.checks.0.fix', KokoroTts::START_COMMAND);
+    }
+
+    public function test_progress_preflight_for_images_reports_an_unknown_provider(): void
+    {
+        $this->app->make('config')->set('stories.images.provider', '');
+
+        $story = Story::factory()->create(['status' => StoryStatus::Narrated]);
+
+        $this->get(route('stories.progress', $story))
+            ->assertOk()
+            ->assertJsonPath('preflight.step', 'images')
+            ->assertJsonPath('preflight.checks.0.name', 'proveedor de imágenes')
+            ->assertJsonPath('preflight.checks.0.ok', false);
+    }
+
+    public function test_progress_preflight_for_render_reports_low_disk(): void
+    {
+        $this->app->make('config')->set('stories.pipeline.min_free_disk_bytes', PHP_INT_MAX);
+
+        $story = Story::factory()->create(['status' => StoryStatus::Mixed]);
+
+        $checks = $this->get(route('stories.progress', $story))
+            ->assertOk()
+            ->assertJsonPath('preflight.step', 'render')
+            ->json('preflight.checks');
+
+        $this->assertIsArray($checks);
+
+        $disk = null;
+
+        foreach ($checks as $check) {
+            if (($check['name'] ?? null) === 'espacio en disco') {
+                $disk = $check;
+                break;
+            }
+        }
+
+        $this->assertIsArray($disk);
+        $this->assertFalse($disk['ok']);
+        $this->assertNotSame('', $disk['fix']);
     }
 
     public function test_retry_queues_the_failed_step_without_chaining(): void

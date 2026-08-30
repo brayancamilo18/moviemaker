@@ -60,6 +60,7 @@ const props = defineProps({
 
 const snapshot = ref(props.snapshot ?? emptySnapshot(props.story, props.progress, props.queue));
 const copied = ref(false);
+const copiedFix = ref('');
 let timer = 0;
 
 const heading = computed(() => {
@@ -85,6 +86,12 @@ const scriptReadyIdle = computed(
 const fallbackOn = computed(() => Boolean(snapshot.value?.used_fallback));
 
 const queue = computed(() => snapshot.value?.queue ?? props.queue ?? EMPTY_QUEUE);
+
+const blockedChecks = computed(() =>
+    (snapshot.value?.preflight?.checks ?? []).filter((check) => check && check.ok === false),
+);
+
+const preflightBlocked = computed(() => blockedChecks.value.length > 0);
 
 const verdictMeta = computed(() => {
     const key = snapshot.value?.verdict;
@@ -140,6 +147,7 @@ function emptySnapshot(story, progress, queueStatus) {
         created_at: story.created_at ?? null,
         stale_draft_seconds: 30,
         queue: queueStatus ?? EMPTY_QUEUE,
+        preflight: { step: null, checks: [] },
     };
 }
 
@@ -149,6 +157,20 @@ async function copyWorkerCommand() {
         copied.value = true;
         window.setTimeout(() => {
             copied.value = false;
+        }, 2000);
+    } catch {
+        // El comando sigue visible para copiar a mano.
+    }
+}
+
+async function copyFix(fix) {
+    try {
+        await navigator.clipboard.writeText(fix);
+        copiedFix.value = fix;
+        window.setTimeout(() => {
+            if (copiedFix.value === fix) {
+                copiedFix.value = '';
+            }
         }, 2000);
     } catch {
         // El comando sigue visible para copiar a mano.
@@ -175,10 +197,6 @@ function shouldStop(current) {
     }
 
     if (current.status === 'pendiente de revision') {
-        return true;
-    }
-
-    if (current.status === 'guion listo' && !current.progress) {
         return true;
     }
 
@@ -324,6 +342,36 @@ onUnmounted(() => {
                 </p>
             </div>
 
+            <div
+                v-if="preflightBlocked"
+                class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
+            >
+                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
+                <div class="min-w-0 flex-1">
+                    <p class="text-[12.5px] font-extrabold text-amber">
+                        El siguiente paso no puede ejecutarse todavía
+                    </p>
+                    <ul class="mt-3 flex flex-col gap-3">
+                        <li v-for="check in blockedChecks" :key="check.name">
+                            <p class="text-[12px] text-text">
+                                <span class="font-extrabold">{{ check.name }}.</span>
+                                {{ check.detail }}
+                            </p>
+                            <div v-if="check.fix" class="mt-2 flex items-center gap-2">
+                                <code class="flex-1 truncate border border-[#6B4C1C] bg-[#151006] px-2.5 py-1.5 font-mono text-[11.5px] text-text">{{ check.fix }}</code>
+                                <button
+                                    type="button"
+                                    class="shrink-0 border border-[#6B4C1C] px-3 py-1.5 text-[11px] font-extrabold text-amber hover:bg-[#22180A]"
+                                    @click="copyFix(check.fix)"
+                                >
+                                    {{ copiedFix === check.fix ? 'Copiado' : 'Copiar' }}
+                                </button>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
             <div class="flex flex-col gap-px border border-[#1F2024] bg-[#1F2024]">
                 <div
                     v-for="(step, index) in steps"
@@ -433,7 +481,8 @@ onUnmounted(() => {
                     </button>
                     <button
                         type="button"
-                        class="bg-amber px-3.5 py-2 text-[12px] font-extrabold text-[#151006] hover:bg-amber-hover"
+                        class="bg-amber px-3.5 py-2 text-[12px] font-extrabold text-[#151006] hover:bg-amber-hover disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="preflightBlocked"
                         @click="continuePipeline"
                     >
                         Continuar el pipeline

@@ -14,6 +14,7 @@ use App\Services\Llm\ProviderHealthStore;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
+use App\Services\Pipeline\StepPreflight;
 use App\Services\Story\StoryPromptBuilder;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Config\Repository;
@@ -36,6 +37,7 @@ final class StoryController extends Controller
         private readonly PipelineDispatcher $dispatcher,
         private readonly PipelineProgress $progress,
         private readonly QueueHealth $queue,
+        private readonly StepPreflight $preflight,
         private readonly Repository $config,
         private readonly Dispatcher $bus,
     ) {}
@@ -299,7 +301,7 @@ final class StoryController extends Controller
     }
 
     /**
-     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}}
+     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}, preflight: array{step: string|null, checks: list<array{name: string, ok: bool, detail: string, fix: string}>}}
      */
     private function snapshot(Story $story): array
     {
@@ -320,6 +322,7 @@ final class StoryController extends Controller
             'created_at' => $story->created_at?->toIso8601String(),
             'stale_draft_seconds' => (int) $this->config->get('stories.pipeline.stale_draft_seconds'),
             'queue' => $this->queue->status(),
+            'preflight' => $this->preflight->forStory($story),
         ];
     }
 }

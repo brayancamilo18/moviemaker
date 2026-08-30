@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\Diagnostics\EnvironmentDoctor;
+use App\Services\Pipeline\StepPreflight;
 use Illuminate\Console\Command;
 
 final class DoctorCommand extends Command
@@ -15,8 +16,19 @@ final class DoctorCommand extends Command
 
     protected $description = 'Comprueba binarios, modelos, credenciales, cola y salida a internet del pipeline';
 
+    /**
+     * @var array<string, string>
+     */
+    private const STEP_LABELS = [
+        'narration' => 'Narración',
+        'images' => 'Imágenes',
+        'sound' => 'Sonido',
+        'render' => 'Render',
+    ];
+
     public function __construct(
         private EnvironmentDoctor $doctor,
+        private StepPreflight $preflight,
     ) {
         parent::__construct();
     }
@@ -36,6 +48,8 @@ final class DoctorCommand extends Command
                 $checks,
             ),
         );
+
+        $this->printStepPreflight();
 
         $blocking = $this->doctor->hasBlockingFailure($checks);
         $failed = $this->failedChecks($checks);
@@ -82,6 +96,30 @@ final class DoctorCommand extends Command
         $this->info('Entorno listo.');
 
         return self::SUCCESS;
+    }
+
+    private function printStepPreflight(): void
+    {
+        $this->newLine();
+        $this->line('Comprobación previa por paso');
+
+        foreach ($this->preflight->all() as $step => $checks) {
+            $this->newLine();
+            $this->line(self::STEP_LABELS[$step] ?? $step);
+
+            $this->table(
+                ['Comprobación', 'Estado', 'Detalle', 'Cómo se arregla'],
+                array_map(
+                    fn (array $check): array => [
+                        $check['name'],
+                        $check['ok'] ? '<fg=green>OK</>' : '<fg=red>FALLO</>',
+                        $check['detail'],
+                        $check['fix'],
+                    ],
+                    $checks,
+                ),
+            );
+        }
     }
 
     /**
