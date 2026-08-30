@@ -6,6 +6,7 @@ namespace App\Http\Middleware;
 
 use App\Enums\StoryStatus;
 use App\Models\Story;
+use App\Services\Llm\SpendReport;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -15,6 +16,10 @@ final class HandleInertiaRequests extends Middleware
      * @var string
      */
     protected $rootView = 'app';
+
+    public function __construct(
+        private readonly SpendReport $spend,
+    ) {}
 
     public function version(Request $request): ?string
     {
@@ -26,24 +31,15 @@ final class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
+        $month = $this->spend->forMonth();
+
         return [
             ...parent::share($request),
             'pendingReviewCount' => Story::query()
                 ->where('status', StoryStatus::PendingReview)
                 ->count(),
-            'monthlySpend' => $this->monthlySpend(),
+            'monthlySpend' => $month['euro'],
+            'monthlySpendTitle' => $month['title'],
         ];
-    }
-
-    private function monthlySpend(): string
-    {
-        $sum = (float) Story::query()
-            ->whereBetween('created_at', [
-                now()->copy()->startOfMonth(),
-                now()->copy()->endOfMonth(),
-            ])
-            ->sum('llm_cost_usd');
-
-        return number_format($sum, 2, ',', '').' €';
     }
 }

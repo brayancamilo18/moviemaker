@@ -6,6 +6,7 @@ const page = usePage();
 
 const pendingReviewCount = computed(() => Number(page.props.pendingReviewCount ?? 0));
 const monthlySpend = computed(() => String(page.props.monthlySpend ?? '0,00 €'));
+const monthlySpendTitle = computed(() => String(page.props.monthlySpendTitle ?? ''));
 
 const links = [
     { n: '1', label: 'Cola de trabajo', href: '/queue', badge: true },
@@ -61,7 +62,7 @@ const isActive = (href) => {
 
             <div class="mt-auto flex justify-between border-t border-border-soft px-4 py-3.5 text-[11px] text-text-muted">
                 <span>Gasto del mes</span>
-                <span class="font-extrabold text-amber">{{ monthlySpend }}</span>
+                <span class="font-extrabold text-amber" :title="monthlySpendTitle || undefined">{{ monthlySpend }}</span>
             </div>
         </aside>
 

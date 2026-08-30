@@ -189,9 +189,65 @@ final class QueueControllerTest extends TestCase
                 ->where('stats.2.value', 1)
                 ->where('stats.2.note', 'agosto')
                 ->where('stats.3.label', 'Gasto del mes')
-                ->where('stats.3.value', '14,82 €')
+                ->where('stats.3.value', '13,63 €')
                 ->where('stats.3.note', 'respaldo Claude Haiku')
+                ->where('stats.3.title', '0 llamadas · 0 tokens de entrada · 0 de salida · 14,82 $')
+                ->where('monthlySpend', '13,63 €')
             );
+    }
+
+    public function test_llm_spend_lists_stories_and_steps_by_cost(): void
+    {
+        $expensive = Story::factory()->create([
+            'title' => 'La más cara',
+            'llm_cost_usd' => 2.0,
+            'llm_input_tokens' => 1000,
+            'llm_output_tokens' => 200,
+        ]);
+        $expensive->events()->create([
+            'type' => 'llm_usage',
+            'payload' => [
+                'step' => 'script',
+                'calls' => 2,
+                'inputTokens' => 1000,
+                'outputTokens' => 200,
+                'costUsd' => 2.0,
+                'byProvider' => ['anthropic' => ['calls' => 2, 'inputTokens' => 1000, 'outputTokens' => 200, 'costUsd' => 2.0]],
+            ],
+        ]);
+        $cheap = Story::factory()->create([
+            'title' => 'La barata',
+            'llm_cost_usd' => 0.5,
+        ]);
+        $cheap->events()->create([
+            'type' => 'llm_usage',
+            'payload' => [
+                'step' => 'images',
+                'calls' => 1,
+                'inputTokens' => 100,
+                'outputTokens' => 20,
+                'costUsd' => 0.5,
+                'byProvider' => [],
+            ],
+        ]);
+
+        $this->artisan('llm:spend', ['--month' => '2026-08'])
+            ->expectsTable(
+                ['Historia', 'Paso', 'Llamadas', 'Entrada', 'Salida', 'USD', 'EUR'],
+                [
+                    ['La más cara', 'guion', '2', '1.000', '200', '2,00 $', '1,84 €'],
+                    ['La barata', 'imágenes', '1', '100', '20', '0,50 $', '0,46 €'],
+                ],
+            )
+            ->expectsOutputToContain('Total:')
+            ->assertSuccessful();
+    }
+
+    public function test_llm_spend_rejects_invalid_month(): void
+    {
+        $this->artisan('llm:spend', ['--month' => 'agosto'])
+            ->expectsOutputToContain('YYYY-MM')
+            ->assertFailed();
     }
 
     public function test_spend_note_is_sin_respaldo_when_no_story_used_fallback(): void

@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\StoryStatus;
 use App\Models\Story;
+use App\Services\Llm\SpendReport;
 use App\Services\Pipeline\QueueHealth;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
@@ -16,6 +17,7 @@ final class QueueController extends Controller
 {
     public function __construct(
         private readonly ResponseFactory $inertia,
+        private readonly SpendReport $spend,
     ) {}
 
     public function index(QueueHealth $queue): Response
@@ -50,7 +52,7 @@ final class QueueController extends Controller
     }
 
     /**
-     * @return list<array{label: string, value: int|string, note: string}>
+     * @return list<array{label: string, value: int|string, note: string, title?: string}>
      */
     private function stats(): array
     {
@@ -64,14 +66,7 @@ final class QueueController extends Controller
             ])
             ->count();
 
-        $monthStories = Story::query()
-            ->whereBetween('created_at', [
-                now()->copy()->startOfMonth(),
-                now()->copy()->endOfMonth(),
-            ]);
-
-        $spend = (float) (clone $monthStories)->sum('llm_cost_usd');
-        $usedFallback = (clone $monthStories)->where('used_fallback', true)->exists();
+        $spend = $this->spend->forMonth();
 
         return [
             [
@@ -91,8 +86,9 @@ final class QueueController extends Controller
             ],
             [
                 'label' => 'Gasto del mes',
-                'value' => number_format($spend, 2, ',', '').' €',
-                'note' => $usedFallback ? 'respaldo Claude Haiku' : 'sin respaldo',
+                'value' => $spend['euro'],
+                'note' => $spend['note'],
+                'title' => $spend['title'],
             ],
         ];
     }

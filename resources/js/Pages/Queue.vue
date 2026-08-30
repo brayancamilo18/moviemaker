@@ -163,7 +163,10 @@ function mkRow(s, hi) {
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#212226;border:1px solid #212226;margin-bottom:26px">
             <div v-for="(s, i) in stats" :key="s.label" style="background:#131316;padding:15px 16px">
                 <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:8px">{{ s.label }}</div>
-                <div style="font-size:30px;font-weight:800;line-height:1;color:#E2A044;letter-spacing:-.02em">{{ s.value }}</div>
+                <div
+                    :title="s.title || undefined"
+                    style="font-size:30px;font-weight:800;line-height:1;color:#E2A044;letter-spacing:-.02em"
+                >{{ s.value }}</div>
                 <div style="font-size:11px;color:#605F5D;margin-top:6px">{{ s.note }}</div>
                 <div
                     v-if="i === 3 && queue.likelyNoWorker"

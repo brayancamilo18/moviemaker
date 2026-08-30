@@ -50,6 +50,9 @@ return [
             ],
         ],
 
+        // Conversión aproximada solo para mostrar. No es contabilidad.
+        'usd_to_eur' => 0.92,
+
         // Dólares por millón de tokens. Gemini en free tier no factura; Anthropic sí.
         'pricing' => [
             'anthropic' => [
