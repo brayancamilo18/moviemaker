@@ -12,6 +12,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use JsonException;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 final class AnthropicClient implements JsonLlm
@@ -33,6 +34,7 @@ final class AnthropicClient implements JsonLlm
         private string $beta,
         private int $timeout,
         private int $maxRetries,
+        private LoggerInterface $logger,
     ) {}
 
     /**
@@ -71,10 +73,21 @@ final class AnthropicClient implements JsonLlm
         $stopReason = $payload['stop_reason'] ?? null;
 
         if (in_array($stopReason, ['max_tokens', 'refusal'], true)) {
-            throw new LlmGenerationException(
-                "La generación de Anthropic terminó de forma incompleta. Motivo: {$stopReason}.",
-            );
+            throw new LlmGenerationException(sprintf(
+                'La generación de Anthropic terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
+                $task->value,
+                $stopReason,
+                $this->tokenBudget($task),
+            ));
         }
+
+        $usage = is_array($payload['usage'] ?? null) ? $payload['usage'] : [];
+        $this->logger->debug('Anthropic respondió.', [
+            'task' => $task->value,
+            'input_tokens' => $usage['input_tokens'] ?? null,
+            'output_tokens' => $usage['output_tokens'] ?? null,
+            'max_tokens' => $this->tokenBudget($task),
+        ]);
 
         $text = $this->text($payload);
 

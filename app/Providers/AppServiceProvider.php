@@ -135,13 +135,18 @@ class AppServiceProvider extends ServiceProvider
         /** @var array{api_key: ?string, base_url: string, timeout: int, max_retries: int, models: array<string, string>} $gemini */
         $gemini = $app->make('config')->get('stories.llm.gemini');
 
+        /** @var array<string, int> $maxTokens */
+        $maxTokens = $app->make('config')->get('stories.llm.anthropic.max_tokens');
+
         return new GeminiClient(
             http: $app->make(Factory::class),
             apiKey: (string) $gemini['api_key'],
             models: $gemini['models'],
+            maxTokens: $maxTokens,
             baseUrl: $gemini['base_url'],
             timeout: (int) $gemini['timeout'],
             maxRetries: (int) $gemini['max_retries'],
+            logger: $app->make(LoggerInterface::class),
         );
     }
 
@@ -160,6 +165,7 @@ class AppServiceProvider extends ServiceProvider
             beta: (string) $anthropic['beta'],
             timeout: (int) $anthropic['timeout'],
             maxRetries: (int) $anthropic['max_retries'],
+            logger: $app->make(LoggerInterface::class),
         );
     }
 }

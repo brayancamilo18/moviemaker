@@ -35,11 +35,15 @@ return [
             'models' => [
                 'default' => env('AI_MODEL', 'claude-haiku-4-5'),
             ],
-            // Anthropic exige un tope de salida en cada petición. El guion completo es lo único
-            // que necesita sitio de verdad; el resto de tareas devuelven objetos cortos.
+            // Anthropic exige un tope de salida en cada petición. El guion y la dirección de
+            // planos son los que más crecen; review escala con la longitud del texto.
             'max_tokens' => [
                 'default' => 8000,
-                'script' => 24000,
+                'script' => 32000,
+                'review' => 16000,
+                'visual_bible' => 8000,
+                'shot_direction' => 16000,
+                'sfx_direction' => 8000,
             ],
         ],
 

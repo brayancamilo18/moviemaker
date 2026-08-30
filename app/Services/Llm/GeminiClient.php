@@ -12,20 +12,24 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use JsonException;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 final class GeminiClient implements JsonLlm
 {
     /**
      * @param  array<string, string>  $models  modelo por tarea, con 'default' como respaldo
+     * @param  array<string, int>  $maxTokens  tope de salida por tarea, con 'default' como respaldo
      */
     public function __construct(
         private Factory $http,
         private string $apiKey,
         private array $models,
+        private array $maxTokens,
         private string $baseUrl,
         private int $timeout,
         private int $maxRetries,
+        private LoggerInterface $logger,
     ) {}
 
     /**
@@ -55,6 +59,7 @@ final class GeminiClient implements JsonLlm
             ],
             'generationConfig' => [
                 'temperature' => $temperature,
+                'maxOutputTokens' => $this->tokenBudget($task),
                 'responseMimeType' => 'application/json',
                 'responseSchema' => $schema,
             ],
@@ -66,10 +71,21 @@ final class GeminiClient implements JsonLlm
         $finishReason = $payload['candidates'][0]['finishReason'] ?? null;
 
         if (in_array($finishReason, ['MAX_TOKENS', 'SAFETY'], true)) {
-            throw new LlmGenerationException(
-                "La generación de Gemini terminó de forma incompleta. Motivo: {$finishReason}.",
-            );
+            throw new LlmGenerationException(sprintf(
+                'La generación de Gemini terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
+                $task->value,
+                $finishReason,
+                $this->tokenBudget($task),
+            ));
         }
+
+        $usage = is_array($payload['usageMetadata'] ?? null) ? $payload['usageMetadata'] : [];
+        $this->logger->debug('Gemini respondió.', [
+            'task' => $task->value,
+            'input_tokens' => $usage['promptTokenCount'] ?? null,
+            'output_tokens' => $usage['candidatesTokenCount'] ?? null,
+            'max_tokens' => $this->tokenBudget($task),
+        ]);
 
         $text = $payload['candidates'][0]['content']['parts'][0]['text'] ?? null;
 
@@ -146,6 +162,11 @@ final class GeminiClient implements JsonLlm
     private function model(LlmTask $task): string
     {
         return $this->models[$task->value] ?? $this->models['default'];
+    }
+
+    private function tokenBudget(LlmTask $task): int
+    {
+        return $this->maxTokens[$task->value] ?? $this->maxTokens['default'];
     }
 
     /**

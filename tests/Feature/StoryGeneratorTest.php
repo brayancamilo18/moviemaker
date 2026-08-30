@@ -199,8 +199,7 @@ final class StoryGeneratorTest extends TestCase
                 && $request->hasHeader('x-api-key', 'clave-de-anthropic')
                 && $request->hasHeader('anthropic-version', '2023-06-01')
                 && $body['model'] === 'claude-haiku-4-5'
-                // El guion es la única tarea con presupuesto de salida propio.
-                && $body['max_tokens'] === 24000
+                && $body['max_tokens'] === 32000
                 && $schema['type'] === 'object'
                 && $schema['additionalProperties'] === false;
         });
@@ -220,7 +219,9 @@ final class StoryGeneratorTest extends TestCase
         ]);
 
         $this->expectException(LlmGenerationException::class);
-        $this->expectExceptionMessage('max_tokens');
+        $this->expectExceptionMessage(
+            'La generación de Anthropic terminó de forma incompleta en la tarea script. Motivo: max_tokens. Tope usado: 32000 tokens de salida.',
+        );
 
         $this->generator()->generate();
     }
