@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
-import { Head, router } from '@inertiajs/vue3';
+import { Head, Link, router } from '@inertiajs/vue3';
+import ActiveStrip from '../Components/ActiveStrip.vue';
 
 const AMBER = '#E2A044';
 const GREEN = '#4FA265';
@@ -14,6 +15,10 @@ const props = defineProps({
     selected: { type: Object, default: null },
     queue: { type: Object, default: null },
 });
+
+const isEmpty = computed(() => props.active.length === 0);
+const showStrip = computed(() => props.active.length > 1);
+const selectedId = computed(() => props.selected?.story?.id ?? null);
 
 const backupOn = computed(() => Boolean(props.selected?.story?.used_fallback));
 const backupCost = computed(() => props.selected?.backupCost ?? '');
@@ -109,12 +114,24 @@ function goQueue() {
     <Head :title="pipeTitle || 'Progreso'" />
 
     <div style="padding:26px 30px 60px;max-width:1100px;min-width:940px">
+        <div v-if="isEmpty" style="padding:70px 30px;text-align:center">
+            <div style="font-size:17px;font-weight:800;margin-bottom:10px">No hay historias en proceso.</div>
+            <Link href="/stories/create" style="color:#E2A044">Nueva historia</Link>
+        </div>
+
+        <template v-else>
         <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:22px">
             <div style="flex:1">
                 <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em">{{ pipeTitle }}</h1>
                 <div style="font-size:12px;color:#8E8D8A;margin-top:4px">{{ pipeSub }}</div>
             </div>
         </div>
+
+        <ActiveStrip
+            v-if="showStrip"
+            :stories="active"
+            :selected-id="selectedId"
+        />
 
         <div
             v-if="backupOn"
@@ -161,6 +178,7 @@ function goQueue() {
             </div>
         </div>
         <div style="margin-top:14px;font-size:11px;color:#605F5D">Cualquier paso completado se puede reanudar: pasa el cursor por su fila y reejecuta desde ahí conservando lo anterior.</div>
+        </template>
     </div>
 </template>
 
