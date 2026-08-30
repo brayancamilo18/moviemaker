@@ -16,6 +16,7 @@ use App\Models\StoryEvent;
 use App\Services\Llm\LlmTask;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
+use App\Services\Pipeline\ScriptStep;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -57,6 +58,54 @@ final class PipelineJobTest extends TestCase
         $this->assertSame(StoryStatus::Draft->value, $event->from_status);
         $this->assertSame(StoryStatus::Failed->value, $event->to_status);
         $this->assertSame('images', $event->payload['step'] ?? null);
+    }
+
+    public function test_a_failing_step_keeps_the_original_exception_as_previous(): void
+    {
+        $original = new LlmGenerationException('Motivo: max_tokens.');
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->bindThrowingScriptLlm($original);
+
+        $result = $this->app->make(ScriptStep::class)->run($story);
+
+        $this->assertFalse($result['ok'] ?? true);
+        $this->assertSame($original, $result['exception'] ?? null);
+
+        try {
+            $this->app->call([new RunPipelineStep($story->id, 'script', chain: false), 'handle']);
+            $this->fail('Se esperaba RuntimeException.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame($original, $exception->getPrevious());
+        }
+    }
+
+    public function test_a_job_failure_writes_the_cause_line_into_failed_message(): void
+    {
+        $original = new LlmGenerationException('Motivo: max_tokens.');
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->bindThrowingScriptLlm($original);
+
+        try {
+            $this->app->make(Dispatcher::class)->dispatch(new RunPipelineStep($story->id, 'script', chain: false));
+        } catch (Throwable) {
+        }
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(StoryStatus::Failed, $fresh->status);
+        $this->assertSame(
+            "Motivo: max_tokens.\n\nCausa: App\\Exceptions\\LlmGenerationException: Motivo: max_tokens.",
+            $fresh->failed_message,
+        );
     }
 
     public function test_failed_message_keeps_the_original_exception_class_and_message(): void
@@ -206,6 +255,31 @@ final class PipelineJobTest extends TestCase
         $this->assertInstanceOf(StoryEvent::class, $event);
         $this->assertSame('mi-historia', $event->payload['requested'] ?? null);
         $this->assertSame('mi-historia-2', $event->payload['assigned'] ?? null);
+    }
+
+    public function test_script_step_keeps_the_story_when_review_throws(): void
+    {
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->bindScriptLlm(reviewFails: true);
+
+        $result = $this->app->make(ScriptStep::class)->run($story);
+
+        $this->assertTrue($result['ok'] ?? false);
+        $this->assertArrayHasKey('verdict', $result);
+        $this->assertNull($result['verdict']);
+        $this->assertIsArray($result['warnings'] ?? null);
+        $this->assertStringStartsWith('Revisión automática fallida:', $result['warnings'][0] ?? '');
+
+        $path = storage_path('app/'.$this->storiesDir).DIRECTORY_SEPARATOR.$result['slug'].'.json';
+        $this->assertFileExists($path);
+        $this->assertArrayNotHasKey(
+            'review',
+            json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR),
+        );
     }
 
     public function test_a_failed_review_keeps_the_script_and_records_a_warning(): void
@@ -367,20 +441,33 @@ final class PipelineJobTest extends TestCase
         ));
     }
 
+    private function bindThrowingScriptLlm(Throwable $exception): void
+    {
+        $this->storiesDir = 'testing/pipeline-job-'.bin2hex(random_bytes(4));
+
+        $config = $this->app->make('config');
+        $config->set('stories.review.enabled', false);
+        $config->set('stories.output_path', $this->storiesDir);
+
+        Http::preventStrayRequests();
+
+        $this->app->instance(JsonLlm::class, $this->jsonLlm($exception, $this->reviewFixture()));
+    }
+
     /**
-     * @param  array<string, mixed>  $script
+     * @param  array<string, mixed>|Throwable  $script
      * @param  array<string, mixed>|Throwable  $review
      */
-    private function jsonLlm(array $script, array|Throwable $review): JsonLlm
+    private function jsonLlm(array|Throwable $script, array|Throwable $review): JsonLlm
     {
         return new class($script, $review) implements JsonLlm
         {
             /**
-             * @param  array<string, mixed>  $script
+             * @param  array<string, mixed>|Throwable  $script
              * @param  array<string, mixed>|Throwable  $review
              */
             public function __construct(
-                private array $script,
+                private array|Throwable $script,
                 private array|Throwable $review,
             ) {}
 
@@ -398,6 +485,10 @@ final class PipelineJobTest extends TestCase
                     }
 
                     return $this->review;
+                }
+
+                if ($this->script instanceof Throwable) {
+                    throw $this->script;
                 }
 
                 return $this->script;
