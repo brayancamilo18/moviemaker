@@ -1,13 +1,22 @@
 <?php
 
+declare(strict_types=1);
+
+use App\Http\Controllers\StoryController;
 use App\Http\Controllers\StoryMediaController;
+use App\Services\Llm\ProviderHealth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::redirect('/', '/queue');
 
 Route::get('/queue', fn () => Inertia::render('Queue'))->name('queue');
-Route::get('/stories/create', fn () => Inertia::render('NewStory'))->name('stories.create');
+Route::get('/stories/create', [StoryController::class, 'create'])->name('stories.create');
+Route::post('/stories', [StoryController::class, 'store'])->name('stories.store');
+Route::get('/stories/{story:id}/pipeline', [StoryController::class, 'pipeline'])->name('pipeline.show');
+Route::post('/llm/health', function (ProviderHealth $health) {
+    return response()->json($health->check(live: true));
+})->name('llm.health');
 Route::get('/pipeline', fn () => Inertia::render('Pipeline'))->name('pipeline');
 Route::get('/review', fn () => Inertia::render('Review'))->name('review');
 Route::get('/sheet', fn () => Inertia::render('ContactSheet'))->name('sheet');
