@@ -199,16 +199,11 @@ final class StoryControllerTest extends TestCase
             ->assertOk()
             ->assertInertia(fn (Assert $page): Assert => $page
                 ->component('Pipeline')
-                ->where('story.id', $story->id)
-                ->where('progress.step', 'script')
-                ->where('progress.label', 'guion')
-                ->where('snapshot.status', StoryStatus::Draft->value)
-                ->where('snapshot.progress.step', 'script')
-                ->where('snapshot.progress.label', 'guion')
+                ->where('selected.story.id', $story->id)
+                ->where('selected.rows.0.state', 'en curso')
+                ->where('selected.rows.0.unit', '0 / 1 escenas')
+                ->where('active.0.id', $story->id)
                 ->where('queue.likelyNoWorker', false)
-                ->where('snapshot.queue.likelyNoWorker', false)
-                ->where('snapshot.preflight.step', null)
-                ->where('snapshot.preflight.checks', [])
             );
     }
 
@@ -429,6 +424,8 @@ final class StoryControllerTest extends TestCase
             ->assertOk()
             ->assertInertia(fn (Assert $page): Assert => $page
                 ->component('Pipeline')
+                ->where('active', [])
+                ->where('selected', null)
                 ->where('queue.likelyNoWorker', false)
                 ->where('queue.pending', 0));
     }

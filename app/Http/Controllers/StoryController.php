@@ -108,16 +108,6 @@ final class StoryController extends Controller
         return redirect()->route('pipeline.show', $story);
     }
 
-    public function pipeline(Story $story): Response
-    {
-        return $this->inertia->render('Pipeline', [
-            'story' => $story,
-            'progress' => $this->progress->get($story->id),
-            'snapshot' => $this->snapshot($story),
-            'queue' => $this->queue->status(),
-        ]);
-    }
-
     public function review(Story $story): Response
     {
         return $this->inertia->render('Review', [
