@@ -110,6 +110,59 @@ final class SubtitleGeneratorTest extends TestCase
         $this->assertStringNotContainsString('oo-SYEH-dah', $body);
     }
 
+    public function test_the_channel_outro_survives_into_the_srt(): void
+    {
+        $cues = $this->cues([
+            [
+                'order' => 40,
+                'sceneOrder' => 8,
+                'text' => 'The mill went dark.',
+                'start' => 0.0,
+                'end' => 2.0,
+            ],
+            [
+                'order' => 41,
+                'sceneOrder' => 9000,
+                'text' => 'That was the story for tonight.',
+                'start' => 5.0,
+                'end' => 7.2,
+            ],
+            [
+                'order' => 42,
+                'sceneOrder' => 9000,
+                'text' => 'If you stayed with me all the way to the end of it, thank you.',
+                'start' => 7.6,
+                'end' => 11.4,
+            ],
+            [
+                'order' => 43,
+                'sceneOrder' => 9000,
+                'text' => 'Subscribe, and turn on the bell, and I will have another one for you soon.',
+                'start' => 11.8,
+                'end' => 16.0,
+            ],
+            [
+                'order' => 44,
+                'sceneOrder' => 9000,
+                'text' => 'Sleep well, if you can.',
+                'start' => 16.4,
+                'end' => 18.0,
+            ],
+        ]);
+
+        $body = $this->plain(implode(' ', array_column($cues, 'text')));
+
+        $this->assertStringContainsString('That was the story for tonight', $body);
+        $this->assertStringContainsString('thank you', $body);
+        $this->assertStringContainsString('Subscribe', $body);
+        $this->assertStringContainsString('Sleep well, if you can', $body);
+        $this->assertGapInvariant($cues);
+
+        foreach ($cues as $cue) {
+            $this->assertGreaterThanOrEqual(1.2 - 0.001, $cue['end'] - $cue['start']);
+        }
+    }
+
     public function test_every_pair_of_cues_keeps_the_minimum_gap(): void
     {
         $cues = $this->cues([

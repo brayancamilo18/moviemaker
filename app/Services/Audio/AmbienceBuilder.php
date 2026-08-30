@@ -28,6 +28,8 @@ final class AmbienceBuilder
 
     private readonly float $tailSeconds;
 
+    private readonly int $outroSceneOrder;
+
     /**
      * @var array<string, float>
      */
@@ -47,6 +49,7 @@ final class AmbienceBuilder
         $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
         $this->acrossfade = (float) $config->get('stories.audio.ambience.acrossfade_seconds', 2.0);
         $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds', 10.0);
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
         $this->intensityLufs = [
             SceneAmbience::INTENSITY_SUBTLE => (float) $config->get('stories.audio.ambience.intensity_lufs.subtle', -34.0),
             SceneAmbience::INTENSITY_MODERATE => (float) $config->get('stories.audio.ambience.intensity_lufs.moderate', -30.0),
@@ -71,6 +74,13 @@ final class AmbienceBuilder
         }
 
         $expected = $this->expectedDuration($narrationWavPath);
+        $outroFade = $this->outroFade($windows);
+        $windows = $this->withoutOutro($windows);
+
+        if ($windows === []) {
+            throw new InvalidArgumentException('timings.json no tiene escenas de historia con duración.');
+        }
+
         $windows = $this->pinTimeline($windows, $expected);
         $start = $windows[array_key_first($windows)]['start'];
 
@@ -114,8 +124,9 @@ final class AmbienceBuilder
                 }
 
                 $segment = $workDir.DIRECTORY_SEPARATOR.sprintf('scene-%02d.wav', $window['order']);
+                $fade = $index === $lastIndex ? $this->fadeOnLastWindow($window, $outroFade) : [0.0, 0.0];
 
-                $this->loopToDuration($source, $segment, $needed, $gainDb);
+                $this->loopToDuration($source, $segment, $needed, $gainDb, $fade[0], $fade[1]);
                 $segments[] = $segment;
             }
 
@@ -240,6 +251,52 @@ final class AmbienceBuilder
     }
 
     /**
+     * El cierre no resuelve cama propia: se absorbe en la última escena de la historia.
+     *
+     * @param  list<array{order: int, start: float, end: float, duration: float}>  $windows
+     * @return list<array{order: int, start: float, end: float, duration: float}>
+     */
+    private function withoutOutro(array $windows): array
+    {
+        return array_values(array_filter(
+            $windows,
+            fn (array $window): bool => $window['order'] !== $this->outroSceneOrder,
+        ));
+    }
+
+    /**
+     * Inicio absoluto del fade del cierre, o null si no hay escena de outro.
+     *
+     * @param  list<array{order: int, start: float, end: float, duration: float}>  $windows
+     */
+    private function outroFade(array $windows): ?float
+    {
+        foreach ($windows as $window) {
+            if ($window['order'] === $this->outroSceneOrder) {
+                return $window['start'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array{order: int, start: float, end: float, duration: float}  $window
+     * @return array{0: float, 1: float}
+     */
+    private function fadeOnLastWindow(array $window, ?float $outroStart): array
+    {
+        if ($outroStart === null) {
+            return [0.0, 0.0];
+        }
+
+        $start = max(0.0, $outroStart - $window['start']);
+        $duration = max(0.0, $window['duration'] - $start);
+
+        return [round($start, 3), round($duration, 3)];
+    }
+
+    /**
      * @param  list<array{order: int, start: float, end: float, duration: float}>  $windows
      * @return list<array{order: int, start: float, end: float, duration: float}>
      */
@@ -315,10 +372,26 @@ final class AmbienceBuilder
         return $this->synth->generate($profile, max($minDuration, 6.0), $seed);
     }
 
-    private function loopToDuration(string $source, string $destination, float $duration, float $gainDb): void
-    {
+    private function loopToDuration(
+        string $source,
+        string $destination,
+        float $duration,
+        float $gainDb,
+        float $fadeOutStart = 0.0,
+        float $fadeOutDuration = 0.0,
+    ): void {
         $duration = round(max(0.001, $duration), 3);
         $volume = $this->formatDb($gainDb);
+        $filter = 'volume='.$volume;
+
+        if ($fadeOutDuration > 0.0005) {
+            $start = max(0.0, min($fadeOutStart, $duration));
+            $fade = min($fadeOutDuration, $duration - $start);
+
+            if ($fade > 0.0005) {
+                $filter .= sprintf(',afade=t=out:st=%.3f:d=%.3f', $start, $fade);
+            }
+        }
 
         $this->run([
             $this->ffmpeg, '-nostdin', '-y', '-hide_banner',
@@ -328,7 +401,7 @@ final class AmbienceBuilder
             '-ac', '2',
             '-ar', '48000',
             '-sample_fmt', 's16',
-            '-af', 'volume='.$volume.',aformat=sample_rates=48000:channel_layouts=stereo',
+            '-af', $filter.',aformat=sample_rates=48000:channel_layouts=stereo',
             $destination,
         ]);
     }

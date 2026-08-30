@@ -11,16 +11,22 @@ use App\DataObjects\Story;
 use App\DataObjects\StoryScene;
 use App\Exceptions\LlmGenerationException;
 use App\Services\Llm\LlmTask;
+use Illuminate\Contracts\Config\Repository;
 use JsonException;
 use Psr\Log\LoggerInterface;
 
 final class SfxDirector
 {
+    private readonly int $outroSceneOrder;
+
     public function __construct(
         private JsonLlm $llm,
         private SfxAnchor $anchor,
         private LoggerInterface $logger,
-    ) {}
+        Repository $config,
+    ) {
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+    }
 
     /**
      * @param  list<Shot>  $shots
@@ -35,6 +41,10 @@ final class SfxDirector
         $effects = [];
 
         foreach ($this->groupByScene($shots) as $sceneOrder => $sceneShots) {
+            if ($sceneOrder === $this->outroSceneOrder) {
+                continue;
+            }
+
             foreach ($this->directScene($sceneShots, $story, $sceneOrder) as $effect) {
                 $effects[] = $effect;
             }

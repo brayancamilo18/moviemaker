@@ -217,7 +217,7 @@ return [
         'resolve_budget_seconds' => 20,
         'resolve_total_budget_seconds' => 600,
         // Ambiente que sigue sonando tras el WAV de narración. El máster dura NarrationClock::masterDuration.
-        'tail_seconds' => 10.0,
+        'tail_seconds' => 6.0,
         'freesound' => [
             'token' => env('FREESOUND_TOKEN'),
             'base_url' => 'https://freesound.org/apiv2',
@@ -320,7 +320,7 @@ return [
             'saturation' => 0.85,
             'contrast' => 1.06,
         ],
-        'outro_seconds' => 20,
+        'outro_seconds' => 8,
         // Único desfase admitido entre la duración de un artefacto de vídeo y la que se esperaba.
         // Vale tanto para verificar lo que se acaba de escribir como para aceptar lo cacheado.
         'sync_tolerance' => 0.1,

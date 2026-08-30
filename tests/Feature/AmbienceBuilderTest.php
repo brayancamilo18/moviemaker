@@ -123,6 +123,40 @@ final class AmbienceBuilderTest extends TestCase
         $this->assertEqualsWithDelta(22.0, (float) $track->endAt - $track->startAt, 0.05);
     }
 
+    public function test_the_outro_scene_reuses_the_last_story_bed_and_does_not_resolve_its_own(): void
+    {
+        $this->app->make('config')->set('stories.audio.tail_seconds', 6.0);
+        $this->app->forgetInstance(AmbienceBuilder::class);
+        $this->indexClip('ambience/wind-night-1.wav', ['wind', 'night'], 3.0, -20.0);
+
+        $story = $this->story([
+            [
+                'query' => 'wind howling night',
+                'tags' => ['wind', 'night'],
+                'intensity' => 'subtle',
+            ],
+            [
+                'query' => 'wind howling night',
+                'tags' => ['wind', 'night'],
+                'intensity' => 'heavy',
+            ],
+        ]);
+
+        $track = $this->app->make(AmbienceBuilder::class)->build($story, [
+            'scenes' => [
+                ['order' => 1, 'start' => 0.0, 'end' => 4.0, 'duration' => 4.0],
+                ['order' => 2, 'start' => 4.0, 'end' => 8.0, 'duration' => 4.0],
+                ['order' => 9000, 'start' => 8.0, 'end' => 20.0, 'duration' => 12.0],
+            ],
+        ], $this->makeNarrationWav(20.0));
+
+        $this->assertCount(2, $track->credits);
+        $this->assertSame('ambience.1', $track->credits[0]->cueId);
+        $this->assertSame('ambience.2', $track->credits[1]->cueId);
+        $this->assertEqualsWithDelta(26.0, $this->app->make(LibraryClipProcessor::class)->duration($track->path), 0.05);
+        Http::assertNothingSent();
+    }
+
     public function test_falls_back_to_story_tags_when_scene_has_no_ambience(): void
     {
         $this->indexClip('ambience/wind-night-1.wav', ['wind', 'night', 'fog'], 3.0, -20.0);
