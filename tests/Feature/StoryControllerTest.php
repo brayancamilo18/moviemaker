@@ -267,12 +267,33 @@ final class StoryControllerTest extends TestCase
                 ->where('story.id', $story->id)
                 ->where('story.slug', $story->slug)
                 ->where('status_label', StoryStatus::ScriptReady->label())
-                ->where('status_color', StoryStatus::ScriptReady->color()));
+                ->where('status_color', StoryStatus::ScriptReady->color())
+                ->where('empty', false));
     }
 
-    public function test_the_bare_review_route_redirects_to_the_queue(): void
+    public function test_review_entry_opens_the_oldest_story_pending_review(): void
     {
-        $this->get(route('review'))->assertRedirect(route('queue'));
+        $newer = Story::factory()->create(['status' => StoryStatus::PendingReview]);
+        $oldest = Story::factory()->create(['status' => StoryStatus::PendingReview]);
+        Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+
+        $oldest->forceFill(['updated_at' => now()->subDay()])->save();
+        $newer->forceFill(['updated_at' => now()->subHour()])->save();
+
+        $this->get(route('review'))
+            ->assertRedirect(route('review.show', $oldest));
+    }
+
+    public function test_review_entry_shows_an_empty_state_when_nothing_is_pending(): void
+    {
+        Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+
+        $this->get(route('review'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->component('Review')
+                ->where('empty', true)
+                ->where('story', null));
     }
 
     public function test_the_listing_pipeline_route_still_renders(): void

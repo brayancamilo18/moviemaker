@@ -106,8 +106,26 @@ final class StoryController extends Controller
     {
         return $this->inertia->render('Review', [
             'story' => $story,
+            'empty' => false,
             'status_label' => $story->status->label(),
             'status_color' => $story->status->color(),
+        ]);
+    }
+
+    public function reviewEntry(): RedirectResponse|Response
+    {
+        $story = Story::query()
+            ->pendingReview()
+            ->orderBy('updated_at')
+            ->first();
+
+        if ($story instanceof Story) {
+            return redirect()->route('review.show', $story);
+        }
+
+        return $this->inertia->render('Review', [
+            'story' => null,
+            'empty' => true,
         ]);
     }
 

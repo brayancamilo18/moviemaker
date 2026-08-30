@@ -8,4 +8,12 @@ enum StoryMode: string
 {
     case Folklore = 'folclore';
     case Original = 'original';
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::Folklore => 'Folclore',
+            self::Original => 'Original',
+        };
+    }
 }

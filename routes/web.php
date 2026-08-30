@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\QueueController;
 use App\Http\Controllers\StoryController;
 use App\Http\Controllers\StoryInspectionController;
 use App\Http\Controllers\StoryMediaController;
@@ -12,11 +13,7 @@ use Inertia\Inertia;
 
 Route::redirect('/', '/queue');
 
-Route::get('/queue', function (QueueHealth $queue) {
-    return Inertia::render('Queue', [
-        'queue' => $queue->status(),
-    ]);
-})->name('queue');
+Route::get('/queue', [QueueController::class, 'index'])->name('queue');
 Route::get('/stories/create', [StoryController::class, 'create'])->name('stories.create');
 Route::post('/stories', [StoryController::class, 'store'])->name('stories.store');
 Route::get('/stories/{story:id}/pipeline', [StoryController::class, 'pipeline'])->name('pipeline.show');
@@ -35,7 +32,7 @@ Route::get('/pipeline', function (QueueHealth $queue) {
         'queue' => $queue->status(),
     ]);
 })->name('pipeline');
-Route::redirect('/review', '/queue')->name('review');
+Route::get('/review', [StoryController::class, 'reviewEntry'])->name('review');
 Route::get('/sheet', fn () => Inertia::render('ContactSheet'))->name('sheet');
 Route::get('/thumbnail', fn () => Inertia::render('Thumbnail'))->name('thumbnail');
 Route::get('/package', fn () => Inertia::render('Package'))->name('package');
