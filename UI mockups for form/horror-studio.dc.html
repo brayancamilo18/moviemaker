@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-b4eb6f8e-d919-47f5-9082-1ecb996e9a14/styles.css">
+<script src="_ds/modernist-b4eb6f8e-d919-47f5-9082-1ecb996e9a14/_ds_bundle.js"></script>
+<style>
+html,body{margin:0;background:#0B0B0C;color:#E8E6E3;font-family:"Archivo",system-ui,sans-serif;font-size:13px;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,h5,h6{font-family:"Archivo",system-ui,sans-serif;margin:0}
+a{color:#E2A044;text-decoration:none}
+a:hover{color:#F0BC72}
+input,textarea,select,button{font-family:inherit;font-size:inherit;color:inherit}
+::selection{background:rgba(226,160,68,.3)}
+:focus{outline:none}
+:focus-visible{outline:2px solid #E2A044;outline-offset:2px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:#0B0B0C}
+::-webkit-scrollbar-thumb{background:#2A2B2F}
+::-webkit-scrollbar-thumb:hover{background:#3A3B40}
+@keyframes hs-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+</helmet>
+<div style="display:flex;height:100vh;overflow:hidden;background:#0B0B0C;color:#E8E6E3;font-variant-numeric:tabular-nums">
+
+  <aside style="width:228px;flex:none;background:#0E0E10;border-right:1px solid #212226;display:flex;flex-direction:column">
+    <div style="padding:18px 16px 14px;border-bottom:1px solid #1B1C1F">
+      <div style="font-size:14px;font-weight:800;letter-spacing:-.01em">horror-studio</div>
+      <div style="font-size:10.5px;color:#605F5D;letter-spacing:.09em;text-transform:uppercase;margin-top:3px">Producción interna</div>
+    </div>
+    <nav style="padding:10px 8px;display:flex;flex-direction:column;gap:1px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="7">
+        <div onClick="{{ n.go }}" style="{{ n.style }}" style-hover="background:#191A1D;color:#E8E6E3">
+          <span style="width:16px;flex:none;font-size:10.5px;color:#4E4D4B">{{ n.num }}</span>
+          <span style="flex:1">{{ n.label }}</span>
+          <span style="{{ n.badgeStyle }}">{{ n.badge }}</span>
+        </div>
+      </sc-for>
+    </nav>
+    <div style="margin-top:auto;padding:14px 16px;border-top:1px solid #1B1C1F;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#8E8D8A"><span>Gasto del mes</span><span style="color:#E2A044;font-weight:800">{{ spendMonth }}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#8E8D8A"><span>Cuota Gemini</span><span style="{{ quotaStyle }}">{{ quotaLabel }}</span></div>
+    </div>
+  </aside>
+
+  <main style="flex:1;min-width:0;overflow:auto">
+
+    <sc-if value="{{ isQueue }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px 60px;max-width:1420px;min-width:1180px">
+        <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:22px">
+          <div style="flex:1">
+            <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em">Cola de trabajo</h1>
+            <div style="font-size:12px;color:#8E8D8A;margin-top:4px">{{ queueSubtitle }}</div>
+          </div>
+          <div style="display:flex;border:1px solid #2A2B2F">
+            <button onClick="{{ setQueueFull }}" style="{{ segFullStyle }}">Con historias</button>
+            <button onClick="{{ setQueueEmpty }}" style="{{ segEmptyStyle }}">Cola vacía</button>
+          </div>
+          <button onClick="{{ goNew }}" style="background:#E2A044;color:#151006;border:0;padding:9px 16px;font-weight:800;font-size:13px;cursor:pointer" style-hover="background:#F0B45E">Nueva historia</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#212226;border:1px solid #212226;margin-bottom:26px">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+            <div style="background:#131316;padding:15px 16px">
+              <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:8px">{{ s.label }}</div>
+              <div style="font-size:30px;font-weight:800;line-height:1;color:#E2A044;letter-spacing:-.02em">{{ s.value }}</div>
+              <div style="font-size:11px;color:#605F5D;margin-top:6px">{{ s.sub }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ queueEmpty }}">
+          <div style="border:1px dashed #2A2B2F;padding:70px 30px;text-align:center;background:#0F0F11">
+            <div style="font-size:17px;font-weight:800;margin-bottom:6px">Aún no hay historias</div>
+            <div style="font-size:12.5px;color:#8E8D8A;max-width:400px;margin:0 auto 20px;line-height:1.6">Cuando lances una tanda, aparecerá aquí con su estado. Las que terminen el render se agruparán arriba esperando tu revisión.</div>
+            <button onClick="{{ goNew }}" style="background:#E2A044;color:#151006;border:0;padding:9px 18px;font-weight:800;cursor:pointer" style-hover="background:#F0B45E">Crear la primera historia</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ queueHasRows }}">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+              <span style="width:3px;height:14px;background:#E2A044"></span>
+              <span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Reclaman tu atención</span>
+              <span style="font-size:11px;color:#605F5D">{{ pendingCount }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:1px;margin-bottom:30px">
+              <sc-for list="{{ pendingRows }}" as="r" hint-placeholder-count="3">
+                <div onClick="{{ r.open }}" style="{{ r.rowStyle }}" style-hover="background:#1D1A15">
+                  <div style="{{ r.thumb }}"></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13.5px;font-weight:800;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.title }}</div>
+                    <div style="font-size:11px;color:#8E8D8A;margin-top:3px">{{ r.meta }}</div>
+                  </div>
+                  <div style="width:56px;flex:none;text-align:right;font-size:12px;color:#B9B7B3">{{ r.dur }}</div>
+                  <div style="width:150px;flex:none"><span style="{{ r.statusStyle }}">{{ r.status }}</span></div>
+                  <div style="width:132px;flex:none;display:flex;align-items:center;gap:7px"><span style="{{ r.verdictStyle }}">{{ r.verdict }}</span><span style="{{ r.scoreStyle }}">{{ r.score }}</span></div>
+                  <div style="width:66px;flex:none;text-align:right;font-size:11px;color:#605F5D">{{ r.date }}</div>
+                  <div style="width:14px;flex:none;text-align:right;color:#E2A044;font-weight:800">›</div>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+              <span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;color:#8E8D8A">Resto de la cola</span>
+              <span style="font-size:11px;color:#605F5D">{{ restCount }}</span>
+              <div style="flex:1;height:1px;background:#1F2024"></div>
+              <sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+                <button onClick="{{ f.go }}" style="{{ f.style }}">{{ f.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <sc-for list="{{ restRows }}" as="r" hint-placeholder-count="8">
+                <div onClick="{{ r.open }}" style="{{ r.rowStyle }}" style-hover="background:#17181A">
+                  <div style="{{ r.thumb }}"></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#D6D4D0">{{ r.title }}</div>
+                    <div style="font-size:11px;color:#605F5D;margin-top:3px">{{ r.meta }}</div>
+                  </div>
+                  <div style="width:56px;flex:none;text-align:right;font-size:12px;color:#8E8D8A">{{ r.dur }}</div>
+                  <div style="width:150px;flex:none"><span style="{{ r.statusStyle }}">{{ r.status }}</span></div>
+                  <div style="width:132px;flex:none;display:flex;align-items:center;gap:7px"><span style="{{ r.verdictStyle }}">{{ r.verdict }}</span><span style="{{ r.scoreStyle }}">{{ r.score }}</span></div>
+                  <div style="width:66px;flex:none;text-align:right;font-size:11px;color:#4E4D4B">{{ r.date }}</div>
+                  <div style="width:14px;flex:none"></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px;font-size:11px;color:#4E4D4B">{{ publishedNote }}</div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isNew }}">
+      <div style="padding:26px 30px 60px;max-width:1040px">
+        <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px">Nueva historia</h1>
+        <div style="font-size:12px;color:#8E8D8A;margin-bottom:26px">Cuatro decisiones y la máquina se pone a trabajar.</div>
+
+        <div style="border-top:2px solid #2A2B2F;padding-top:16px;margin-bottom:26px">
+          <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;margin-bottom:10px">Modo</div>
+          <div style="display:flex;gap:1px;background:#212226;border:1px solid #212226;width:fit-content">
+            <button onClick="{{ setFolk }}" style="{{ modeFolkStyle }}">Folclore</button>
+            <button onClick="{{ setOriginal }}" style="{{ modeOrigStyle }}">Original</button>
+          </div>
+        </div>
+
+        <sc-if value="{{ isFolk }}">
+          <div style="border-top:2px solid #2A2B2F;padding-top:16px;margin-bottom:26px">
+            <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:12px">
+              <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Criatura</div>
+              <div style="font-size:11px;color:#605F5D">{{ creatureNote }}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:1px;background:#1F2024;border:1px solid #1F2024">
+              <sc-for list="{{ creatures }}" as="c" hint-placeholder-count="29">
+                <div onClick="{{ c.pick }}" style="{{ c.style }}" style-hover="background:#1D1E22">
+                  <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</span>
+                  <span style="{{ c.countStyle }}">{{ c.count }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="border-top:2px solid #2A2B2F;padding-top:16px;margin-bottom:26px">
+          <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;margin-bottom:4px">Premisa <span style="color:#605F5D;font-weight:400;text-transform:none;letter-spacing:0">· opcional</span></div>
+          <div style="font-size:11px;color:#605F5D;margin-bottom:10px">Se inyecta al prompt del guionista. Déjalo vacío y el modelo elige.</div>
+          <textarea value="{{ premise }}" onChange="{{ setPremise }}" placeholder="Un pastor que oye la campanilla tres noches seguidas…" rows="3" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:11px 12px;resize:vertical;line-height:1.6"></textarea>
+        </div>
+
+        <div style="border-top:2px solid #2A2B2F;padding-top:16px;margin-bottom:32px">
+          <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;margin-bottom:10px">Cuántas historias</div>
+          <div style="display:flex;align-items:center;gap:1px;background:#212226;border:1px solid #212226;width:fit-content">
+            <sc-for list="{{ counts }}" as="k" hint-placeholder-count="5">
+              <button onClick="{{ k.pick }}" style="{{ k.style }}">{{ k.n }}</button>
+            </sc-for>
+          </div>
+          <div style="font-size:11px;color:#605F5D;margin-top:9px">{{ estimate }}</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:14px">
+          <button onClick="{{ launch }}" style="background:#E2A044;color:#151006;border:0;padding:11px 22px;font-weight:800;font-size:13.5px;cursor:pointer" style-hover="background:#F0B45E">Lanzar generación</button>
+          <button onClick="{{ goQueue }}" style="background:transparent;border:1px solid #2A2B2F;color:#8E8D8A;padding:11px 18px;cursor:pointer" style-hover="border-color:#3A3B40;color:#E8E6E3">Cancelar</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isPipeline }}">
+      <div style="padding:26px 30px 60px;max-width:1100px;min-width:940px">
+        <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:22px">
+          <div style="flex:1">
+            <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em">{{ pipeTitle }}</h1>
+            <div style="font-size:12px;color:#8E8D8A;margin-top:4px">{{ pipeSub }}</div>
+          </div>
+          <div style="display:flex;border:1px solid #2A2B2F">
+            <button onClick="{{ setPipeRunning }}" style="{{ pipeRunStyle }}">En curso</button>
+            <button onClick="{{ setPipeFailed }}" style="{{ pipeFailStyle }}">Paso fallido</button>
+          </div>
+        </div>
+
+        <sc-if value="{{ backupOn }}">
+          <div style="border:1px solid #6B4C1C;background:#1C150A;padding:13px 16px;display:flex;align-items:center;gap:14px;margin-bottom:20px">
+            <span style="width:3px;height:34px;background:#E2A044;flex:none"></span>
+            <div style="flex:1">
+              <div style="font-size:12.5px;font-weight:800;color:#E2A044">Respaldo de modelo activo — Claude Haiku</div>
+              <div style="font-size:11.5px;color:#B49A72;margin-top:2px">Cuota gratuita de Gemini agotada a las 03:12. Desde ese punto la generación cuesta dinero.</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:16px;font-weight:800;color:#E2A044">{{ backupCost }}</div>
+              <div style="font-size:10.5px;color:#8E8D8A">{{ backupTokens }}</div>
+            </div>
+            <button onClick="{{ toggleBackup }}" style="background:transparent;border:1px solid #6B4C1C;color:#E2A044;padding:7px 12px;cursor:pointer;font-size:11.5px" style-hover="background:#241A0C">Pausar y esperar cuota</button>
+          </div>
+        </sc-if>
+
+        <div style="display:flex;flex-direction:column;gap:1px;background:#1F2024;border:1px solid #1F2024">
+          <sc-for list="{{ steps }}" as="s" hint-placeholder-count="7">
+            <div style="{{ s.wrap }}">
+              <div style="display:flex;align-items:center;gap:14px">
+                <span style="{{ s.dot }}"></span>
+                <span style="width:16px;font-size:10.5px;color:#4E4D4B">{{ s.num }}</span>
+                <span style="flex:1;font-size:13.5px;font-weight:800;letter-spacing:-.01em">{{ s.name }}</span>
+                <span style="{{ s.unitStyle }}">{{ s.unit }}</span>
+                <span style="width:66px;text-align:right;font-size:11.5px;color:#8E8D8A">{{ s.time }}</span>
+                <span style="{{ s.stateStyle }}">{{ s.state }}</span>
+                <button onClick="{{ s.resume }}" style="{{ s.resumeStyle }}">{{ s.resumeLabel }}</button>
+              </div>
+              <div style="{{ s.barWrap }}"><div style="{{ s.bar }}"></div></div>
+              <div style="{{ s.errWrap }}">
+                <div style="font-size:11.5px;color:#E58C7F;line-height:1.6;font-family:ui-monospace,Menlo,monospace">{{ s.error }}</div>
+                <div style="display:flex;gap:8px;margin-top:11px">
+                  <button onClick="{{ s.resume }}" style="background:#E2A044;color:#151006;border:0;padding:8px 14px;font-weight:800;cursor:pointer;font-size:12px" style-hover="background:#F0B45E">Reanudar desde este paso</button>
+                  <button style="background:transparent;border:1px solid #3A2622;color:#E58C7F;padding:8px 14px;cursor:pointer;font-size:12px" style-hover="background:#221513">Ver traza completa</button>
+                  <button onClick="{{ goQueue }}" style="background:transparent;border:1px solid #2A2B2F;color:#8E8D8A;padding:8px 14px;cursor:pointer;font-size:12px" style-hover="color:#E8E6E3">Descartar historia</button>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:14px;font-size:11px;color:#605F5D">Cualquier paso completado se puede reanudar: pasa el cursor por su fila y reejecuta desde ahí conservando lo anterior.</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isReview }}">
+      <div style="display:flex;align-items:stretch;min-height:100vh;min-width:1240px">
+        <div style="flex:1;min-width:0;padding:22px 24px 50px;border-right:1px solid #212226">
+          <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:16px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:5px">{{ reviewKicker }}</div>
+              <h1 style="font-size:22px;font-weight:800;letter-spacing:-.02em;line-height:1.15">{{ reviewTitle }}</h1>
+            </div>
+            <div style="display:flex;border:1px solid #2A2B2F;flex:none">
+              <button onClick="{{ setValClean }}" style="{{ valCleanStyle }}">Todo en verde</button>
+              <button onClick="{{ setValBlocked }}" style="{{ valBlockedStyle }}">2 bloqueantes</button>
+            </div>
+          </div>
+
+          <div style="background:#000;border:1px solid #212226;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden">
+            <div style="{{ videoFrame }}"></div>
+            <div style="position:relative;text-align:center">
+              <button onClick="{{ togglePlay }}" style="width:60px;height:60px;border-radius:50%;border:1px solid rgba(255,255,255,.28);background:rgba(0,0,0,.45);color:#fff;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(226,160,68,.22);border-color:#E2A044">{{ playIcon }}</button>
+            </div>
+            <div style="position:absolute;left:12px;top:12px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:rgba(255,255,255,.5)">{{ sceneLabel }}</div>
+            <div style="position:absolute;right:12px;top:12px;font-size:10.5px;color:rgba(255,255,255,.5)">1920 × 1080 · 24 fps</div>
+          </div>
+
+          <div style="margin-top:12px">
+            <div onClick="{{ seek }}" style="position:relative;height:34px;background:#131316;border:1px solid #212226;cursor:pointer">
+              <div style="{{ playhead }}"></div>
+              <div style="{{ progressFill }}"></div>
+              <sc-for list="{{ sceneMarks }}" as="m" hint-placeholder-count="9">
+                <div style="{{ m.style }}"></div>
+              </sc-for>
+              <sc-for list="{{ sfxMarks }}" as="m" hint-placeholder-count="12">
+                <div style="{{ m.style }}"></div>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;margin-top:8px;font-size:11.5px;color:#8E8D8A">
+              <span style="color:#E8E6E3;font-weight:800">{{ timeLabel }}</span>
+              <span style="display:flex;align-items:center;gap:6px"><span style="width:2px;height:11px;background:#6E6C68;display:inline-block"></span>frontera de escena · 9</span>
+              <span style="display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;background:#5B7FA8;display:inline-block"></span>efecto de sonido · 12</span>
+              <span style="margin-left:auto">Plano {{ shotAt }} de 108</span>
+            </div>
+          </div>
+
+          <div style="margin-top:22px;border-top:2px solid #2A2B2F;padding-top:14px">
+            <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px">
+              <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Motivos de descarte</div>
+              <div style="font-size:11px;color:#605F5D">histórico · 34 descartes</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:7px;max-width:520px">
+              <sc-for list="{{ discardStats }}" as="d" hint-placeholder-count="6">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span style="width:150px;flex:none;font-size:11.5px;color:#8E8D8A">{{ d.label }}</span>
+                  <span style="flex:1;height:8px;background:#17181A"><span style="{{ d.bar }}"></span></span>
+                  <span style="width:34px;flex:none;text-align:right;font-size:11.5px;color:#B9B7B3">{{ d.n }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <div style="width:496px;flex:none;padding:22px 24px 50px;display:flex;flex-direction:column;gap:22px;background:#0E0E10">
+
+          <div>
+            <div onClick="{{ toggleChecks }}" style="{{ valBanner }}">
+              <span style="{{ valBannerDot }}"></span>
+              <div style="flex:1">
+                <div style="font-size:13px;font-weight:800">{{ valHeadline }}</div>
+                <div style="font-size:11px;opacity:.75;margin-top:2px">{{ valSubline }}</div>
+              </div>
+              <span style="font-size:11px;opacity:.7">{{ checksToggleLabel }}</span>
+            </div>
+            <div style="{{ blockersWrap }}">
+              <sc-for list="{{ blockers }}" as="c" hint-placeholder-count="2">
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-bottom:1px solid #2A1C19">
+                  <span style="width:7px;height:7px;background:#D24A3C;flex:none;margin-top:5px"></span>
+                  <div style="flex:1">
+                    <div style="font-size:12px;font-weight:800;color:#E8E6E3">{{ c.name }}</div>
+                    <div style="font-size:11px;color:#B08C86;margin-top:2px">{{ c.detail }}</div>
+                  </div>
+                  <span style="font-size:11.5px;color:#E58C7F;font-weight:800">{{ c.value }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="{{ checksWrap }}">
+              <sc-for list="{{ checks }}" as="c" hint-placeholder-count="15">
+                <div style="display:flex;align-items:center;gap:9px;padding:7px 10px;background:#131316">
+                  <span style="{{ c.dot }}"></span>
+                  <span style="flex:1;font-size:11.5px;color:#B9B7B3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name }}</span>
+                  <span style="{{ c.valueStyle }}">{{ c.value }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="border-top:2px solid #2A2B2F;padding-top:14px">
+            <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;margin-bottom:12px">Metadatos</div>
+
+            <div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;color:#8E8D8A">Título</span>
+              <span style="{{ titleCountStyle }}">{{ titleCount }}</span>
+            </div>
+            <textarea value="{{ title }}" onChange="{{ setTitle }}" rows="2" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:9px 11px;line-height:1.45;font-weight:800;font-size:13px;resize:none"></textarea>
+            <div style="font-size:10.5px;color:#605F5D;margin:9px 0 6px">Variantes generadas</div>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <sc-for list="{{ titleVariants }}" as="v" hint-placeholder-count="3">
+                <div onClick="{{ v.pick }}" style="display:flex;align-items:center;gap:10px;padding:8px 11px;background:#131316;border:1px solid #1F2024;cursor:pointer" style-hover="border-color:#E2A044;background:#17181A">
+                  <span style="flex:1;font-size:11.5px;color:#B9B7B3;line-height:1.4">{{ v.text }}</span>
+                  <span style="{{ v.lenStyle }}">{{ v.len }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="margin:18px 0 6px;display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;color:#8E8D8A">Descripción</span>
+              <span style="font-size:10.5px;color:#605F5D">Las dos primeras líneas son lo único visible en móvil</span>
+            </div>
+            <div style="border:1px solid #2A2B2F;background:#131316">
+              <div style="padding:9px 11px;border-bottom:1px dashed #3A3B40;background:#17140E">
+                <textarea value="{{ descHead }}" onChange="{{ setDescHead }}" rows="2" style="width:100%;background:transparent;border:0;color:#E8E6E3;padding:0;line-height:1.5;font-size:12px;resize:none"></textarea>
+              </div>
+              <textarea value="{{ descBody }}" onChange="{{ setDescBody }}" rows="5" style="width:100%;background:transparent;border:0;color:#8E8D8A;padding:9px 11px;line-height:1.55;font-size:11.5px;resize:vertical"></textarea>
+            </div>
+
+            <div style="margin:18px 0 6px;display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;color:#8E8D8A">Hashtags</span>
+              <span style="{{ hashCountStyle }}">{{ hashCount }}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;padding:9px;border:1px solid #2A2B2F;background:#131316">
+              <sc-for list="{{ hashtags }}" as="h" hint-placeholder-count="3">
+                <span style="display:inline-flex;align-items:center;gap:7px;background:#1E1F22;border:1px solid #2A2B2F;padding:4px 8px;font-size:11.5px;color:#E2A044">{{ h.text }}<button onClick="{{ h.remove }}" style="background:none;border:0;color:#605F5D;cursor:pointer;padding:0;font-size:12px" style-hover="color:#D24A3C">×</button></span>
+              </sc-for>
+              <span style="font-size:10.5px;color:#605F5D;align-self:center">solo los tres primeros salen sobre el título</span>
+            </div>
+
+            <div style="margin:18px 0 6px;font-size:11px;color:#8E8D8A">Etiquetas <span style="color:#605F5D">· no se ven, solo indexan</span></div>
+            <textarea value="{{ tags }}" onChange="{{ setTags }}" rows="3" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#8E8D8A;padding:9px 11px;line-height:1.6;font-size:11.5px;resize:vertical"></textarea>
+          </div>
+
+          <div style="border-top:2px solid #2A2B2F;padding-top:14px">
+            <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800;margin-bottom:12px">Decisión</div>
+            <button onClick="{{ approve }}" style="{{ approveStyle }}">{{ approveLabel }}</button>
+            <div style="{{ approveNoteStyle }}">{{ approveNote }}</div>
+
+            <div style="margin-top:16px;border:1px solid #2A2B2F;background:#131316">
+              <div style="padding:10px 12px;font-size:12px;font-weight:800;border-bottom:1px solid #1F2024">Regenerar</div>
+              <div style="padding:11px 12px">
+                <textarea value="{{ regen }}" onChange="{{ setRegen }}" rows="2" placeholder="Qué hay que cambiar. Se inyecta al prompt." style="width:100%;background:#0E0E10;border:1px solid #2A2B2F;color:#E8E6E3;padding:9px 11px;line-height:1.5;font-size:11.5px;resize:vertical"></textarea>
+                <button onClick="{{ regenerate }}" style="{{ regenBtnStyle }}">{{ regenLabel }}</button>
+              </div>
+            </div>
+
+            <div style="margin-top:12px;border:1px solid #2A2B2F;background:#131316">
+              <div onClick="{{ toggleDiscard }}" style="padding:10px 12px;font-size:12px;font-weight:800;cursor:pointer;display:flex;justify-content:space-between" style-hover="background:#17181A"><span>Descartar</span><span style="color:#605F5D">{{ discardCaret }}</span></div>
+              <div style="{{ discardWrap }}">
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:9px">El motivo es obligatorio. Se acumula en el histórico.</div>
+                <div style="display:flex;flex-wrap:wrap;gap:1px;background:#1F2024;border:1px solid #1F2024">
+                  <sc-for list="{{ discardReasons }}" as="d" hint-placeholder-count="6">
+                    <button onClick="{{ d.pick }}" style="{{ d.style }}">{{ d.label }}</button>
+                  </sc-for>
+                </div>
+                <button onClick="{{ confirmDiscard }}" style="{{ discardBtnStyle }}">{{ discardBtnLabel }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSheet }}">
+      <div style="padding:22px 24px 60px;min-width:1020px">
+        <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:18px">
+          <div style="flex:1">
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:5px">Hoja de contactos · {{ reviewTitleShort }}</div>
+            <h1 style="font-size:24px;font-weight:800;letter-spacing:-.02em">108 planos</h1>
+          </div>
+          <div style="display:flex;gap:1px;background:#212226;border:1px solid #212226">
+            <sc-for list="{{ sheetFilters }}" as="f" hint-placeholder-count="6">
+              <button onClick="{{ f.go }}" style="{{ f.style }}">{{ f.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="{{ selBarStyle }}">
+          <span style="font-size:12.5px;font-weight:800;color:#E2A044">{{ selCount }}</span>
+          <span style="font-size:11.5px;color:#B49A72;flex:1">{{ selNote }}</span>
+          <button onClick="{{ regenShots }}" style="background:#E2A044;color:#151006;border:0;padding:7px 14px;font-weight:800;cursor:pointer;font-size:12px" style-hover="background:#F0B45E">Regenerar seleccionados</button>
+          <button onClick="{{ clearSel }}" style="background:transparent;border:1px solid #3A3B40;color:#8E8D8A;padding:7px 12px;cursor:pointer;font-size:12px" style-hover="color:#E8E6E3">Deseleccionar</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:6px">
+          <sc-for list="{{ shots }}" as="s" hint-placeholder-count="36">
+            <div onClick="{{ s.toggle }}" onMouseEnter="{{ s.hover }}" onMouseLeave="{{ s.unhover }}" style="{{ s.wrap }}">
+              <div style="{{ s.tone }}"></div>
+              <div style="position:absolute;left:0;top:0;right:0;display:flex;justify-content:space-between;padding:4px 5px;font-size:9.5px;color:rgba(255,255,255,.72);text-shadow:0 1px 2px #000">
+                <span>{{ s.num }}</span><span>{{ s.dur }}</span>
+              </div>
+              <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;padding:4px 5px;gap:4px">
+                <span style="{{ s.kindStyle }}">{{ s.kind }}</span>
+                <span style="{{ s.phaseStyle }}">{{ s.phase }}</span>
+              </div>
+              <div style="{{ s.hoverStyle }}">
+                <div style="font-size:10.5px;color:#E8E6E3;line-height:1.4;margin-bottom:6px">{{ s.line }}</div>
+                <div style="font-size:9.5px;color:#8E8D8A;line-height:1.4;font-family:ui-monospace,Menlo,monospace">{{ s.prompt }}</div>
+              </div>
+              <div style="{{ s.selMark }}"></div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="margin-top:26px;border-top:2px solid #2A2B2F;padding-top:16px;display:grid;grid-template-columns:220px 220px 1fr;gap:28px;align-items:start">
+          <div>
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:8px">Planos con figura</div>
+            <div style="font-size:28px;font-weight:800;color:#E2A044;line-height:1">61 %</div>
+            <div style="font-size:11px;color:#605F5D;margin-top:5px">mínimo 55 %</div>
+            <div style="height:6px;background:#17181A;margin-top:9px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:61%;background:#4FA265"></div><div style="position:absolute;left:55%;top:-3px;bottom:-3px;width:1px;background:#8E8D8A"></div></div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:8px">Planos de detalle</div>
+            <div style="font-size:28px;font-weight:800;color:#E2A044;line-height:1">19 %</div>
+            <div style="font-size:11px;color:#605F5D;margin-top:5px">máximo 25 %</div>
+            <div style="height:6px;background:#17181A;margin-top:9px;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:19%;background:#4FA265"></div><div style="position:absolute;left:25%;top:-3px;bottom:-3px;width:1px;background:#8E8D8A"></div></div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:8px">Progresión de la amenaza</div>
+            <div style="display:flex;height:26px;gap:1px;background:#1F2024;border:1px solid #1F2024">
+              <sc-for list="{{ threatBands }}" as="b" hint-placeholder-count="4">
+                <div style="{{ b.style }}"><span style="font-size:10px;color:rgba(0,0,0,.65);font-weight:800;letter-spacing:.04em">{{ b.label }}</span></div>
+              </sc-for>
+            </div>
+            <div style="font-size:11px;color:#605F5D;margin-top:7px">Primera aparición plena en el plano 80 — el 74 % de la historia. El umbral está en el 70 %.</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isThumb }}">
+      <div style="padding:22px 24px 60px">
+        <div style="margin-bottom:18px">
+          <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:5px">Miniatura · {{ reviewTitleShort }}</div>
+          <h1 style="font-size:24px;font-weight:800;letter-spacing:-.02em">Composición</h1>
+        </div>
+        <div style="display:flex;gap:22px;align-items:flex-start;min-width:1300px">
+
+          <div style="width:150px;flex:none">
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:9px">Fotogramas</div>
+            <div style="display:flex;flex-direction:column;gap:6px;max-height:640px;overflow-y:auto;padding-right:4px">
+              <sc-for list="{{ frames }}" as="f" hint-placeholder-count="8">
+                <div onClick="{{ f.pick }}" style="{{ f.wrap }}">
+                  <div style="{{ f.tone }}"></div>
+                  <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:3px 5px;font-size:9.5px;color:rgba(255,255,255,.7);text-shadow:0 1px 2px #000"><span>{{ f.num }}</span><span>{{ f.tags }}</span></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:1;min-width:0">
+            <div style="{{ canvasOuter }}">
+              <div style="{{ canvasTone }}"></div>
+              <div style="{{ canvasVignette }}"></div>
+              <div style="{{ canvasTextWrap }}">
+                <div style="{{ canvasLine1 }}">{{ tLine1 }}</div>
+                <div style="{{ canvasLine2 }}">{{ tLine2 }}</div>
+                <div style="{{ canvasLine3 }}">{{ tLine3 }}</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:9px;font-size:11px;color:#605F5D">
+              <span>1280 × 720</span><span>·</span><span>{{ contrastLabel }}</span><span>·</span><span>{{ satLabel }}</span>
+            </div>
+
+            <div style="margin-top:20px;border-top:2px solid #2A2B2F;padding-top:14px">
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:12px">
+                <div style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Variantes guardadas</div>
+                <button onClick="{{ saveVariant }}" style="background:transparent;border:1px solid #2A2B2F;color:#E2A044;padding:5px 11px;cursor:pointer;font-size:11.5px" style-hover="border-color:#E2A044">Guardar la actual</button>
+              </div>
+              <div style="display:flex;gap:14px;flex-wrap:wrap">
+                <sc-for list="{{ variants }}" as="v" hint-placeholder-count="2">
+                  <div style="width:168px">
+                    <div style="{{ v.box }}">
+                      <div style="{{ v.tone }}"></div>
+                      <div style="{{ v.vig }}"></div>
+                      <div style="{{ v.textWrap }}">
+                        <div style="{{ v.l1 }}">{{ v.line1 }}</div>
+                        <div style="{{ v.l2 }}">{{ v.line2 }}</div>
+                        <div style="{{ v.l3 }}">{{ v.line3 }}</div>
+                      </div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10.5px;color:#605F5D"><span>{{ v.name }}</span><button onClick="{{ v.load }}" style="background:none;border:0;color:#E2A044;cursor:pointer;padding:0;font-size:10.5px">cargar</button></div>
+                  </div>
+                </sc-for>
+                <div style="{{ noVariants }}">Guarda una composición para compararla aquí al tamaño real.</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="width:300px;flex:none;display:flex;flex-direction:column;gap:18px">
+            <div style="border:1px solid #2A2B2F;background:#0E0E10;padding:14px">
+              <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:10px">Como se ve en el móvil</div>
+              <div style="{{ previewBox }}">
+                <div style="{{ previewTone }}"></div>
+                <div style="{{ previewVig }}"></div>
+                <div style="{{ previewTextWrap }}">
+                  <div style="{{ previewL1 }}">{{ tLine1 }}</div>
+                  <div style="{{ previewL2 }}">{{ tLine2 }}</div>
+                  <div style="{{ previewL3 }}">{{ tLine3 }}</div>
+                </div>
+              </div>
+              <div style="font-size:10.5px;color:#605F5D;margin-top:8px;line-height:1.5">168 píxeles de ancho — el tamaño real en la lista de YouTube.</div>
+              <div style="{{ legibilityStyle }}">{{ legibilityLabel }}</div>
+            </div>
+
+            <div style="border-top:2px solid #2A2B2F;padding-top:14px;display:flex;flex-direction:column;gap:14px">
+              <div>
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:6px">Línea 1</div>
+                <input value="{{ tLine1 }}" onChange="{{ setL1 }}" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:8px 10px;font-size:12px">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:6px">Línea 2 <span style="color:#E2A044">· acento ámbar</span></div>
+                <input value="{{ tLine2 }}" onChange="{{ setL2 }}" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:8px 10px;font-size:12px">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:6px">Línea 3 <span style="color:#605F5D">· opcional</span></div>
+                <input value="{{ tLine3 }}" onChange="{{ setL3 }}" style="width:100%;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:8px 10px;font-size:12px">
+              </div>
+              <sc-for list="{{ sliders }}" as="s" hint-placeholder-count="5">
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:11px;color:#8E8D8A;margin-bottom:6px"><span>{{ s.label }}</span><span style="color:#B9B7B3">{{ s.display }}</span></div>
+                  <input type="range" min="{{ s.min }}" max="{{ s.max }}" step="{{ s.step }}" value="{{ s.value }}" onChange="{{ s.set }}" style="width:100%;accent-color:#E2A044;background:transparent">
+                </div>
+              </sc-for>
+              <div>
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:6px">Posición del texto</div>
+                <div style="display:flex;gap:1px;background:#212226;border:1px solid #212226">
+                  <sc-for list="{{ positions }}" as="p" hint-placeholder-count="3">
+                    <button onClick="{{ p.pick }}" style="{{ p.style }}">{{ p.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isPackage }}">
+      <div style="padding:22px 24px 60px;max-width:1240px;min-width:1020px">
+        <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:18px">
+          <div style="flex:1">
+            <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8E8D8A;margin-bottom:5px">Paquete de publicación</div>
+            <h1 style="font-size:24px;font-weight:800;letter-spacing:-.02em">{{ reviewTitleShort }}</h1>
+          </div>
+          <div style="font-size:11.5px;color:#605F5D;max-width:340px;text-align:right;line-height:1.5">La herramienta no sube nada. Prepara todo para que subirlo a mano te lleve dos minutos.</div>
+        </div>
+
+        <sc-if value="{{ published }}">
+          <div style="border:1px solid #2E5B3B;background:#0F1A13;padding:14px 16px;display:flex;align-items:center;gap:14px;margin-bottom:20px">
+            <span style="width:3px;height:32px;background:#4FA265;flex:none"></span>
+            <div style="flex:1">
+              <div style="font-size:12.5px;font-weight:800;color:#7FC48F">Publicada · 30 ago 2026, 21:14</div>
+              <div style="font-size:11.5px;color:#8E8D8A;margin-top:2px">Ciclo cerrado. La historia sale de la cola activa.</div>
+            </div>
+            <a href="#" style="font-size:12px;color:#E2A044">{{ publishedUrl }}</a>
+            <button onClick="{{ unpublish }}" style="background:transparent;border:1px solid #2A2B2F;color:#8E8D8A;padding:7px 12px;cursor:pointer;font-size:11.5px" style-hover="color:#E8E6E3">Deshacer</button>
+          </div>
+        </sc-if>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start">
+
+          <div>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+              <span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Descargas</span>
+              <div style="flex:1;height:1px;background:#1F2024"></div>
+              <button onClick="{{ downloadAll }}" style="{{ downloadAllStyle }}">{{ downloadAllLabel }}</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:1px;background:#1F2024;border:1px solid #1F2024">
+              <sc-for list="{{ downloads }}" as="d" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;gap:14px;padding:14px 14px;background:#131316">
+                  <span style="{{ d.iconStyle }}">{{ d.ext }}</span>
+                  <div style="flex:1">
+                    <div style="font-size:12.5px;font-weight:800">{{ d.name }}</div>
+                    <div style="font-size:11px;color:#605F5D;margin-top:2px">{{ d.detail }}</div>
+                  </div>
+                  <span style="width:70px;text-align:right;font-size:11.5px;color:#8E8D8A">{{ d.size }}</span>
+                  <button onClick="{{ d.download }}" style="{{ d.btnStyle }}">{{ d.btnLabel }}</button>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="margin-top:26px;border-top:2px solid #2A2B2F;padding-top:14px">
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+                <span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">En YouTube, a mano</span>
+                <span style="font-size:11px;color:#8E8D8A">{{ checklistProgress }}</span>
+              </div>
+              <div style="font-size:11px;color:#605F5D;margin-bottom:12px">Lo que la herramienta no puede hacer por ti.</div>
+              <div style="display:flex;flex-direction:column;gap:1px;background:#1F2024;border:1px solid #1F2024">
+                <sc-for list="{{ checklist }}" as="c" hint-placeholder-count="4">
+                  <div onClick="{{ c.toggle }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#131316;cursor:pointer" style-hover="background:#17181A">
+                    <span style="{{ c.box }}">{{ c.tick }}</span>
+                    <span style="{{ c.labelStyle }}">{{ c.label }}</span>
+                    <span style="font-size:10.5px;color:#4E4D4B">{{ c.hint }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="margin-top:20px;border:1px solid #2A2B2F;background:#0E0E10;padding:14px">
+                <div style="font-size:12px;font-weight:800;margin-bottom:4px">Cerrar el ciclo</div>
+                <div style="font-size:11px;color:#8E8D8A;margin-bottom:11px">Pega aquí la URL del vídeo y la historia pasa a publicada.</div>
+                <div style="display:flex;gap:8px">
+                  <input value="{{ urlDraft }}" onChange="{{ setUrl }}" placeholder="https://www.youtube.com/watch?v=…" style="flex:1;background:#131316;border:1px solid #2A2B2F;color:#E8E6E3;padding:9px 11px;font-size:12px">
+                  <button onClick="{{ markPublished }}" style="{{ publishBtnStyle }}">Marcar publicada</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+              <span style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;font-weight:800">Texto para copiar</span>
+              <div style="flex:1;height:1px;background:#1F2024"></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <sc-for list="{{ copyBlocks }}" as="b" hint-placeholder-count="4">
+                <div style="border:1px solid #2A2B2F;background:#131316">
+                  <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid #1F2024">
+                    <span style="flex:1;font-size:11.5px;font-weight:800">{{ b.label }}</span>
+                    <span style="font-size:10.5px;color:#605F5D">{{ b.meta }}</span>
+                    <button onClick="{{ b.copy }}" style="{{ b.btnStyle }}">{{ b.btnLabel }}</button>
+                  </div>
+                  <div style="{{ b.bodyStyle }}">{{ b.text }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Compacta&quot;,&quot;Cómoda&quot;],&quot;default&quot;:&quot;Compacta&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Cola&quot;},&quot;showScores&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Cola&quot;}}">
+const AMBER='#E2A044', GREEN='#4FA265', YEL='#D6C044', RED='#D24A3C';
+const S1='#131316', BRD='#2A2B2F', MUT='#8E8D8A', DIM='#605F5D';
+
+const CREATURES=['Santa Compaña','El Silbón','El Familiar','La Patasola','El Trauco','Cuélebre','Nuberu','Chullachaqui','La Llorona','El Cadejo','La Sayona','El Sombrerón','La Tunda','El Pombero','La Luz Mala','El Basilisco','La Ciguapa','El Tío de la mina','La Mula Ánima','El Ánima Sola','La Mano Peluda','La Siguanaba','El Muki','La Viuda','El Cuco','La Xana','El Ojáncano','El Trasgu','El Caleuche'];
+const USED={'Santa Compaña':3,'El Silbón':2,'La Llorona':4,'El Cadejo':1,'Cuélebre':1,'El Sombrerón':2,'La Luz Mala':1,'El Trauco':1,'La Patasola':1,'El Cuco':2,'La Sayona':1};
+
+const STATUS={
+ 'borrador':{c:'#6E6C68'},'guion listo':{c:'#6E6C68'},'narrada':{c:'#7D8A99'},'imágenes listas':{c:'#7D8A99'},
+ 'mezclada':{c:'#7D8A99'},'renderizada':{c:'#9B99C4'},'pendiente de revisión':{c:AMBER},'lista para publicar':{c:GREEN},
+ 'descargada':{c:GREEN},'publicada':{c:GREEN},'descartada':{c:'#5A4340'},'fallida':{c:RED}};
+
+const STORIES=[
+ {id:'s1',t:'La Santa Compaña pasó por mi calle y nadie más la vio',mode:'Folclore',cr:'Santa Compaña',dur:'10:47',st:'pendiente de revisión',v:'publish',sc:8.4,d:'30 ago',tone:214},
+ {id:'s2',t:'Oí el silbido siete veces antes de entender lo que era',mode:'Folclore',cr:'El Silbón',dur:'11:02',st:'pendiente de revisión',v:'revise',sc:6.1,d:'30 ago',tone:26},
+ {id:'s3',t:'El perro negro que me siguió desde el cementerio de Comayagua',mode:'Folclore',cr:'El Cadejo',dur:'09:58',st:'pendiente de revisión',v:'publish',sc:7.8,d:'29 ago',tone:150},
+ {id:'s4',t:'Firmó el contrato con El Familiar y el ingenio dio tres zafras',mode:'Folclore',cr:'El Familiar',dur:'12:14',st:'lista para publicar',v:'publish',sc:9.0,d:'29 ago',tone:32},
+ {id:'s5',t:'La luz mala del camino de Chascomús',mode:'Folclore',cr:'La Luz Mala',dur:'10:20',st:'lista para publicar',v:'publish',sc:8.1,d:'28 ago',tone:52},
+ {id:'s6',t:'Nadie duerme en la casa del guardavía',mode:'Original',cr:'—',dur:'11:39',st:'descargada',v:'publish',sc:8.6,d:'27 ago',tone:200},
+ {id:'s7',t:'La mujer del río Cauca tenía la voz de mi madre',mode:'Folclore',cr:'La Llorona',dur:'10:05',st:'publicada',v:'publish',sc:8.9,d:'25 ago',tone:190},
+ {id:'s8',t:'El Cuélebre despertó bajo la ermita de Peñamellera',mode:'Folclore',cr:'Cuélebre',dur:'12:41',st:'renderizada',v:'—',sc:0,d:'30 ago',tone:96},
+ {id:'s9',t:'Tres noches con El Sombrerón en la puerta',mode:'Folclore',cr:'El Sombrerón',dur:'—',st:'mezclada',v:'—',sc:0,d:'30 ago',tone:40},
+ {id:'s10',t:'La patasola bajó al campamento maderero',mode:'Folclore',cr:'La Patasola',dur:'—',st:'narrada',v:'—',sc:0,d:'30 ago',tone:130},
+ {id:'s11',t:'El pasajero del último tren a Aranjuez',mode:'Original',cr:'—',dur:'—',st:'guion listo',v:'—',sc:0,d:'30 ago',tone:220},
+ {id:'s12',t:'Lo que el Trauco dejó en la playa de Cucao',mode:'Folclore',cr:'El Trauco',dur:'—',st:'fallida',v:'—',sc:0,d:'29 ago',tone:8},
+ {id:'s13',t:'La voz del pozo de Almadén',mode:'Original',cr:'—',dur:'09:12',st:'descartada',v:'discard',sc:3.2,d:'26 ago',tone:16},
+ {id:'s14',t:'Cuadernos del faro de Cabo Blanco',mode:'Original',cr:'—',dur:'—',st:'borrador',v:'—',sc:0,d:'30 ago',tone:210}];
+
+const CHECKS_OK=[
+ ['Cobertura de timings','100 %','ok'],['Duración de planos','6,0 s ±0,2','ok'],['Duración de la mezcla','10:47','ok'],
+ ['Suma de planos vs máster','Δ 0,3 s','ok'],['Planos con descripción','108/108','ok'],['Versión del planificador','v4.2','ok'],
+ ['Imágenes de marcador','0','ok'],['Planos con figura','61 %','ok'],['Planos de detalle','19 %','ok'],
+ ['Aparición de la amenaza','74 %','ok'],['Efectos dentro de su plano','12/12','ok'],['Anclaje de efectos','12/12','ok'],
+ ['Despedida del canal','audio + 1 plano','ok'],['Loudness integrado','−13,8 LUFS','ok'],['Pico real','−1,4 dBTP','ok']];
+
+const CHECKS_BAD=[
+ ['Cobertura de timings','100 %','ok'],['Duración de planos','6,0 s ±0,2','ok'],['Duración de la mezcla','11:02','ok'],
+ ['Suma de planos vs máster','Δ 1,9 s','warn'],['Planos con descripción','108/108','ok'],['Versión del planificador','v4.2','ok'],
+ ['Imágenes de marcador','0','ok'],['Planos con figura','48 %','bad','Por debajo del mínimo del 55 %. Faltan 8 planos con figura legible.'],
+ ['Planos de detalle','24 %','warn'],['Aparición de la amenaza','71 %','warn'],['Efectos dentro de su plano','12/12','ok'],
+ ['Anclaje de efectos','12/12','ok'],['Despedida del canal','audio + 1 plano','ok'],['Loudness integrado','−13,7 LUFS','ok'],
+ ['Pico real','−0,6 dBTP','bad','Supera el techo de −1,0 dBTP. YouTube volvería a comprimir el máster.']];
+
+const STEPS=[
+ ['Guion','9.480 palabras','1:42'],['Revisión del guion','14 notas aplicadas','0:38'],['Narración','90 / 90 frases','4:11'],
+ ['Planificación de planos','108 / 108 planos','1:04'],['Dirección e imágenes','108 planos · 6 s','11:26'],
+ ['Sonido y mezcla','12 efectos · −14 LUFS','2:07'],['Render','108 clips','6:52']];
+
+const KINDS={prot:['Protagonista','#6D8CB0'],amen:['Amenaza','#B05B4E'],ambos:['Ambos','#9B7BB0'],ent:['Entorno','#6E7A6A'],det:['Detalle','#8A8378']};
+const REASONS=['Guion flojo','Voz o pronunciación','Imágenes incoherentes','Sonido','Ritmo','Otro'];
+const DISCARD_HIST=[['Imágenes incoherentes',11],['Guion flojo',9],['Ritmo',6],['Voz o pronunciación',4],['Sonido',3],['Otro',1]];
+
+function pad(n){return n<10?'0'+n:''+n}
+function mmss(s){return pad(Math.floor(s/60))+':'+pad(Math.floor(s%60))}
+function tone(h,l1,l2){return 'position:absolute;inset:0;background:linear-gradient(160deg,hsl('+h+' 14% '+l1+'%),hsl('+((h+28)%360)+' 10% '+l2+'%))'}
+
+class Component extends DCLogic {
+  state={
+    screen:'queue', queueEmpty:false, filter:'Todas',
+    mode:'Folclore', creature:'Nuberu', premise:'', count:2,
+    pipe:'failed', backup:true,
+    val:'clean', checksOpen:false,
+    title:'La Santa Compaña pasó por mi calle y nadie más la vio',
+    descHead:'Tres vecinos de la aldea juraron lo mismo aquella noche de noviembre.\nEsto es lo que contó el único que se atrevió a mirar atrás.',
+    descBody:'Capítulos\n00:00 La procesión\n01:48 El aviso del cura\n03:35 La vela encendida\n06:02 Lo que pesa la cruz\n08:40 La mañana siguiente\n\nCréditos de audio\nAmbientes y efectos bajo licencia CC0 · Narración sintetizada',
+    tags:'santa compaña, leyendas de galicia, folclore español, historias de terror, terror narrado, mitologia gallega, leyendas urbanas, relatos de miedo, procesión de ánimas, terror en español',
+    hashtags:['#SantaCompaña','#TerrorNarrado','#Folclore'],
+    regen:'', discardOpen:false, reason:null,
+    playing:false, t:186,
+    sel:[], hover:null, sheetFilter:'Todos',
+    frame:2, l1:'NADIE MÁS', l2:'LA VIO', l3:'Santa Compaña · Galicia',
+    tsize:132, tposy:58, talign:'left', vig:55, contrast:118, sat:72,
+    variants:[],
+    dl:{mp4:true,jpg:true,srt:false}, checks:{alt:true,srt:false,vis:true,thumb:false},
+    urlDraft:'', published:false, publishedUrl:'', copied:null, toast:null
+  };
+  componentWillUnmount(){clearInterval(this._iv);clearTimeout(this._to)}
+  go(s){return ()=>this.setState({screen:s})}
+  flash(m){clearTimeout(this._to);this.setState({toast:m});this._to=setTimeout(()=>this.setState({toast:null}),1800)}
+
+  seg(active){return 'background:'+(active?AMBER:'transparent')+';color:'+(active?'#151006':MUT)+';border:0;padding:7px 13px;font-size:11.5px;font-weight:'+(active?800:600)+';cursor:pointer'}
+  chip(c,txt){return 'display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.02em;color:'+c+';border:1px solid '+c+'55;background:'+c+'14;padding:3px 8px'}
+
+  renderVals(){
+    const st=this.state, S=this;
+    const density=this.props.density||'Compacta';
+    const rowPad=density==='Cómoda'?'13px 14px':'9px 14px';
+    const showScores=this.props.showScores!==false;
+    const pending=STORIES.filter(s=>s.st==='pendiente de revisión');
+    const rest=STORIES.filter(s=>s.st!=='pendiente de revisión');
+    const cur=STORIES[0];
+
+    const navDef=[['queue','Cola de trabajo','1',String(pending.length)],['new','Nueva historia','2',''],['pipeline','Progreso',' 3',''],
+      ['review','Revisión','4',''],['sheet','Hoja de contactos','5',''],['thumb','Miniatura','6',''],['package','Paquete','7','']];
+    const nav=navDef.map(([k,label,num,badge])=>{
+      const a=st.screen===k;
+      return {go:this.go(k),num,label,badge,
+        style:'display:flex;align-items:center;gap:9px;padding:8px 10px;font-size:12.5px;cursor:pointer;font-weight:'+(a?800:400)+';color:'+(a?'#E8E6E3':'#9C9A97')+';background:'+(a?'#1B1C1F':'transparent')+';border-left:2px solid '+(a?AMBER:'transparent'),
+        badgeStyle:badge?'background:'+AMBER+';color:#151006;font-size:10px;font-weight:800;padding:1px 6px':'display:none'};
+    });
+
+    const mkRow=(s,hi)=>({
+      open:()=>this.setState({screen:'review'}),
+      title:s.t,
+      meta:s.mode+(s.cr!=='—'?' · '+s.cr:'')+' · '+(s.mode==='Folclore'?'usada '+(USED[s.cr]||0)+'×':'premisa libre'),
+      dur:s.dur,date:s.d,
+      thumb:'width:86px;height:48px;flex:none;'+tone(s.tone,11,6).replace('position:absolute;inset:0;','')+';border:1px solid #212226',
+      rowStyle:'display:flex;align-items:center;gap:14px;padding:'+(hi?'12px 14px':rowPad)+';cursor:pointer;background:'+(hi?'#17140E':S1)+';border-left:2px solid '+(hi?AMBER:'transparent'),
+      status:s.st,statusStyle:S.chip(STATUS[s.st].c),
+      verdict:s.v==='—'?'':s.v,
+      verdictStyle:s.v==='—'?'display:none':S.chip(s.v==='publish'?GREEN:s.v==='revise'?YEL:RED),
+      score:showScores&&s.sc?s.sc.toFixed(1):'',
+      scoreStyle:showScores&&s.sc?'font-size:12px;font-weight:800;color:'+(s.sc>=7.5?GREEN:s.sc>=5?YEL:RED):'display:none'
+    });
+
+    const filtered=st.filter==='Todas'?rest:rest.filter(s=>{
+      if(st.filter==='Listas')return s.st==='lista para publicar'||s.st==='descargada';
+      if(st.filter==='En curso')return ['borrador','guion listo','narrada','imágenes listas','mezclada','renderizada'].includes(s.st);
+      return ['descartada','fallida','publicada'].includes(s.st);});
+
+    // ── validation
+    const raw=st.val==='clean'?CHECKS_OK:CHECKS_BAD;
+    const bad=raw.filter(c=>c[2]==='bad'), warn=raw.filter(c=>c[2]==='warn');
+    const blocked=bad.length>0;
+    const dotC=k=>k==='ok'?GREEN:k==='warn'?YEL:RED;
+    const checks=raw.map(c=>({name:c[0],value:c[1],
+      dot:'width:7px;height:7px;flex:none;background:'+dotC(c[2]),
+      valueStyle:'font-size:11.5px;font-weight:800;color:'+(c[2]==='ok'?'#7E7C79':dotC(c[2]))}));
+    const open=st.checksOpen||blocked&&st.checksOpen;
+
+    const title=st.title, tlen=title.length;
+    const variantsT=[['El silencio de la Santa Compaña: lo que vio el único que miró atrás',66],
+      ['Santa Compaña: la procesión que cruzó mi calle a las tres de la mañana',71],
+      ['Nadie más la vio',16]];
+
+    // ── timeline
+    const DUR=647, pct=st.t/DUR*100;
+    const scenes=[0,.09,.19,.28,.37,.48,.61,.74,.87];
+    const sfx=[.04,.12,.17,.24,.33,.41,.5,.58,.66,.73,.81,.93];
+
+    // ── shots
+    const shots=[];
+    for(let i=1;i<=108;i++){
+      const r=(i*37)%100;
+      const k=i>=80?(r<55?'amen':r<75?'ambos':'ent'):r<34?'prot':r<52?'ent':r<70?'det':r<86?'ambos':'amen';
+      const phase=i<40?'':i<66?'presagio':i<80?'atisbo':'plena';
+      const selq=st.sel.includes(i), hov=st.hover===i;
+      shots.push({num:pad(i),dur:'6,0 s',kind:KINDS[k][0],phase,
+        toggle:()=>this.setState(s=>({sel:s.sel.includes(i)?s.sel.filter(x=>x!==i):s.sel.concat(i)})),
+        hover:()=>this.setState({hover:i}),unhover:()=>this.setState({hover:null}),
+        wrap:'position:relative;aspect-ratio:16/9;overflow:hidden;cursor:pointer;border:1px solid '+(selq?AMBER:'#1F2024'),
+        tone:tone((i*53)%360,10+(i%5),5+(i%4)),
+        kindStyle:'font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:2px 5px;background:'+KINDS[k][1]+'CC;color:#0B0B0C',
+        phaseStyle:phase?'font-size:9px;padding:2px 5px;background:rgba(0,0,0,.6);color:'+(phase==='plena'?'#E58C7F':'rgba(255,255,255,.65)'):'display:none',
+        line:'«'+['Nadie contestó al otro lado del muro.','La vela se apagó sin viento.','Oí los pasos antes de ver la luz.','Conté trece figuras y luego catorce.','El perro no ladró ni una vez.','Mi abuela cerró la ventana y rezó.'][i%6]+'»',
+        prompt:'wide shot, night, galician stone lane, fog, single lantern, 35mm, low key',
+        hoverStyle:hov?'position:absolute;inset:0;background:rgba(8,8,9,.93);padding:8px;overflow:hidden':'display:none',
+        selMark:selq?'position:absolute;left:0;top:0;width:0;height:0;border-left:16px solid '+AMBER+';border-bottom:16px solid transparent':'display:none'});
+    }
+    const visShots=st.sheetFilter==='Todos'?shots:shots.filter(s=>s.kind===st.sheetFilter);
+
+    // ── thumbnail geometry
+    const CW=760, k=CW/1280;
+    const fx='filter:contrast('+st.contrast+'%) saturate('+st.sat+'%)';
+    const vig='position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,'+(st.vig/100)+') 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,0) 62%,rgba(0,0,0,'+(st.vig/100)+') 100%)';
+    const frameTone=(i,w)=>tone((i*67)%360,9+(i%4),5);
+    const textWrap=(scale,align,posy)=>'position:absolute;left:'+(72*scale)+'px;right:'+(72*scale)+'px;top:'+posy+'%;transform:translateY(-50%);text-align:'+align+';line-height:1.02';
+    const lineS=(scale,size,color)=>'font-weight:800;letter-spacing:-.02em;font-size:'+(size*scale)+'px;color:'+color+';text-shadow:0 '+(4*scale)+'px '+(18*scale)+'px rgba(0,0,0,.85);white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    const pk=168/1280;
+    const legible=st.tsize*pk>=13.5;
+
+    const sliders=[
+      {label:'Tamaño del texto',value:st.tsize,min:60,max:220,step:2,display:st.tsize+' px',set:e=>this.setState({tsize:+e.target.value})},
+      {label:'Altura del texto',value:st.tposy,min:15,max:85,step:1,display:st.tposy+' %',set:e=>this.setState({tposy:+e.target.value})},
+      {label:'Oscurecido lateral',value:st.vig,min:0,max:95,step:1,display:st.vig+' %',set:e=>this.setState({vig:+e.target.value})},
+      {label:'Contraste',value:st.contrast,min:70,max:180,step:1,display:st.contrast+' %',set:e=>this.setState({contrast:+e.target.value})},
+      {label:'Saturación',value:st.sat,min:0,max:150,step:1,display:st.sat+' %',set:e=>this.setState({sat:+e.target.value})}];
+
+    // ── package
+    const files={mp4:['MP4','santa-compana.mp4','1920×1080 · H.264 · 24 fps','842 MB'],
+      jpg:['JPG','miniatura.jpg','1280×720 · 214 KB de límite','186 KB'],
+      srt:['SRT','subtitulos.es.srt','90 frases · español','12 KB']};
+    const downloads=Object.keys(files).map(kk=>{
+      const f=files[kk], done=st.dl[kk];
+      return {ext:f[0],name:f[1],detail:f[2],size:f[3],
+        iconStyle:'width:38px;height:38px;flex:none;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;letter-spacing:.04em;border:1px solid '+(done?'#2E5B3B':BRD)+';color:'+(done?GREEN:MUT),
+        download:()=>this.setState(s=>({dl:Object.assign({},s.dl,{[kk]:true})})),
+        btnLabel:done?'Descargado':'Descargar',
+        btnStyle:done?'background:transparent;border:1px solid #2E5B3B;color:'+GREEN+';padding:7px 13px;font-size:11.5px;cursor:default':'background:'+AMBER+';color:#151006;border:0;padding:7px 15px;font-weight:800;font-size:11.5px;cursor:pointer'};
+    });
+    const allDone=st.dl.mp4&&st.dl.jpg&&st.dl.srt;
+
+    const chkDef=[['alt','Marcar contenido alterado o sintético','obligatorio'],['srt','Subir el fichero de subtítulos','subtitulos.es.srt'],
+      ['vis','Elegir visibilidad','pública / programada'],['thumb','Poner la miniatura personalizada','miniatura.jpg']];
+    const checklist=chkDef.map(([kk,label,hint])=>{
+      const on=st.checks[kk];
+      return {label,hint,tick:on?'✓':'',
+        toggle:()=>this.setState(s=>({checks:Object.assign({},s.checks,{[kk]:!s.checks[kk]})})),
+        box:'width:16px;height:16px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;border:1px solid '+(on?GREEN:'#3A3B40')+';background:'+(on?GREEN:'transparent')+';color:#0B0B0C',
+        labelStyle:'flex:1;font-size:12.5px;color:'+(on?'#7E7C79':'#E8E6E3')+';text-decoration:'+(on?'line-through':'none')};
+    });
+    const doneN=chkDef.filter(c=>st.checks[c[0]]).length;
+
+    const blocks=[['Título',title,tlen+' caracteres',false],
+      ['Descripción completa',st.descHead+'\n\n'+st.descBody,'con capítulos y créditos',true],
+      ['Etiquetas',st.tags,'10 etiquetas · 412 / 500 car.',true],
+      ['Hashtags',st.hashtags.join(' '),'3 de 3',false]];
+    const copyBlocks=blocks.map(([label,text,meta,scroll])=>({
+      label,text,meta,
+      copy:()=>{try{navigator.clipboard.writeText(text)}catch(e){}this.setState({copied:label});clearTimeout(this._to);this._to=setTimeout(()=>this.setState({copied:null}),1600)},
+      btnLabel:st.copied===label?'Copiado ✓':'Copiar',
+      btnStyle:st.copied===label?'background:transparent;border:1px solid #2E5B3B;color:'+GREEN+';padding:5px 11px;font-size:11px;font-weight:800;cursor:default':'background:'+AMBER+';color:#151006;border:0;padding:5px 13px;font-size:11px;font-weight:800;cursor:pointer',
+      bodyStyle:'padding:11px 12px;font-size:11.5px;line-height:1.6;color:#B9B7B3;white-space:pre-wrap;'+(scroll?'max-height:150px;overflow-y:auto':'')}));
+
+    return {
+      nav, spendMonth:'14,82 €', quotaLabel:st.backup?'agotada':'86 %',
+      quotaStyle:'font-weight:800;color:'+(st.backup?AMBER:'#B9B7B3'),
+      isQueue:st.screen==='queue',isNew:st.screen==='new',isPipeline:st.screen==='pipeline',
+      isReview:st.screen==='review',isSheet:st.screen==='sheet',isThumb:st.screen==='thumb',isPackage:st.screen==='package',
+      goQueue:this.go('queue'),goNew:this.go('new'),
+
+      queueEmpty:st.queueEmpty,queueHasRows:!st.queueEmpty,
+      queueSubtitle:st.queueEmpty?'Sin historias en el sistema':pending.length+' esperan tu revisión · '+STORIES.length+' historias en total',
+      setQueueFull:()=>this.setState({queueEmpty:false}),setQueueEmpty:()=>this.setState({queueEmpty:true}),
+      segFullStyle:this.seg(!st.queueEmpty),segEmptyStyle:this.seg(st.queueEmpty),
+      stats:st.queueEmpty
+        ?[{label:'Pendientes de revisión',value:'0',sub:'nada que aprobar'},{label:'Listas sin descargar',value:'0',sub:'—'},{label:'Publicadas este mes',value:'0',sub:'agosto'},{label:'Gasto del mes',value:'0,00 €',sub:'sin llamadas de pago'}]
+        :[{label:'Pendientes de revisión',value:String(pending.length),sub:'reclaman a una persona'},
+          {label:'Listas sin descargar',value:'2',sub:'aprobadas, aún en el disco'},
+          {label:'Publicadas este mes',value:'6',sub:'agosto'},
+          {label:'Gasto del mes',value:'14,82 €',sub:'respaldo Claude Haiku'}],
+      pendingRows:pending.map(s=>mkRow(s,true)),restRows:filtered.map(s=>mkRow(s,false)),
+      pendingCount:pending.length+' historias',restCount:filtered.length+' de '+rest.length,
+      filters:['Todas','En curso','Listas','Cerradas'].map(f=>({label:f,go:()=>this.setState({filter:f}),
+        style:'background:transparent;border:0;padding:3px 8px;font-size:11px;cursor:pointer;color:'+(st.filter===f?AMBER:DIM)+';font-weight:'+(st.filter===f?800:400)})),
+      publishedNote:'«El Familiar» y «La luz mala» están aprobadas y aún sin descargar. «La mujer del río Cauca» se marcó publicada el 25 de agosto.',
+
+      isFolk:st.mode==='Folclore',
+      setFolk:()=>this.setState({mode:'Folclore'}),setOriginal:()=>this.setState({mode:'Original'}),
+      modeFolkStyle:this.seg(st.mode==='Folclore'),modeOrigStyle:this.seg(st.mode==='Original'),
+      creatureNote:'29 disponibles · 11 ya usadas · seleccionada: '+st.creature,
+      creatures:CREATURES.map(c=>{
+        const n=USED[c]||0, sel=st.creature===c;
+        return {name:c,count:n?n+'×':'',pick:()=>this.setState({creature:c}),
+          style:'display:flex;align-items:center;gap:8px;padding:9px 11px;font-size:12px;cursor:pointer;background:'+(sel?'#1F1710':S1)+';color:'+(sel?'#E8E6E3':n?'#787673':'#C9C7C3')+';box-shadow:'+(sel?'inset 0 0 0 1px '+AMBER:'none'),
+          countStyle:n?'font-size:10.5px;color:'+DIM:'display:none'};
+      }),
+      premise:st.premise,setPremise:e=>this.setState({premise:e.target.value}),
+      counts:[1,2,3,4,5].map(n=>({n:String(n),pick:()=>this.setState({count:n}),style:this.seg(st.count===n)+';min-width:44px'})),
+      estimate:'≈ '+(st.count*28)+' minutos de proceso · '+(st.count*108)+' imágenes · coste estimado si cae el respaldo: '+(st.count*1.9).toFixed(2).replace('.',',')+' €',
+      launch:()=>this.setState({screen:'pipeline'}),
+
+      pipeTitle:'El Cuélebre despertó bajo la ermita de Peñamellera',
+      pipeSub:st.pipe==='failed'?'Detenido en el paso 6 · 21:04 transcurridos':'Paso 5 de 7 · 17:39 transcurridos',
+      setPipeRunning:()=>this.setState({pipe:'running'}),setPipeFailed:()=>this.setState({pipe:'failed'}),
+      pipeRunStyle:this.seg(st.pipe==='running'),pipeFailStyle:this.seg(st.pipe==='failed'),
+      backupOn:st.backup,toggleBackup:()=>this.setState({backup:false}),
+      backupCost:'2,41 €',backupTokens:'1,84 M tokens · Haiku',
+      steps:STEPS.map((s,i)=>{
+        const failIdx=st.pipe==='failed'?5:-1;
+        const runIdx=st.pipe==='failed'?-1:4;
+        let state,color,prog;
+        if(i<(failIdx>=0?failIdx:runIdx)){state='hecho';color=GREEN;prog=1}
+        else if(i===failIdx){state='fallido';color=RED;prog=.34}
+        else if(i===runIdx){state='en curso';color=AMBER;prog=.62}
+        else {state='en espera';color='#4E4D4B';prog=0}
+        const running=state==='en curso', failed=state==='fallido';
+        const unit=running?'67 / 108 planos':failed?'8 / 12 efectos':state==='hecho'?s[1]:s[1];
+        return {num:pad(i+1),name:s[0],unit,time:state==='en espera'?'—':s[2],state,
+          wrap:'padding:13px 15px;background:'+(failed?'#160F0E':S1),
+          dot:'width:8px;height:8px;flex:none;background:'+color+(running?';animation:hs-pulse 1.4s infinite':''),
+          unitStyle:'width:150px;text-align:right;font-size:11.5px;color:'+(state==='en espera'?'#4E4D4B':MUT),
+          stateStyle:'width:76px;text-align:right;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:800;color:'+color,
+          resume:()=>this.setState({pipe:'running'}),
+          resumeLabel:failed?'Reanudar':'Reejecutar',
+          resumeStyle:state==='en espera'?'visibility:hidden;width:88px;border:0':'width:88px;background:transparent;border:1px solid '+(failed?'#5A2E28':'#26272B')+';color:'+(failed?'#E58C7F':DIM)+';padding:5px 0;font-size:11px;cursor:pointer;margin-left:10px',
+          barWrap:prog>0||running?'height:4px;background:#1B1C1F;margin-top:10px;margin-left:38px':'display:none',
+          bar:'height:100%;width:'+(prog*100)+'%;background:'+color,
+          errWrap:failed?'margin:12px 0 2px 38px;padding:12px 14px;background:#1C1211;border:1px solid #3A2622':'display:none',
+          error:'ffmpeg: Error opening filter chain "loudnorm=I=-14:TP=-1.0" — input stream 3 (sfx_08_door.wav) has 0 samples after trim at 07:41.320. Mezcla abortada tras 8 de 12 efectos.'};
+      }),
+
+      reviewKicker:'Pendiente de revisión · Folclore · Santa Compaña · 10:47',
+      reviewTitle:cur.t, reviewTitleShort:'La Santa Compaña pasó por mi calle',
+      setValClean:()=>this.setState({val:'clean',checksOpen:false}),setValBlocked:()=>this.setState({val:'blocked'}),
+      valCleanStyle:this.seg(st.val==='clean'),valBlockedStyle:this.seg(st.val==='blocked'),
+      videoFrame:tone(214,9,4)+';'+fx,
+      playIcon:st.playing?'❚❚':'▶',
+      togglePlay:()=>{if(st.playing){clearInterval(this._iv);this.setState({playing:false})}
+        else{this._iv=setInterval(()=>this.setState(s=>({t:(s.t+1)%647})),1000);this.setState({playing:true})}},
+      seek:e=>{const r=e.currentTarget.getBoundingClientRect();this.setState({t:Math.max(0,Math.min(646,(e.clientX-r.left)/r.width*647))})},
+      timeLabel:mmss(st.t)+' / 10:47',
+      shotAt:pad(Math.min(108,Math.floor(st.t/6)+1)),
+      sceneLabel:'Escena '+(scenes.filter(s=>s*647<=st.t).length)+' de 9',
+      playhead:'position:absolute;top:-3px;bottom:-3px;width:2px;background:'+AMBER+';left:'+pct+'%;z-index:3',
+      progressFill:'position:absolute;left:0;top:0;bottom:0;width:'+pct+'%;background:rgba(226,160,68,.10)',
+      sceneMarks:scenes.map(p=>({style:'position:absolute;top:0;bottom:0;width:2px;background:#6E6C68;left:'+(p*100)+'%'})),
+      sfxMarks:sfx.map(p=>({style:'position:absolute;bottom:5px;width:6px;height:6px;background:#5B7FA8;left:calc('+(p*100)+'% - 3px)'})),
+      discardStats:DISCARD_HIST.map(([label,n])=>({label,n:String(n),bar:'display:block;height:100%;width:'+(n/11*100)+'%;background:'+(n>=9?'#7A5A4E':'#3E3A37')})),
+
+      valBanner:'display:flex;align-items:center;gap:12px;padding:13px 14px;cursor:pointer;border:1px solid '+(blocked?'#5A2E28':'#2E5B3B')+';background:'+(blocked?'#160F0E':'#0F1A13'),
+      valBannerDot:'width:10px;height:10px;flex:none;background:'+(blocked?RED:GREEN),
+      valHeadline:blocked?bad.length+' comprobaciones bloqueantes':'15 comprobaciones en verde',
+      valSubline:blocked?'No se puede aprobar hasta resolverlas · '+warn.length+' avisos':'Nada que leer. El vídeo cumple todo.',
+      checksToggleLabel:st.checksOpen?'ocultar ▲':'ver las 15 ▼',
+      toggleChecks:()=>this.setState(s=>({checksOpen:!s.checksOpen})),
+      blockers:bad.map(c=>({name:c[0],value:c[1],detail:c[3]})),
+      blockersWrap:blocked?'border:1px solid #5A2E28;border-top:0;background:#131011':'display:none',
+      checksWrap:st.checksOpen?'display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#1F2024;border:1px solid #1F2024;border-top:0':'display:none',
+      checks,
+
+      title,setTitle:e=>this.setState({title:e.target.value}),
+      titleCount:tlen+' / 70',
+      titleCountStyle:'font-size:11px;font-weight:800;color:'+(tlen>70?RED:tlen>62?YEL:DIM),
+      titleVariants:variantsT.map(([text,len])=>({text,len:len+' car.',pick:()=>this.setState({title:text}),
+        lenStyle:'font-size:10.5px;flex:none;color:'+(len>70?YEL:DIM)})),
+      descHead:st.descHead,setDescHead:e=>this.setState({descHead:e.target.value}),
+      descBody:st.descBody,setDescBody:e=>this.setState({descBody:e.target.value}),
+      hashtags:st.hashtags.map((h,i)=>({text:h,remove:()=>this.setState(s=>({hashtags:s.hashtags.filter((_,j)=>j!==i)}))})),
+      hashCount:st.hashtags.length+' / 3',
+      hashCountStyle:'font-size:11px;font-weight:800;color:'+(st.hashtags.length>3?RED:DIM),
+      tags:st.tags,setTags:e=>this.setState({tags:e.target.value}),
+
+      approve:()=>{if(!blocked)this.setState({screen:'package'})},
+      approveLabel:blocked?'Aprobar — bloqueado':'Aprobar y pasar a lista para publicar',
+      approveStyle:'width:100%;padding:13px;font-weight:800;font-size:13.5px;border:0;'+(blocked
+        ?'background:#1B1C1F;color:#5A5855;cursor:not-allowed'
+        :'background:'+AMBER+';color:#151006;cursor:pointer'),
+      approveNote:blocked?'Resuelve las '+bad.length+' comprobaciones en rojo o regenera.':'Se moverá a la cola de publicación. Nada sube solo.',
+      approveNoteStyle:'font-size:11px;margin-top:7px;color:'+(blocked?'#B08C86':DIM),
+      regen:st.regen,setRegen:e=>this.setState({regen:e.target.value}),
+      regenerate:()=>this.setState({screen:'pipeline',pipe:'running',regen:''}),
+      regenLabel:st.regen.trim()?'Regenerar con esta nota':'Regenerar sin nota',
+      regenBtnStyle:'margin-top:9px;width:100%;padding:9px;font-size:12px;font-weight:800;cursor:pointer;background:transparent;border:1px solid '+(st.regen.trim()?AMBER:BRD)+';color:'+(st.regen.trim()?AMBER:MUT),
+      toggleDiscard:()=>this.setState(s=>({discardOpen:!s.discardOpen})),
+      discardCaret:st.discardOpen?'▲':'▼',
+      discardWrap:st.discardOpen?'padding:0 12px 12px':'display:none',
+      discardReasons:REASONS.map(r=>({label:r,pick:()=>this.setState({reason:r}),
+        style:'flex:1 1 46%;padding:8px 10px;font-size:11.5px;cursor:pointer;border:0;text-align:left;background:'+(st.reason===r?'#241413':'#17181A')+';color:'+(st.reason===r?'#E58C7F':MUT)+';box-shadow:'+(st.reason===r?'inset 0 0 0 1px '+RED:'none')})),
+      discardBtnLabel:st.reason?'Descartar por «'+st.reason.toLowerCase()+'»':'Elige un motivo para descartar',
+      discardBtnStyle:'margin-top:9px;width:100%;padding:9px;font-size:12px;font-weight:800;border:0;'+(st.reason
+        ?'background:'+RED+';color:#160B09;cursor:pointer':'background:#1B1C1F;color:#5A5855;cursor:not-allowed'),
+      confirmDiscard:()=>{if(st.reason)this.setState({screen:'queue',discardOpen:false,reason:null})},
+
+      shots:visShots,
+      sheetFilters:['Todos','Protagonista','Amenaza','Ambos','Entorno','Detalle'].map(f=>({label:f,go:()=>this.setState({sheetFilter:f}),style:this.seg(st.sheetFilter===f)})),
+      selCount:st.sel.length+' seleccionados',
+      selNote:'Se regenerarán con el mismo prompt y una semilla nueva. ≈ '+Math.ceil(st.sel.length*6/60)+' min.',
+      selBarStyle:st.sel.length?'display:flex;align-items:center;gap:14px;padding:11px 14px;margin-bottom:12px;border:1px solid #6B4C1C;background:#1C150A':'display:none',
+      regenShots:()=>{this.setState({sel:[]})},clearSel:()=>this.setState({sel:[]}),
+      threatBands:[['Ausente',39,'#2A2B2F','#8E8D8A'],['Presagio',26,'#4A4436','#C9C7C3'],['Atisbo',14,'#7A5A32',''],['Plena',21,'#B05B4E','']]
+        .map(([label,w,bg])=>({label,style:'flex:'+w+';background:'+bg+';display:flex;align-items:center;justify-content:center'})),
+
+      frames:[1,2,3,4,5,6,7,8].map(i=>({num:'Plano '+pad(i*13),tags:i%2?'figura':'contraste',
+        pick:()=>this.setState({frame:i}),
+        wrap:'position:relative;aspect-ratio:16/9;cursor:pointer;overflow:hidden;border:1px solid '+(st.frame===i?AMBER:'#1F2024'),
+        tone:frameTone(i)})),
+      canvasOuter:'position:relative;width:'+CW+'px;max-width:100%;aspect-ratio:16/9;overflow:hidden;border:1px solid '+BRD,
+      canvasTone:frameTone(st.frame)+';'+fx,
+      canvasVignette:vig,
+      canvasTextWrap:textWrap(k,st.talign,st.tposy),
+      canvasLine1:lineS(k,st.tsize,'#F2EFEA'),
+      canvasLine2:lineS(k,st.tsize,AMBER),
+      canvasLine3:lineS(k,st.tsize*0.3,'rgba(255,255,255,.72)')+';margin-top:'+(14*k)+'px;font-weight:600;letter-spacing:.06em',
+      tLine1:st.l1,tLine2:st.l2,tLine3:st.l3,
+      setL1:e=>this.setState({l1:e.target.value}),setL2:e=>this.setState({l2:e.target.value}),setL3:e=>this.setState({l3:e.target.value}),
+      contrastLabel:'contraste '+st.contrast+' %',satLabel:'saturación '+st.sat+' %',
+      sliders,
+      positions:[['Izquierda','left'],['Centro','center'],['Derecha','right']].map(([label,v])=>({label,pick:()=>this.setState({talign:v}),style:this.seg(st.talign===v)+';flex:1'})),
+      previewBox:'position:relative;width:168px;height:94.5px;overflow:hidden;border:1px solid '+BRD,
+      previewTone:frameTone(st.frame)+';'+fx,previewVig:vig,
+      previewTextWrap:textWrap(pk,st.talign,st.tposy),
+      previewL1:lineS(pk,st.tsize,'#F2EFEA'),previewL2:lineS(pk,st.tsize,AMBER),
+      previewL3:lineS(pk,st.tsize*0.3,'rgba(255,255,255,.72)')+';margin-top:'+(14*pk)+'px;font-weight:600',
+      legibilityLabel:legible?'Legible a 168 px — '+(st.tsize*pk).toFixed(1)+' px reales':'No se lee a 168 px — '+(st.tsize*pk).toFixed(1)+' px reales, sube el tamaño',
+      legibilityStyle:'margin-top:10px;padding:8px 10px;font-size:11px;font-weight:800;border:1px solid '+(legible?'#2E5B3B':'#5A2E28')+';background:'+(legible?'#0F1A13':'#160F0E')+';color:'+(legible?'#7FC48F':'#E58C7F'),
+      saveVariant:()=>this.setState(s=>({variants:s.variants.concat([{l1:s.l1,l2:s.l2,l3:s.l3,size:s.tsize,posy:s.tposy,align:s.talign,vig:s.vig,frame:s.frame,contrast:s.contrast,sat:s.sat}])})),
+      variants:st.variants.map((v,i)=>({name:'Variante '+(i+1),line1:v.l1,line2:v.l2,line3:v.l3,
+        load:()=>this.setState({l1:v.l1,l2:v.l2,l3:v.l3,tsize:v.size,tposy:v.posy,talign:v.align,vig:v.vig,frame:v.frame,contrast:v.contrast,sat:v.sat}),
+        box:'position:relative;width:168px;height:94.5px;overflow:hidden;border:1px solid '+BRD,
+        tone:frameTone(v.frame)+';filter:contrast('+v.contrast+'%) saturate('+v.sat+'%)',
+        vig:'position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,'+(v.vig/100)+') 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,0) 62%,rgba(0,0,0,'+(v.vig/100)+') 100%)',
+        textWrap:textWrap(pk,v.align,v.posy),
+        l1:lineS(pk,v.size,'#F2EFEA'),l2:lineS(pk,v.size,AMBER),l3:lineS(pk,v.size*0.3,'rgba(255,255,255,.72)')})),
+      noVariants:st.variants.length?'display:none':'font-size:11.5px;color:#4E4D4B;align-self:center;max-width:260px;line-height:1.5',
+
+      published:st.published,publishedUrl:st.publishedUrl||'youtube.com/watch?v=7hQx2Kd',
+      unpublish:()=>this.setState({published:false}),
+      downloads,downloadAll:()=>this.setState({dl:{mp4:true,jpg:true,srt:true}}),
+      downloadAllLabel:allDone?'Los tres descargados':'Descargar todo · 842 MB',
+      downloadAllStyle:allDone?'background:transparent;border:1px solid #2E5B3B;color:'+GREEN+';padding:6px 13px;font-size:11.5px;cursor:default':'background:transparent;border:1px solid '+AMBER+';color:'+AMBER+';padding:6px 13px;font-size:11.5px;font-weight:800;cursor:pointer',
+      checklist,checklistProgress:doneN+' de 4',
+      copyBlocks,
+      urlDraft:st.urlDraft,setUrl:e=>this.setState({urlDraft:e.target.value}),
+      markPublished:()=>{if(st.urlDraft.trim())this.setState({published:true,publishedUrl:st.urlDraft.trim()})},
+      publishBtnStyle:'padding:9px 15px;font-size:12px;font-weight:800;border:0;'+(st.urlDraft.trim()
+        ?'background:'+GREEN+';color:#08120B;cursor:pointer':'background:#1B1C1F;color:#5A5855;cursor:not-allowed')
+    };
+  }
+}
+
+</script>
+</body>
+</html>
