@@ -52,6 +52,13 @@ return [
         'language' => env('STORY_LANGUAGE', 'en'),
         'default_mode' => 'folklore',
         'accent' => 'neutral_american',
+        'outro' => [
+            'enabled' => env('STORY_OUTRO_ENABLED', true),
+            'scene_order' => 9000,
+            'lead_pause' => 3.0,
+            'text' => 'That was the story for tonight. If you stayed with me all the way to the end of it, thank you. Subscribe, and turn on the bell, and I will have another one for you soon. Sleep well, if you can.',
+            'image_prompt' => 'empty dark room at night, one dim lamp still burning, thick fog, nobody there',
+        ],
     ],
 
     'review' => [
