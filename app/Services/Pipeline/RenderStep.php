@@ -159,6 +159,7 @@ final class RenderStep
             return [
                 'ok' => false,
                 'error' => $exception->getMessage(),
+                'exception' => $exception,
                 'blank_line' => true,
                 'validation' => $report,
                 'swept' => $swept,

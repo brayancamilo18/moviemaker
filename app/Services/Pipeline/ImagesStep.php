@@ -81,6 +81,7 @@ final class ImagesStep
             return [
                 'ok' => false,
                 'error' => $exception->getMessage(),
+                'exception' => $exception,
                 'hints' => ['Ejecuta story:narrate primero.'],
             ];
         }
@@ -117,7 +118,7 @@ final class ImagesStep
                 $prompts[] = $this->prompts->build($shot, $bible);
             }
         } catch (Throwable $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage()];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception];
         }
 
         $selected = $this->selectedShots($shots, $only);
@@ -181,6 +182,7 @@ final class ImagesStep
             return [
                 'ok' => false,
                 'error' => $exception->getMessage(),
+                'exception' => $exception,
                 'partial' => true,
                 'shots_path' => $this->plans->pathFor($slug),
             ];
@@ -261,6 +263,7 @@ final class ImagesStep
             return [
                 'ok' => false,
                 'error' => 'No se pudo generar la biblia visual: '.$exception->getMessage(),
+                'exception' => $exception,
             ];
         }
 

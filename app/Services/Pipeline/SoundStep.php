@@ -107,9 +107,9 @@ final class SoundStep
                 );
             }
         } catch (InvalidArgumentException $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage()];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception];
         } catch (Throwable $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage()];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception];
         }
 
         $this->progress($onProgress, $auditOnly ? 'auditoría' : 'resolución', 1, 1);
@@ -194,9 +194,9 @@ final class SoundStep
                 'dryRun' => $dryRun,
             ]);
         } catch (InvalidArgumentException $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage(), 'swept' => $swept];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception, 'swept' => $swept];
         } catch (Throwable $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage(), 'swept' => $swept];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception, 'swept' => $swept];
         }
 
         $this->progress($onProgress, 'mezcla', 1, 1);

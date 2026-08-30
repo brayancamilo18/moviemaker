@@ -17,6 +17,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use InvalidArgumentException;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Throwable;
 
@@ -83,7 +84,12 @@ final class RunPipelineStep implements ShouldQueue
         };
 
         if (($result['ok'] ?? true) === false) {
-            throw new RuntimeException((string) ($result['error'] ?? 'El paso del pipeline falló.'));
+            $previous = $result['exception'] ?? null;
+
+            throw new RuntimeException(
+                (string) ($result['error'] ?? 'El paso del pipeline falló.'),
+                previous: $previous instanceof Throwable ? $previous : null,
+            );
         }
 
         $this->applyMetrics($story, $result);
@@ -104,7 +110,13 @@ final class RunPipelineStep implements ShouldQueue
         }
 
         $max = (int) Container::getInstance()->make('config')->get('stories.pipeline.failed_message_max');
-        $message = mb_substr($e?->getMessage() ?? '', 0, $max);
+        $message = $this->failedMessage($e, $max);
+        $previous = $e?->getPrevious();
+
+        Container::getInstance()->make(LoggerInterface::class)->error('El paso del pipeline falló.', [
+            'step' => $this->step,
+            'previous' => $previous instanceof Throwable ? $previous::class : null,
+        ]);
         $from = $story->status;
 
         if ($from !== StoryStatus::Failed && $from->canTransitionTo(StoryStatus::Failed)) {
@@ -125,6 +137,18 @@ final class RunPipelineStep implements ShouldQueue
         ]);
 
         Container::getInstance()->make(PipelineProgress::class)->clear($this->storyId);
+    }
+
+    private function failedMessage(?Throwable $e, int $max): string
+    {
+        $message = $e?->getMessage() ?? '';
+        $previous = $e?->getPrevious();
+
+        if ($previous instanceof Throwable) {
+            $message .= "\n\nCausa: ".$previous::class.': '.$previous->getMessage();
+        }
+
+        return mb_substr($message, 0, $max);
     }
 
     /**

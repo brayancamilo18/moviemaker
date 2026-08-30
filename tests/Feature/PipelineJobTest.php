@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Contracts\JsonLlm;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
+use App\Exceptions\LlmGenerationException;
 use App\Jobs\RunPipelineStep;
 use App\Models\Story;
 use App\Models\StoryEvent;
@@ -20,6 +21,7 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use ReflectionMethod;
+use RuntimeException;
 use Tests\TestCase;
 use Throwable;
 
@@ -53,6 +55,26 @@ final class PipelineJobTest extends TestCase
         $this->assertSame(StoryStatus::Draft->value, $event->from_status);
         $this->assertSame(StoryStatus::Failed->value, $event->to_status);
         $this->assertSame('images', $event->payload['step'] ?? null);
+    }
+
+    public function test_failed_message_keeps_the_original_exception_class_and_message(): void
+    {
+        $story = Story::factory()->create(['status' => StoryStatus::Draft]);
+        $job = new RunPipelineStep($story->id, 'script');
+
+        $job->failed(new RuntimeException(
+            'El paso del pipeline falló.',
+            previous: new LlmGenerationException('Motivo: max_tokens.'),
+        ));
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(
+            "El paso del pipeline falló.\n\nCausa: App\\Exceptions\\LlmGenerationException: Motivo: max_tokens.",
+            $fresh->failed_message,
+        );
+        $this->assertSame('script', $fresh->failed_step);
     }
 
     public function test_a_failed_step_is_not_retried(): void

@@ -65,7 +65,7 @@ final class ScriptStep
                     : date('Y-m-d').'-'.Str::slug($script->title);
             }
         } catch (Throwable $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage(), 'warnings' => $warnings];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception, 'warnings' => $warnings];
         }
 
         $this->progress($onProgress, $script->title, 1, 1);

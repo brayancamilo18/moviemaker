@@ -132,6 +132,7 @@ final class NarrationStep
             return [
                 'ok' => false,
                 'error' => 'El sidecar de Kokoro no está levantado.',
+                'exception' => $exception,
                 'hints' => ['Arráncalo con: '.\App\Services\Tts\KokoroTts::START_COMMAND],
                 'blank_line' => true,
             ];
@@ -141,6 +142,7 @@ final class NarrationStep
             return [
                 'ok' => false,
                 'error' => $exception->getMessage(),
+                'exception' => $exception,
                 'blank_line' => true,
             ];
         }
@@ -190,7 +192,7 @@ final class NarrationStep
         try {
             $aligned = $this->timer->time($slug, $wav, $sentences);
         } catch (Throwable $exception) {
-            return ['ok' => false, 'error' => $exception->getMessage()];
+            return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception];
         }
 
         $timingsPath = $outputDirectory.DIRECTORY_SEPARATOR.'timings.json';

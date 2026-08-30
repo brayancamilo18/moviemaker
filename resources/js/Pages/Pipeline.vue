@@ -371,7 +371,7 @@ onUnmounted(() => {
                 <div class="mt-2 text-[13px] font-extrabold">
                     {{ STEP_LABELS[snapshot.failed_step] || snapshot.failed_step }}
                 </div>
-                <p class="mt-2 font-mono text-[11.5px] leading-[1.6] text-[#E58C7F]">
+                <p class="mt-2 font-mono text-[11.5px] leading-[1.6] text-[#E58C7F] whitespace-pre-wrap">
                     {{ snapshot.failed_message || 'El paso del pipeline falló.' }}
                 </p>
                 <div class="mt-3.5 flex flex-wrap gap-2">
