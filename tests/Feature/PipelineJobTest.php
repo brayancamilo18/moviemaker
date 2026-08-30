@@ -224,7 +224,7 @@ final class PipelineJobTest extends TestCase
     {
         $progress = $this->app->make(PipelineProgress::class);
 
-        $progress->put(17, 'images', 'plano 3', 3, 10);
+        $progress->put(17, 'images', 'plano 3', 3, 10, 'direct');
 
         $this->assertSame(
             [
@@ -232,9 +232,45 @@ final class PipelineJobTest extends TestCase
                 'label' => 'plano 3',
                 'done' => 3,
                 'total' => 10,
+                'stage' => 'direct',
             ],
             $progress->get(17),
         );
+    }
+
+    public function test_progress_without_a_stage_returns_null_stage(): void
+    {
+        $progress = $this->app->make(PipelineProgress::class);
+
+        $progress->put(18, 'narration', 'frase 1', 1, 4);
+
+        $stored = $progress->get(18);
+
+        $this->assertIsArray($stored);
+        $this->assertArrayHasKey('stage', $stored);
+        $this->assertNull($stored['stage']);
+    }
+
+    public function test_script_step_reports_generate_then_review(): void
+    {
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->bindSuccessfulScriptLlm();
+        $this->app->make('config')->set('stories.review.enabled', true);
+        $this->app->forgetInstance(ScriptStep::class);
+
+        $stages = [];
+        $this->app->make(ScriptStep::class)->run(
+            $story,
+            function (string $label, int $done, int $total, ?string $stage = null) use (&$stages): void {
+                $stages[] = $stage;
+            },
+        );
+
+        $this->assertSame(['generate', 'review', 'review'], $stages);
     }
 
     public function test_advance_from_narrated_queues_the_images_step(): void

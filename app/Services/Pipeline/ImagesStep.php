@@ -45,7 +45,7 @@ final class ImagesStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array{only?: list<int>|null, force?: bool, redirect?: bool, dry_run?: bool}  $options
      * @return array<string, mixed>
      */
@@ -86,6 +86,7 @@ final class ImagesStep
             ];
         }
 
+        $this->progress($onProgress, 'planificación', 0, 1, 'plan');
         $shots = $this->planner->plan($timings, $script, $duration);
 
         if ($shots === []) {
@@ -110,6 +111,7 @@ final class ImagesStep
         }
 
         try {
+            $this->progress($onProgress, 'dirección', 0, 1, 'direct');
             $directed = $this->directShots($shots, $script, $bible, $samePlan, $redirect);
             $shots = $directed['shots'];
             $prompts = [];
@@ -355,7 +357,7 @@ final class ImagesStep
 
         $total = count($selected);
         $done = 0;
-        $this->progress($onProgress, '', 0, $total);
+        $this->progress($onProgress, '', 0, $total, 'direct');
 
         foreach ($shots as $index => $shot) {
             if (! isset($generateOrders[$shot->order])) {
@@ -370,7 +372,7 @@ final class ImagesStep
             $this->plans->write($slug, $this->planFrom($rows));
 
             $done++;
-            $this->progress($onProgress, '#'.$shot->order.' '.$shot->framing, $done, $total);
+            $this->progress($onProgress, '#'.$shot->order.' '.$shot->framing, $done, $total, 'direct');
         }
 
         return $rows;
@@ -512,12 +514,12 @@ final class ImagesStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
-    private function progress(?callable $onProgress, string $label, int $done, int $total): void
+    private function progress(?callable $onProgress, string $label, int $done, int $total, ?string $stage = null): void
     {
         if ($onProgress !== null) {
-            $onProgress($label, $done, $total);
+            $onProgress($label, $done, $total, $stage);
         }
     }
 }

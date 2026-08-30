@@ -301,7 +301,7 @@ final class StoryController extends Controller
     }
 
     /**
-     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}, preflight: array{step: string|null, checks: list<array{name: string, ok: bool, detail: string, fix: string}>}}
+     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int, stage: string|null}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}, preflight: array{step: string|null, checks: list<array{name: string, ok: bool, detail: string, fix: string}>}}
      */
     private function snapshot(Story $story): array
     {

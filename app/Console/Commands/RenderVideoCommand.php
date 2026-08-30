@@ -138,14 +138,14 @@ final class RenderVideoCommand extends Command
     }
 
     /**
-     * @return (callable(string, int, int): void)
+     * @return (callable(string, int, int, ?string): void)
      */
     private function progressCallback(): callable
     {
         $bar = null;
         $currentTotal = 0;
 
-        return function (string $label, int $done, int $total) use (&$bar, &$currentTotal): void {
+        return function (string $label, int $done, int $total, ?string $stage = null) use (&$bar, &$currentTotal): void {
             if ($bar === null || $total !== $currentTotal) {
                 if ($bar !== null && $currentTotal > 0) {
                     $bar->finish();

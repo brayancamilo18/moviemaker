@@ -38,7 +38,7 @@ final class SoundStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array{
      *     refresh?: bool,
      *     refresh_cue?: string|null,
@@ -61,7 +61,7 @@ final class SoundStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
@@ -140,7 +140,7 @@ final class SoundStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */
@@ -344,12 +344,12 @@ final class SoundStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
     private function progress(?callable $onProgress, string $label, int $done, int $total): void
     {
         if ($onProgress !== null) {
-            $onProgress($label, $done, $total);
+            $onProgress($label, $done, $total, null);
         }
     }
 }

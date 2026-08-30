@@ -44,7 +44,7 @@ final class ScriptStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array{skip_review?: bool, dry_run?: bool}  $options
      * @return array<string, mixed>
      */
@@ -58,7 +58,7 @@ final class ScriptStep
         $warnings = [];
 
         $wanted = $this->candidateCount($skipReview);
-        $this->progress($onProgress, $story->title !== '' ? $story->title : 'guion', 0, $wanted);
+        $this->progress($onProgress, $story->title !== '' ? $story->title : 'guion', 0, $wanted, 'generate');
 
         $candidates = [];
         $failure = null;
@@ -81,7 +81,7 @@ final class ScriptStep
             }
 
             $candidates[] = ['script' => $script, 'review' => $review];
-            $this->progress($onProgress, $script->title, count($candidates), $wanted);
+            $this->progress($onProgress, $script->title, count($candidates), $wanted, 'generate');
         }
 
         if ($candidates === []) {
@@ -102,6 +102,12 @@ final class ScriptStep
             $slug = $story->slug !== ''
                 ? $story->slug
                 : date('Y-m-d').'-'.Str::slug($script->title);
+        }
+
+        $willReview = ! $skipReview && $this->reviewEnabled;
+
+        if ($willReview) {
+            $this->progress($onProgress, $script->title, 1, 1, 'review');
         }
 
         return [
@@ -262,12 +268,12 @@ final class ScriptStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
-    private function progress(?callable $onProgress, string $label, int $done, int $total): void
+    private function progress(?callable $onProgress, string $label, int $done, int $total, ?string $stage = null): void
     {
         if ($onProgress !== null) {
-            $onProgress($label, $done, $total);
+            $onProgress($label, $done, $total, $stage);
         }
     }
 }

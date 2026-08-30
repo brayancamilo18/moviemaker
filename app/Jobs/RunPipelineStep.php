@@ -70,11 +70,11 @@ final class RunPipelineStep implements ShouldQueue
     ): void {
         $story = Story::query()->findOrFail($this->storyId);
 
-        $onProgress = function (string $label, int $done, int $total) use ($progress): void {
-            $progress->put($this->storyId, $this->step, $label, $done, $total);
+        $onProgress = function (string $label, int $done, int $total, ?string $stage = null) use ($progress): void {
+            $progress->put($this->storyId, $this->step, $label, $done, $total, $stage);
         };
 
-        $progress->put($this->storyId, $this->step, $this->step, 0, 1);
+        $progress->put($this->storyId, $this->step, $this->step, 0, 1, $this->initialStage());
         $meter->reset();
 
         $result = match ($this->step) {
@@ -166,7 +166,7 @@ final class RunPipelineStep implements ShouldQueue
     }
 
     /**
-     * @param  (callable(string, int, int): void)  $onProgress
+     * @param  (callable(string, int, int, ?string): void)  $onProgress
      * @return array<string, mixed>
      */
     private function runSound(SoundStep $sound, Story $story, callable $onProgress): array
@@ -180,6 +180,15 @@ final class RunPipelineStep implements ShouldQueue
         $mixed = $sound->run($story, $onProgress, ['mix' => true]);
 
         return $mixed + $resolved;
+    }
+
+    private function initialStage(): ?string
+    {
+        return match ($this->step) {
+            'script' => 'generate',
+            'images' => 'plan',
+            default => null,
+        };
     }
 
     /**

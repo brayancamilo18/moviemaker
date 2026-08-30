@@ -18,18 +18,19 @@ final class PipelineProgress
         $this->ttl = (int) $config->get('stories.pipeline.progress_ttl');
     }
 
-    public function put(int $storyId, string $step, string $label, int $done, int $total): void
+    public function put(int $storyId, string $step, string $label, int $done, int $total, ?string $stage = null): void
     {
         $this->cache->put($this->key($storyId), [
             'step' => $step,
             'label' => $label,
             'done' => $done,
             'total' => $total,
+            'stage' => $stage,
         ], $this->ttl);
     }
 
     /**
-     * @return array{step: string, label: string, done: int, total: int}|null
+     * @return array{step: string, label: string, done: int, total: int, stage: string|null}|null
      */
     public function get(int $storyId): ?array
     {
@@ -39,11 +40,14 @@ final class PipelineProgress
             return null;
         }
 
+        $stage = $value['stage'] ?? null;
+
         return [
             'step' => (string) $value['step'],
             'label' => (string) $value['label'],
             'done' => (int) $value['done'],
             'total' => (int) $value['total'],
+            'stage' => is_string($stage) && $stage !== '' ? $stage : null,
         ];
     }
 
