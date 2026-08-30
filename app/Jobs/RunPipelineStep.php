@@ -156,7 +156,12 @@ final class RunPipelineStep implements ShouldQueue
                 continue;
             }
 
-            if ($key === 'slug' && trim((string) $story->slug) !== '') {
+            if ($key === 'slug') {
+                if (! $this->slugCanBeReplaced((string) $story->slug)) {
+                    continue;
+                }
+
+                $updates[$key] = $this->allocateSlug($story, (string) $result[$key]);
                 continue;
             }
 
@@ -166,6 +171,42 @@ final class RunPipelineStep implements ShouldQueue
         if ($updates !== []) {
             $story->update($updates);
         }
+    }
+
+    private function slugCanBeReplaced(string $slug): bool
+    {
+        $slug = trim($slug);
+
+        return $slug === '' || str_starts_with($slug, 'draft-');
+    }
+
+    private function allocateSlug(Story $story, string $wanted): string
+    {
+        $base = $wanted;
+        $candidate = $base;
+        $suffix = 2;
+
+        while (
+            Story::query()
+                ->where('slug', $candidate)
+                ->where('id', '!=', $story->id)
+                ->exists()
+        ) {
+            $candidate = $base.'-'.$suffix;
+            $suffix++;
+        }
+
+        if ($candidate !== $base) {
+            $story->events()->create([
+                'type' => 'slug_collision',
+                'payload' => [
+                    'requested' => $base,
+                    'assigned' => $candidate,
+                ],
+            ]);
+        }
+
+        return $candidate;
     }
 
     private function transitionAfterStep(Story $story): void

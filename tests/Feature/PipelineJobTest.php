@@ -152,6 +152,38 @@ final class PipelineJobTest extends TestCase
         $this->assertSame($expected, $story->fresh()?->slug);
     }
 
+    public function test_a_draft_prefixed_slug_is_replaced_by_the_returned_slug(): void
+    {
+        $story = Story::factory()->create(['slug' => 'draft-20260830-120000-abc123']);
+        $job = new RunPipelineStep($story->id, 'script', chain: false);
+
+        $apply = new ReflectionMethod(RunPipelineStep::class, 'applyMetrics');
+        $apply->invoke($job, $story, ['slug' => 'mi-historia']);
+
+        $this->assertSame('mi-historia', $story->fresh()?->slug);
+    }
+
+    public function test_a_colliding_returned_slug_gets_a_numeric_suffix_and_records_the_event(): void
+    {
+        Story::factory()->create(['slug' => 'mi-historia']);
+        $story = Story::factory()->create(['slug' => 'draft-20260830-120000-abc123']);
+        $job = new RunPipelineStep($story->id, 'script', chain: false);
+
+        $apply = new ReflectionMethod(RunPipelineStep::class, 'applyMetrics');
+        $apply->invoke($job, $story, ['slug' => 'mi-historia']);
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame('mi-historia-2', $fresh->slug);
+
+        $event = $fresh->events()->where('type', 'slug_collision')->first();
+
+        $this->assertInstanceOf(StoryEvent::class, $event);
+        $this->assertSame('mi-historia', $event->payload['requested'] ?? null);
+        $this->assertSame('mi-historia-2', $event->payload['assigned'] ?? null);
+    }
+
     public function test_an_existing_slug_is_not_replaced_by_a_returned_slug(): void
     {
         $story = Story::factory()->create(['slug' => 'kept-slug']);

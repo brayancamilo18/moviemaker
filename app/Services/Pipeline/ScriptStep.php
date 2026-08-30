@@ -126,7 +126,9 @@ final class ScriptStep
     {
         $this->files->ensureDirectoryExists($this->outputDirectory);
 
-        $filename = $record->slug !== ''
+        $useRecordSlug = $record->slug !== '' && ! str_starts_with($record->slug, 'draft-');
+
+        $filename = $useRecordSlug
             ? $record->slug.'.json'
             : sprintf('%s-%s.json', date('Y-m-d'), Str::slug($story->title));
 

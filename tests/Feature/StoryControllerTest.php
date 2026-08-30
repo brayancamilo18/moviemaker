@@ -80,7 +80,7 @@ final class StoryControllerTest extends TestCase
         $story = Story::query()->first();
 
         $this->assertInstanceOf(Story::class, $story);
-        $this->assertSame('', $story->slug);
+        $this->assertStringStartsWith('draft-', $story->slug);
         $this->assertSame('', $story->title);
         $this->assertSame(StoryStatus::Draft, $story->status);
         $this->assertSame(StoryMode::Folklore, $story->mode);

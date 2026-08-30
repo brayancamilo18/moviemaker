@@ -29,6 +29,25 @@ final class StoryCreationTest extends TestCase
         Bus::fake();
     }
 
+    public function test_two_stories_can_be_created_without_running_the_pipeline(): void
+    {
+        $this->post(route('stories.store'), [
+            'mode' => StoryMode::Original->value,
+        ])->assertRedirect();
+
+        $this->post(route('stories.store'), [
+            'mode' => StoryMode::Original->value,
+        ])->assertRedirect();
+
+        $stories = Story::query()->orderBy('id')->get();
+
+        $this->assertCount(2, $stories);
+        $this->assertStringStartsWith('draft-', $stories[0]->slug);
+        $this->assertStringStartsWith('draft-', $stories[1]->slug);
+        $this->assertNotSame($stories[0]->slug, $stories[1]->slug);
+        Bus::assertDispatched(RunPipelineStep::class, 2);
+    }
+
     public function test_folklore_with_a_creature_creates_a_draft_and_queues_script(): void
     {
         $this->post(route('stories.store'), [

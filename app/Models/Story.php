@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Str;
 
 final class Story extends Model
 {
@@ -98,6 +99,11 @@ final class Story extends Model
             'detail_ratio' => 'float',
             'llm_cost_usd' => 'float',
         ];
+    }
+
+    public static function provisionalSlug(): string
+    {
+        return 'draft-'.now()->format('Ymd-His').'-'.Str::lower(Str::random(6));
     }
 
     public function getRouteKeyName(): string

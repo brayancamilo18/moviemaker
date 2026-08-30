@@ -71,7 +71,7 @@ final class StoryController extends Controller
         $loreSlug = $mode === StoryMode::Folklore ? (string) $validated['lore_slug'] : null;
 
         $story = Story::query()->create([
-            'slug' => '',
+            'slug' => Story::provisionalSlug(),
             'title' => '',
             'mode' => $mode,
             'lore_slug' => $loreSlug,
