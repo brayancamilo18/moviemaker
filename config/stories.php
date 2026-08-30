@@ -25,6 +25,10 @@ return [
                 'default' => env('GEMINI_MODEL', 'gemini-3.6-flash'),
                 'review' => env('GEMINI_REVIEW_MODEL', env('GEMINI_MODEL', 'gemini-3.6-flash')),
             ],
+            // Nivel gratuito: el gasto se contabiliza en tokens, el coste queda en cero.
+            'pricing' => [
+                'default' => ['input' => 0.0, 'output' => 0.0],
+            ],
         ],
 
         'anthropic' => [
@@ -47,6 +51,11 @@ return [
                 'visual_bible' => 8000,
                 'shot_direction' => 16000,
                 'sfx_direction' => 8000,
+            ],
+            // Dólares por millón de tokens. 'default' vale para un modelo que no aparezca aquí.
+            'pricing' => [
+                'claude-haiku-4-5' => ['input' => 1.00, 'output' => 5.00],
+                'default' => ['input' => 1.00, 'output' => 5.00],
             ],
         ],
 

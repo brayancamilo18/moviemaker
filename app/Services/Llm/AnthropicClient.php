@@ -36,6 +36,7 @@ final class AnthropicClient implements JsonLlm
         private int $timeout,
         private int $maxRetries,
         private LoggerInterface $logger,
+        private TokenLedger $ledger,
     ) {}
 
     /**
@@ -105,6 +106,11 @@ final class AnthropicClient implements JsonLlm
             'output_tokens' => $usage['output_tokens'] ?? null,
             'max_tokens' => $budget,
         ]);
+        $this->account(
+            $task,
+            (int) ($usage['input_tokens'] ?? 0),
+            (int) ($usage['output_tokens'] ?? 0),
+        );
 
         $text = $this->text($payload);
 
@@ -211,6 +217,25 @@ final class AnthropicClient implements JsonLlm
     private function model(LlmTask $task): string
     {
         return $this->models[$task->value] ?? $this->models['default'];
+    }
+
+    private function account(LlmTask $task, int $inputTokens, int $outputTokens): void
+    {
+        try {
+            $this->ledger->record(
+                'anthropic',
+                $this->model($task),
+                $task,
+                $inputTokens,
+                $outputTokens,
+            );
+        } catch (Throwable $exception) {
+            $this->logger->warning('No se pudo registrar el gasto de tokens.', [
+                'provider' => 'anthropic',
+                'task' => $task->value,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     private function tokenBudget(LlmTask $task, ?int $maxTokensOverride = null): int

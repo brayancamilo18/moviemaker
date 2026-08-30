@@ -18,6 +18,7 @@ use App\Services\Llm\FailoverJsonLlm;
 use App\Services\Llm\GeminiClient;
 use App\Services\Llm\ProviderHealth;
 use App\Services\Llm\ProviderHealthStore;
+use App\Services\Llm\TokenLedger;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
@@ -35,6 +36,7 @@ class AppServiceProvider extends ServiceProvider
     {
         // Singleton para que el cambio al respaldo valga para toda la ejecución: si cada servicio
         // recibiera su propia instancia, cada uno volvería a pagar los reintentos del principal.
+        $this->app->singleton(TokenLedger::class);
         $this->app->bind(GeminiClient::class, fn (Application $app): GeminiClient => $this->gemini($app));
         $this->app->bind(AnthropicClient::class, fn (Application $app): AnthropicClient => $this->anthropic($app));
 
@@ -148,6 +150,7 @@ class AppServiceProvider extends ServiceProvider
             timeout: (int) $gemini['timeout'],
             maxRetries: (int) $gemini['max_retries'],
             logger: $app->make(LoggerInterface::class),
+            ledger: $app->make(TokenLedger::class),
         );
     }
 
@@ -167,6 +170,7 @@ class AppServiceProvider extends ServiceProvider
             timeout: (int) $anthropic['timeout'],
             maxRetries: (int) $anthropic['max_retries'],
             logger: $app->make(LoggerInterface::class),
+            ledger: $app->make(TokenLedger::class),
         );
     }
 }
