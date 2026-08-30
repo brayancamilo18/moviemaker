@@ -166,24 +166,27 @@ function submit() {
                 <div
                     v-for="row in providerRows"
                     :key="row.key"
-                    class="flex items-center gap-3 bg-surface-2 px-3 py-2.5"
+                    class="flex flex-col gap-1 bg-surface-2 px-3 py-2.5"
                 >
-                    <span class="h-2 w-2 shrink-0 rounded-full" :class="dotClass(row)" />
-                    <span class="w-24 shrink-0 font-extrabold">{{ row.label }}</span>
-                    <span class="min-w-0 flex-1 truncate text-text-muted">{{ row.name }}</span>
-                    <span
-                        v-if="row.reachable === true && row.latencyMs != null"
-                        class="shrink-0 text-[12px] text-ok"
-                    >
-                        {{ row.latencyMs }} ms
-                    </span>
-                    <span
-                        v-else-if="row.reachable === false && row.error"
-                        class="max-w-[420px] shrink-0 truncate text-[12px] text-bad"
-                        :title="row.error"
-                    >
-                        {{ row.error }}
-                    </span>
+                    <div class="flex items-center gap-3">
+                        <span class="h-2 w-2 shrink-0 rounded-full" :class="dotClass(row)" />
+                        <span class="w-24 shrink-0 font-extrabold">{{ row.label }}</span>
+                        <span class="min-w-0 flex-1 truncate text-text-muted">{{ row.name }}</span>
+                        <span
+                            v-if="row.reachable === true && row.latencyMs != null"
+                            class="shrink-0 text-[12px] text-ok"
+                        >
+                            {{ row.latencyMs }} ms
+                        </span>
+                        <span
+                            v-else-if="row.reachable === false && row.error"
+                            class="max-w-[420px] shrink-0 truncate text-[12px] text-bad"
+                            :title="row.error"
+                        >
+                            {{ row.error }}
+                        </span>
+                    </div>
+                    <p v-if="row.hint" class="pl-5 text-[11px] text-warn">{{ row.hint }}</p>
                 </div>
             </div>
 

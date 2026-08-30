@@ -153,7 +153,7 @@ final class AnthropicClient implements JsonLlm
                 ->post(rtrim($this->baseUrl, '/').'/messages', $payload);
         } catch (ConnectionException $exception) {
             throw new LlmUnavailableException(
-                'No se pudo conectar con Anthropic.',
+                'No se pudo conectar con Anthropic: '.$exception->getMessage(),
                 previous: $exception,
             );
         } catch (RequestException $exception) {

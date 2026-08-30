@@ -6,10 +6,13 @@ namespace App\Console\Commands;
 
 use App\Services\Llm\ProviderHealth;
 use Illuminate\Console\Command;
+use InvalidArgumentException;
 
 final class LlmHealthCommand extends Command
 {
-    protected $signature = 'llm:health {--live : Llama a cada proveedor para comprobar que responde}';
+    protected $signature = 'llm:health
+        {--live : Llama a cada proveedor para comprobar que responde}
+        {--only= : Solo gemini o anthropic}';
 
     protected $description = 'Comprueba si Gemini y Anthropic están configurados y, con --live, si responden';
 
@@ -21,8 +24,21 @@ final class LlmHealthCommand extends Command
 
     public function handle(): int
     {
-        $report = $this->health->check((bool) $this->option('live'));
+        $live = (bool) $this->option('live');
+        $only = strtolower(trim((string) $this->option('only')));
+
+        try {
+            $report = $only === ''
+                ? $this->health->check($live)
+                : [$only => $this->health->checkOne($only, $live)];
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
         $rows = [];
+        $hints = [];
 
         foreach ($report as $provider => $status) {
             $rows[] = [
@@ -32,13 +48,23 @@ final class LlmHealthCommand extends Command
                 $this->reachableCell($status['reachable']),
                 $status['latencyMs'] === null ? '—' : $status['latencyMs'].' ms',
                 $status['error'] ?? '',
+                $status['errorClass'] ?? '',
+                $status['hint'] ?? '',
             ];
+
+            if (is_string($status['hint'] ?? null) && $status['hint'] !== '') {
+                $hints[] = $provider.': '.$status['hint'];
+            }
         }
 
         $this->table(
-            ['Proveedor', 'Modelo', 'Configurado', 'Alcanzable', 'Latencia', 'Error'],
+            ['Proveedor', 'Modelo', 'Configurado', 'Alcanzable', 'Latencia', 'Error', 'Clase', 'Pista'],
             $rows,
         );
+
+        foreach ($hints as $hint) {
+            $this->warn($hint);
+        }
 
         return self::SUCCESS;
     }

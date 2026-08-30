@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Llm;
 
+use InvalidArgumentException;
 use Throwable;
 
 final class ProviderHealth
@@ -28,7 +29,7 @@ final class ProviderHealth
     ) {}
 
     /**
-     * @return array{gemini: array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null}, anthropic: array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null}}
+     * @return array{gemini: array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null, errorClass: string|null, hint: string|null}, anthropic: array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null, errorClass: string|null, hint: string|null}}
      */
     public function check(bool $live = false): array
     {
@@ -39,7 +40,23 @@ final class ProviderHealth
     }
 
     /**
-     * @return array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null}
+     * @return array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null, errorClass: string|null, hint: string|null}
+     */
+    public function checkOne(string $provider, bool $live): array
+    {
+        $client = match (strtolower(trim($provider))) {
+            'gemini' => $this->gemini,
+            'anthropic' => $this->anthropic,
+            default => throw new InvalidArgumentException(
+                "Proveedor desconocido: {$provider}. Usa gemini o anthropic.",
+            ),
+        };
+
+        return $this->probe($client, $live);
+    }
+
+    /**
+     * @return array{name: string, configured: bool, reachable: bool|null, latencyMs: int|null, error: string|null, errorClass: string|null, hint: string|null}
      */
     private function probe(GeminiClient|AnthropicClient $client, bool $live): array
     {
@@ -50,6 +67,8 @@ final class ProviderHealth
             'reachable' => null,
             'latencyMs' => null,
             'error' => null,
+            'errorClass' => null,
+            'hint' => null,
         ];
 
         if (! $live) {
@@ -73,12 +92,38 @@ final class ProviderHealth
             );
             $report['reachable'] = true;
         } catch (Throwable $exception) {
+            $message = $exception->getMessage();
             $report['reachable'] = false;
-            $report['error'] = $exception->getMessage();
+            $report['error'] = $message;
+            $report['errorClass'] = class_basename($exception);
+            $report['hint'] = $this->hint($message);
         }
 
         $report['latencyMs'] = (int) round((hrtime(true) - $started) / 1_000_000);
 
         return $report;
+    }
+
+    private function hint(string $message): ?string
+    {
+        $haystack = strtolower($message);
+
+        if (str_contains($haystack, 'could not resolve host')) {
+            return 'Sin DNS. Comprueba la conexión de red de la máquina.';
+        }
+
+        if (str_contains($haystack, 'ssl certificate') || str_contains($haystack, 'certificate verify')) {
+            return 'Problema de certificados TLS en PHP. Revisa curl.cainfo en php.ini.';
+        }
+
+        if (str_contains($haystack, 'timed out') || str_contains($haystack, 'timeout')) {
+            return 'La petición agotó el tiempo. Puede ser un cortafuegos o un proxy.';
+        }
+
+        if (str_contains($haystack, 'connection refused')) {
+            return 'Conexión rechazada. Suele ser un proxy local o una VPN.';
+        }
+
+        return null;
     }
 }

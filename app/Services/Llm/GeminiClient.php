@@ -126,7 +126,7 @@ final class GeminiClient implements JsonLlm
                 ->post($this->endpoint($task), $payload);
         } catch (ConnectionException $exception) {
             throw new LlmUnavailableException(
-                'No se pudo conectar con Gemini.',
+                'No se pudo conectar con Gemini: '.$exception->getMessage(),
                 previous: $exception,
             );
         } catch (RequestException $exception) {

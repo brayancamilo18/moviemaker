@@ -257,8 +257,8 @@ final class StoryControllerTest extends TestCase
         $this->post(route('llm.health'))
             ->assertOk()
             ->assertJsonStructure([
-                'gemini' => ['name', 'configured', 'reachable', 'latencyMs', 'error'],
-                'anthropic' => ['name', 'configured', 'reachable', 'latencyMs', 'error'],
+                'gemini' => ['name', 'configured', 'reachable', 'latencyMs', 'error', 'errorClass', 'hint'],
+                'anthropic' => ['name', 'configured', 'reachable', 'latencyMs', 'error', 'errorClass', 'hint'],
             ]);
     }
 

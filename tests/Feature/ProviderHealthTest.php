@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Services\Llm\AnthropicClient;
 use App\Services\Llm\GeminiClient;
 use App\Services\Llm\ProviderHealth;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
 use Tests\TestCase;
@@ -33,7 +34,42 @@ final class ProviderHealthTest extends TestCase
         $this->assertTrue($report['anthropic']['configured']);
         $this->assertNull($report['gemini']['reachable']);
         $this->assertNull($report['anthropic']['reachable']);
+        $this->assertNull($report['gemini']['errorClass']);
+        $this->assertNull($report['gemini']['hint']);
         Http::assertNothingSent();
+    }
+
+    public function test_check_one_only_asks_that_provider(): void
+    {
+        $this->withKeys();
+        Http::fake([
+            'generativelanguage.googleapis.com/*' => Http::response(
+                [
+                    'candidates' => [
+                        [
+                            'finishReason' => 'STOP',
+                            'content' => [
+                                'parts' => [
+                                    ['text' => json_encode(['reply' => 'ok'], JSON_THROW_ON_ERROR)],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                200,
+            ),
+            'api.anthropic.com/*' => Http::response(['error' => ['message' => 'no debía llamarse']], 401),
+        ]);
+
+        $report = $this->health()->checkOne('gemini', true);
+
+        $this->assertTrue($report['reachable']);
+        $this->assertSame(
+            0,
+            Http::recorded(
+                static fn (Request $request): bool => str_contains($request->url(), 'api.anthropic.com'),
+            )->count(),
+        );
     }
 
     public function test_a_live_check_marks_gemini_reachable_and_keeps_anthropic_error_without_throwing(): void
