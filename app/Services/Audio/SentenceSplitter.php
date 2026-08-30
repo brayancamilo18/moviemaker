@@ -19,6 +19,10 @@ final class SentenceSplitter
 
     private readonly float $pauseBetweenScenes;
 
+    private readonly int $outroSceneOrder;
+
+    private readonly float $outroLeadPause;
+
     public function __construct(Repository $config)
     {
         $pauses = $config->get('stories.tts.pauses');
@@ -27,6 +31,8 @@ final class SentenceSplitter
         $this->pauseQuestionOrExclamation = (float) $pauses['question_or_exclamation'];
         $this->pauseEllipsis = (float) $pauses['ellipsis'];
         $this->pauseBetweenScenes = (float) $pauses['between_scenes'];
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->outroLeadPause = (float) $config->get('stories.story.outro.lead_pause');
     }
 
     /**
@@ -60,16 +66,22 @@ final class SentenceSplitter
             $parts = $this->rawSentences((string) ($scene['text'] ?? $scene['narration'] ?? ''));
             $lastPart = count($parts) - 1;
             $isLastScene = $index === $lastIndex;
+            $nextOrder = isset($scenes[$index + 1])
+                ? (int) ($scenes[$index + 1]['order'] ?? $index + 2)
+                : null;
+            $enteringOutro = $nextOrder === $this->outroSceneOrder;
 
             foreach ($parts as $partIndex => $part) {
                 $betweenScenes = ! $isLastScene && $partIndex === $lastPart;
+                $outroLead = $enteringOutro && $partIndex === $lastPart;
 
                 $sentences[] = new NarrationSentence(
                     order: $order,
                     sceneOrder: $sceneOrder,
                     text: $part,
-                    pauseAfter: $this->pauseAfter($part, $betweenScenes),
+                    pauseAfter: $this->pauseAfter($part, $betweenScenes, $outroLead),
                     ttsText: $ttsText === null ? $part : $ttsText($part),
+                    isOutro: $sceneOrder === $this->outroSceneOrder,
                 );
                 $order++;
             }
@@ -264,8 +276,12 @@ final class SentenceSplitter
         return $matches[1];
     }
 
-    private function pauseAfter(string $sentence, bool $betweenScenes): float
+    private function pauseAfter(string $sentence, bool $betweenScenes, bool $outroLead): float
     {
+        if ($outroLead) {
+            return $this->outroLeadPause;
+        }
+
         // El corte entre escenas manda sobre ? ! y puntos suspensivos.
         if ($betweenScenes) {
             return $this->pauseBetweenScenes;

@@ -37,6 +37,12 @@ final class NarrateStoryCommand extends Command
 
     private readonly float $defaultSpeed;
 
+    private readonly bool $outroEnabled;
+
+    private readonly string $outroText;
+
+    private readonly int $outroOrder;
+
     public function __construct(
         private TextToSpeech $tts,
         private SentenceSplitter $splitter,
@@ -50,6 +56,9 @@ final class NarrateStoryCommand extends Command
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
         $this->defaultVoice = (string) $config->get('stories.tts.voice');
         $this->defaultSpeed = (float) $config->get('stories.tts.speed');
+        $this->outroEnabled = (bool) $config->get('stories.story.outro.enabled');
+        $this->outroText = (string) $config->get('stories.story.outro.text');
+        $this->outroOrder = (int) $config->get('stories.story.outro.scene_order');
     }
 
     public function handle(): int
@@ -262,8 +271,12 @@ final class NarrateStoryCommand extends Command
      */
     private function splitSentences(Story $story): array
     {
+        $scenes = $this->outroEnabled
+            ? $story->scenesForNarrationWithOutro($this->outroText, $this->outroOrder)
+            : $story->scenesForNarration();
+
         return $this->splitter->splitScenes(
-            $story->scenesForNarration(),
+            $scenes,
             static fn (string $sentence): string => $story->textForTts($sentence),
         );
     }

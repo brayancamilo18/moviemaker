@@ -131,6 +131,22 @@ final readonly class Story
     }
 
     /**
+     * Escenas a narrar, con el cierre fijo del canal al final si está activo.
+     *
+     * @return list<array{order: int, text: string}>
+     */
+    public function scenesForNarrationWithOutro(string $outroText, int $outroOrder): array
+    {
+        $scenes = $this->scenesForNarration();
+
+        if (trim($outroText) !== '') {
+            $scenes[] = ['order' => $outroOrder, 'text' => trim($outroText)];
+        }
+
+        return $scenes;
+    }
+
+    /**
      * Misma fonética que narrationForTts(), partida por escena para conservar pausas.
      *
      * @return list<array{order: int, text: string}>

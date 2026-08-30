@@ -32,6 +32,7 @@
         <env name="TTS_BASE_URL" value="http://127.0.0.1:8020"/>
         <env name="TTS_VOICE" value="af_heart"/>
         <env name="TTS_SPEED" value="1.0"/>
+        <env name="STORY_OUTRO_ENABLED" value="false"/>
         <env name="FREESOUND_TOKEN" value="test-freesound-token"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
