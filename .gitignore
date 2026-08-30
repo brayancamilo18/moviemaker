@@ -33,6 +33,7 @@
 !/resources/audio/core/
 !/resources/audio/core/**/*.wav
 /storage/pail
+/database/database.sqlite
 /vendor
 /tts-service/venv/
 /tts-service/__pycache__/
