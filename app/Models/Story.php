@@ -70,6 +70,8 @@ final class Story extends Model
         'failed_step',
         'failed_message',
         'llm_cost_usd',
+        'llm_input_tokens',
+        'llm_output_tokens',
         'used_fallback',
         'published_url',
         'published_at',
@@ -98,6 +100,8 @@ final class Story extends Model
             'figure_ratio' => 'float',
             'detail_ratio' => 'float',
             'llm_cost_usd' => 'float',
+            'llm_input_tokens' => 'integer',
+            'llm_output_tokens' => 'integer',
         ];
     }
 

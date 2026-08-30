@@ -75,6 +75,7 @@ final class RunPipelineStep implements ShouldQueue
         };
 
         $progress->put($this->storyId, $this->step, $this->step, 0, 1);
+        $meter->reset();
 
         $result = match ($this->step) {
             'script' => $script->run($story, $onProgress),
@@ -121,6 +122,15 @@ final class RunPipelineStep implements ShouldQueue
             'step' => $this->step,
             'previous' => $previous instanceof Throwable ? $previous::class : null,
         ]);
+
+        try {
+            $this->recordUsage($story, Container::getInstance()->make(LlmUsageMeter::class));
+        } catch (Throwable $exception) {
+            Container::getInstance()->make(LoggerInterface::class)->warning(
+                'No se pudo persistir el consumo del paso fallido: '.$exception->getMessage(),
+            );
+        }
+
         $from = $story->status;
 
         if ($from !== StoryStatus::Failed && $from->canTransitionTo(StoryStatus::Failed)) {
@@ -209,18 +219,25 @@ final class RunPipelineStep implements ShouldQueue
         $summary = $meter->summary();
         $meter->reset();
 
-        if ($summary['calls'] > 0) {
-            $story->increment('llm_cost_usd', $summary['costUsd']);
+        if ($summary['calls'] < 1) {
+            return;
         }
 
+        $story->incrementEach([
+            'llm_cost_usd' => $summary['costUsd'],
+            'llm_input_tokens' => $summary['inputTokens'],
+            'llm_output_tokens' => $summary['outputTokens'],
+        ]);
+
         $story->events()->create([
-            'type' => 'step_completed',
+            'type' => 'llm_usage',
             'payload' => [
                 'step' => $this->step,
+                'calls' => $summary['calls'],
                 'inputTokens' => $summary['inputTokens'],
                 'outputTokens' => $summary['outputTokens'],
                 'costUsd' => $summary['costUsd'],
-                'calls' => $summary['calls'],
+                'byProvider' => $summary['byProvider'],
             ],
         ]);
     }

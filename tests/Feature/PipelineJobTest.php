@@ -14,6 +14,7 @@ use App\Jobs\RunPipelineStep;
 use App\Models\Story;
 use App\Models\StoryEvent;
 use App\Services\Llm\LlmTask;
+use App\Services\Llm\LlmUsageMeter;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\ScriptStep;
@@ -106,6 +107,86 @@ final class PipelineJobTest extends TestCase
             "Motivo: max_tokens.\n\nCausa: App\\Exceptions\\LlmGenerationException: Motivo: max_tokens.",
             $fresh->failed_message,
         );
+    }
+
+    public function test_usage_is_added_to_the_story_and_recorded_as_llm_usage(): void
+    {
+        $story = Story::factory()->create([
+            'llm_cost_usd' => 0.5,
+            'llm_input_tokens' => 100,
+            'llm_output_tokens' => 20,
+        ]);
+        $meter = $this->app->make(LlmUsageMeter::class);
+        $meter->record('anthropic', 'claude-haiku-4-5', LlmTask::Script, 1_000_000, 200_000);
+
+        $record = new ReflectionMethod(RunPipelineStep::class, 'recordUsage');
+        $record->invoke(new RunPipelineStep($story->id, 'script'), $story, $meter);
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertEqualsWithDelta(2.5, (float) $fresh->llm_cost_usd, 0.000001);
+        $this->assertSame(1000100, $fresh->llm_input_tokens);
+        $this->assertSame(200020, $fresh->llm_output_tokens);
+
+        $event = $fresh->events()->where('type', 'llm_usage')->first();
+
+        $this->assertInstanceOf(StoryEvent::class, $event);
+        $this->assertSame('script', $event->payload['step'] ?? null);
+        $this->assertSame(1, $event->payload['calls'] ?? null);
+        $this->assertSame(1_000_000, $event->payload['inputTokens'] ?? null);
+        $this->assertSame(200_000, $event->payload['outputTokens'] ?? null);
+        $this->assertEqualsWithDelta(2.0, (float) ($event->payload['costUsd'] ?? 0), 0.000001);
+        $this->assertSame(1, $event->payload['byProvider']['anthropic']['calls'] ?? null);
+        $this->assertSame(0, $meter->summary()['calls']);
+    }
+
+    public function test_a_failed_step_still_persists_usage_already_spent(): void
+    {
+        $story = Story::factory()->create(['status' => StoryStatus::Draft]);
+        $this->app->make(LlmUsageMeter::class)->record(
+            'anthropic',
+            'claude-haiku-4-5',
+            LlmTask::Review,
+            1_000_000,
+            0,
+        );
+
+        (new RunPipelineStep($story->id, 'script'))->failed(new RuntimeException('sin sitio'));
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(StoryStatus::Failed, $fresh->status);
+        $this->assertEqualsWithDelta(1.0, (float) $fresh->llm_cost_usd, 0.000001);
+        $this->assertSame(1_000_000, $fresh->llm_input_tokens);
+        $this->assertSame(0, $fresh->llm_output_tokens);
+        $this->assertSame(1, $fresh->events()->where('type', 'llm_usage')->count());
+    }
+
+    public function test_handle_resets_the_meter_so_a_leftover_call_is_not_billed(): void
+    {
+        Bus::fake();
+
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->app->make(LlmUsageMeter::class)->record(
+            'anthropic',
+            'claude-haiku-4-5',
+            LlmTask::Script,
+            1_000_000,
+            0,
+        );
+        $this->runSuccessfulScriptJob($story, chain: false);
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertEqualsWithDelta(0.0, (float) $fresh->llm_cost_usd, 0.000001);
+        $this->assertSame(0, $fresh->events()->where('type', 'llm_usage')->count());
     }
 
     public function test_failed_message_keeps_the_original_exception_class_and_message(): void
