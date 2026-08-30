@@ -118,7 +118,7 @@ final class RenderVideoCommand extends Command
         [$shots] = $loaded;
 
         $audioPath = $this->mixPath($storyDirectory);
-        $preflight = $this->preflight($shots, $audioPath);
+        $preflight = $this->preflight($shots, $audioPath, $slug);
 
         if ($preflight === false) {
             return self::FAILURE;
@@ -244,7 +244,7 @@ final class RenderVideoCommand extends Command
     /**
      * @param  list<Shot>  $shots
      */
-    private function preflight(array $shots, ?string $audioPath): bool
+    private function preflight(array $shots, ?string $audioPath, string $slug): bool
     {
         if ($audioPath === null) {
             $this->error('No hay mix de audio. Ejecuta story:mix primero.');
@@ -265,6 +265,14 @@ final class RenderVideoCommand extends Command
         if ($missing !== []) {
             $this->error('Faltan imágenes de estos planos: #'.implode('  #', $missing).'.');
             $this->line('Ejecuta story:images antes de renderizar.');
+
+            return false;
+        }
+
+        $outro = $this->validator->outroCheck($slug);
+
+        if ($outro['blocking'] && $outro['status'] === 'fail') {
+            $this->error($outro['detail']);
 
             return false;
         }

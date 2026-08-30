@@ -24,6 +24,10 @@ final class StoryValidator
 
     private const SHOT_SUM_TOLERANCE = 0.01;
 
+    private const OUTRO_WORD_COVERAGE = 0.6;
+
+    private const OUTRO_END_SLACK = 0.5;
+
     private readonly string $storiesDirectory;
 
     private readonly float $tailSeconds;
@@ -31,6 +35,12 @@ final class StoryValidator
     private readonly float $maxShotDuration;
 
     private readonly float $threatRatioMax;
+
+    private readonly bool $outroEnabled;
+
+    private readonly int $outroSceneOrder;
+
+    private readonly string $outroText;
 
     public function __construct(
         private NarrationClock $clock,
@@ -44,6 +54,9 @@ final class StoryValidator
         $this->maxShotDuration = (float) $config->get('stories.shots.max_duration')
             + (float) $config->get('stories.shots.max_hold_slack');
         $this->threatRatioMax = (float) $config->get('stories.images.direction.threat_ratio_max');
+        $this->outroEnabled = (bool) $config->get('stories.story.outro.enabled');
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->outroText = trim((string) $config->get('stories.story.outro.text'));
     }
 
     /**
@@ -68,6 +81,7 @@ final class StoryValidator
             $this->checkRevealTiming($context),
             $this->checkEffectsInShots($context),
             $this->checkEffectAnchors($context),
+            $this->checkOutroPresent($context),
         ];
 
         $passed = true;
@@ -85,6 +99,16 @@ final class StoryValidator
     }
 
     /**
+     * La misma comprobación que cierra validate(), para las previas del render.
+     *
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    public function outroCheck(string $slug): array
+    {
+        return $this->checkOutroPresent($this->context($slug));
+    }
+
+    /**
      * @return array{
      *     slug: string,
      *     directory: string,
@@ -97,7 +121,7 @@ final class StoryValidator
      *     placeholders: list<int>,
      *     directedSfx: list<DirectedSfx>,
      *     shotsError: ?string,
-     *     timings: list<array{start: float, end: float, alignment: string}>,
+     *     timings: list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}>,
      *     narrationWords: list<NarrationWord>,
      *     timingsError: ?string
      * }
@@ -606,6 +630,251 @@ final class StoryValidator
     }
 
     /**
+     * El outro no es un recorte: o está en el audio y en un solo plano, o el vídeo se publica
+     * sin despedida y nadie se entera. Desactivarlo sigue siendo posible, pero deja un aviso.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    private function checkOutroPresent(array $context): array
+    {
+        $label = 'El outro del canal está en el audio y en un solo plano';
+
+        if (! $this->outroEnabled) {
+            return $this->warn(
+                'outro_present',
+                $label,
+                'El outro está desactivado. El vídeo se publicará sin despedida.',
+            );
+        }
+
+        if (is_string($context['timingsError'] ?? null)) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                'El outro no llegó al audio. '.(string) $context['timingsError'],
+                true,
+            );
+        }
+
+        $sentences = $this->outroSentences($context);
+
+        if ($sentences === []) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                sprintf(
+                    'El outro no llegó al audio: timings.json no tiene frases de la escena %d.',
+                    $this->outroSceneOrder,
+                ),
+                true,
+            );
+        }
+
+        $expected = $this->tokens($this->outroText);
+        $heard = $this->outroHeardTokens($sentences);
+        $covered = $this->coveredWordCount($expected, $heard);
+        $expectedCount = count($expected);
+        $ratio = $expectedCount === 0 ? 1.0 : $covered / $expectedCount;
+
+        if ($ratio < self::OUTRO_WORD_COVERAGE) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                sprintf(
+                    'El outro se sintetizó a medias: %d/%d palabras (%.0f%%).',
+                    $covered,
+                    $expectedCount,
+                    $ratio * 100,
+                ),
+                true,
+            );
+        }
+
+        $lastEnd = 0.0;
+
+        foreach ($sentences as $sentence) {
+            $lastEnd = max($lastEnd, $sentence['end']);
+        }
+
+        try {
+            $narrationEnd = $this->clock->narrationEnd((string) $context['narration']);
+        } catch (InvalidArgumentException|RuntimeException $exception) {
+            return $this->fail('outro_present', $label, $exception->getMessage(), true);
+        }
+
+        $gap = round($narrationEnd - $lastEnd, 3);
+        $allowed = $this->tailSeconds + self::OUTRO_END_SLACK;
+
+        if ($gap > $allowed + 0.0005) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                sprintf(
+                    'Hay algo después del outro: acaba en %.3f s y el máster en %.3f s (hueco %.3f s; máximo %.3f s).',
+                    $lastEnd,
+                    $narrationEnd,
+                    $gap,
+                    $allowed,
+                ),
+                true,
+            );
+        }
+
+        if (is_string($context['shotsError'] ?? null)) {
+            return $this->fail('outro_present', $label, (string) $context['shotsError'], true);
+        }
+
+        $outroShots = [];
+
+        foreach ($this->shots($context) as $shot) {
+            if ($shot->isOutro) {
+                $outroShots[] = $shot;
+            }
+        }
+
+        if (count($outroShots) !== 1) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                sprintf('Debe haber exactamente un plano de cierre; hay %d.', count($outroShots)),
+                true,
+            );
+        }
+
+        $firstStart = $sentences[0]['start'];
+
+        foreach ($sentences as $sentence) {
+            $firstStart = min($firstStart, $sentence['start']);
+        }
+
+        $shot = $outroShots[0];
+
+        if ($shot->start > $firstStart + 0.0005 || $shot->end + 0.0005 < $lastEnd) {
+            return $this->fail(
+                'outro_present',
+                $label,
+                sprintf(
+                    'El plano de cierre #%d (%.3f–%.3f) no cubre el outro (%.3f–%.3f).',
+                    $shot->order,
+                    $shot->start,
+                    $shot->end,
+                    $firstStart,
+                    $lastEnd,
+                ),
+                true,
+            );
+        }
+
+        return $this->ok(
+            'outro_present',
+            $label,
+            sprintf(
+                'Escena %d: %d frases, %d/%d palabras, plano #%d.',
+                $this->outroSceneOrder,
+                count($sentences),
+                $covered,
+                $expectedCount,
+                $shot->order,
+            ),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @return list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}>
+     */
+    private function outroSentences(array $context): array
+    {
+        $found = [];
+
+        foreach ($this->timingSentences($context) as $sentence) {
+            if ($sentence['sceneOrder'] === $this->outroSceneOrder) {
+                $found[] = $sentence;
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * @param  list<array{words: list<NarrationWord>}>  $sentences
+     * @return list<string>
+     */
+    private function outroHeardTokens(array $sentences): array
+    {
+        $tokens = [];
+
+        foreach ($sentences as $sentence) {
+            foreach ($sentence['words'] as $word) {
+                $token = $word->token;
+
+                if ($token !== '') {
+                    $tokens[] = $token;
+                }
+            }
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * @param  list<string>  $expected
+     * @param  list<string>  $heard
+     */
+    private function coveredWordCount(array $expected, array $heard): int
+    {
+        $bag = [];
+
+        foreach ($heard as $token) {
+            $bag[$token] = ($bag[$token] ?? 0) + 1;
+        }
+
+        $covered = 0;
+
+        foreach ($expected as $token) {
+            if (($bag[$token] ?? 0) < 1) {
+                continue;
+            }
+
+            $covered++;
+            $bag[$token]--;
+        }
+
+        return $covered;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function tokens(string $text): array
+    {
+        $normalized = mb_strtolower($text);
+        $normalized = str_replace(["'", '’', '‘'], '', $normalized);
+        $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+        $normalized = trim($normalized);
+
+        if ($normalized === '') {
+            return [];
+        }
+
+        return explode(' ', $normalized);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @return list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}>
+     */
+    private function timingSentences(array $context): array
+    {
+        /** @var list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}> $sentences */
+        $sentences = is_array($context['timings'] ?? null) ? $context['timings'] : [];
+
+        return $sentences;
+    }
+
+    /**
      * @param  array<string, mixed>  $context
      * @return list<NarrationWord>
      */
@@ -696,7 +965,7 @@ final class StoryValidator
     }
 
     /**
-     * @return array{timings: list<array{start: float, end: float, alignment: string}>, narrationWords: list<NarrationWord>, timingsError: ?string}
+     * @return array{timings: list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}>, narrationWords: list<NarrationWord>, timingsError: ?string}
      */
     private function loadTimings(string $path): array
     {
@@ -735,16 +1004,25 @@ final class StoryValidator
                 continue;
             }
 
+            $sentenceWords = [];
+
+            foreach (is_array($row['words'] ?? null) ? $row['words'] : [] as $word) {
+                if (is_array($word)) {
+                    $sentenceWords[] = NarrationWord::fromArray($word);
+                }
+            }
+
             $sentences[] = [
                 'start' => (float) ($row['start'] ?? 0),
                 'end' => (float) ($row['end'] ?? 0),
                 'alignment' => (string) ($row['alignment'] ?? ''),
+                'sceneOrder' => (int) ($row['sceneOrder'] ?? 1),
+                'text' => trim((string) ($row['text'] ?? '')),
+                'words' => $sentenceWords,
             ];
 
-            foreach (is_array($row['words'] ?? null) ? $row['words'] : [] as $word) {
-                if (is_array($word)) {
-                    $words[] = NarrationWord::fromArray($word);
-                }
+            foreach ($sentenceWords as $word) {
+                $words[] = $word;
             }
         }
 

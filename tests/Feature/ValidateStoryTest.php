@@ -158,6 +158,123 @@ final class ValidateStoryTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_a_disabled_outro_warns_and_does_not_block(): void
+    {
+        config(['stories.story.outro.enabled' => false]);
+        $this->app->forgetInstance(StoryValidator::class);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('El outro está desactivado')
+            ->expectsOutputToContain('sin bloqueantes')
+            ->assertSuccessful();
+    }
+
+    public function test_an_enabled_outro_without_scene_9000_is_blocking(): void
+    {
+        $this->enableOutro();
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('El outro no llegó al audio')
+            ->assertFailed();
+    }
+
+    public function test_an_outro_with_half_the_words_is_blocking(): void
+    {
+        $this->enableOutro();
+        $tokens = $this->outroTokens();
+        $half = array_slice($tokens, 0, (int) floor(count($tokens) / 2));
+
+        $this->writeOutroArtifacts($half, outroShots: 1);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('El outro se sintetizó a medias')
+            ->assertFailed();
+    }
+
+    public function test_two_outro_shots_are_blocking(): void
+    {
+        $this->enableOutro();
+        $this->writeOutroArtifacts($this->outroTokens(), outroShots: 2);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('exactamente un plano de cierre')
+            ->assertFailed();
+    }
+
+    private function enableOutro(): void
+    {
+        config(['stories.story.outro.enabled' => true]);
+        $this->app->forgetInstance(StoryValidator::class);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function outroTokens(): array
+    {
+        $normalized = mb_strtolower((string) config('stories.story.outro.text'));
+        $normalized = str_replace(["'", '’', '‘'], '', $normalized);
+        $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized) ?? $normalized;
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $normalized));
+
+        return $normalized === '' ? [] : explode(' ', $normalized);
+    }
+
+    /**
+     * @param  list<string>  $heard
+     */
+    private function writeOutroArtifacts(array $heard, int $outroShots): void
+    {
+        $dir = $this->storyDirectory();
+        $words = [];
+
+        foreach ($heard as $index => $token) {
+            $words[] = [
+                'token' => $token,
+                'start' => 4.0 + ($index * 0.05),
+                'end' => 4.0 + (($index + 1) * 0.05),
+            ];
+        }
+
+        $this->writeTimings([
+            [
+                'start' => 0.0,
+                'end' => 4.0,
+                'alignment' => 'text',
+                'sceneOrder' => 1,
+                'text' => 'The door closed behind me.',
+            ],
+            [
+                'start' => 4.0,
+                'end' => 8.0,
+                'alignment' => 'text',
+                'sceneOrder' => 9000,
+                'text' => (string) config('stories.story.outro.text'),
+                'words' => $words,
+            ],
+        ]);
+
+        $shots = [
+            $this->shot(1, 0.0, 4.0, $dir.DIRECTORY_SEPARATOR.'shot-1.jpg', 'A dim hallway'),
+        ];
+
+        for ($index = 0; $index < $outroShots; $index++) {
+            $shots[] = $this->shot(
+                2 + $index,
+                4.0,
+                8.0,
+                $dir.DIRECTORY_SEPARATOR.'shot-2.jpg',
+                'empty dark room',
+                isOutro: true,
+            );
+        }
+
+        $this->writeShots($shots);
+    }
+
     /**
      * @param  list<array<string, mixed>>  $directedSfx
      */
@@ -216,7 +333,7 @@ final class ValidateStoryTest extends TestCase
     }
 
     /**
-     * @param  list<array{start: float, end: float, alignment: string, words?: list<array{token: string, start: float, end: float}>}>  $sentences
+     * @param  list<array{start: float, end: float, alignment: string, sceneOrder?: int, text?: string, words?: list<array{token: string, start: float, end: float}>}>  $sentences
      */
     private function writeTimings(array $sentences): void
     {
@@ -225,8 +342,8 @@ final class ValidateStoryTest extends TestCase
         foreach ($sentences as $index => $sentence) {
             $rows[] = [
                 'order' => $index + 1,
-                'sceneOrder' => 1,
-                'text' => 'Fixture sentence '.($index + 1).'.',
+                'sceneOrder' => (int) ($sentence['sceneOrder'] ?? 1),
+                'text' => $sentence['text'] ?? ('Fixture sentence '.($index + 1).'.'),
                 'start' => $sentence['start'],
                 'end' => $sentence['end'],
                 'pauseAfter' => 0.0,
@@ -251,11 +368,17 @@ final class ValidateStoryTest extends TestCase
     /**
      * @return array<string, mixed>
      */
-    private function shot(int $order, float $start, float $end, string $image, string $description): array
-    {
+    private function shot(
+        int $order,
+        float $start,
+        float $end,
+        string $image,
+        string $description,
+        bool $isOutro = false,
+    ): array {
         return [
             'order' => $order,
-            'sceneOrder' => 1,
+            'sceneOrder' => $isOutro ? 9000 : 1,
             'start' => $start,
             'end' => $end,
             'sourceText' => 'Fixture shot '.$order,
@@ -267,6 +390,7 @@ final class ValidateStoryTest extends TestCase
             'characterSlugs' => [],
             'imagePath' => $image,
             'placeholder' => false,
+            'isOutro' => $isOutro,
         ];
     }
 
