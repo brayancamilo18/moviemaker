@@ -5,17 +5,15 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Contracts\JsonLlm;
-use App\DataObjects\Story;
+use App\DataObjects\Story as StoryScript;
 use App\DataObjects\StoryReview;
-use App\Exceptions\InvalidStoryException;
-use App\Services\Story\StoryGenerator;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
+use App\Services\Pipeline\ScriptStep;
 use App\Services\Story\StoryPromptBuilder;
-use App\Services\Story\StoryReviewer;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
-use Illuminate\Filesystem\Filesystem;
-use Illuminate\Support\Str;
-use RuntimeException;
 use Throwable;
 
 final class GenerateStoryCommand extends Command
@@ -24,26 +22,16 @@ final class GenerateStoryCommand extends Command
 
     protected $description = 'Genera guiones de terror y los guarda en storage/app/stories';
 
-    private const GENERATION_ATTEMPTS = 3;
-
-    private readonly string $outputDirectory;
-
-    private readonly bool $reviewEnabled;
-
     private readonly string $defaultMode;
 
     public function __construct(
-        private StoryGenerator $generator,
-        private StoryReviewer $reviewer,
+        private ScriptStep $script,
         private StoryPromptBuilder $promptBuilder,
         private JsonLlm $llm,
-        private Filesystem $files,
         Repository $config,
     ) {
         parent::__construct();
 
-        $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
-        $this->reviewEnabled = (bool) $config->get('stories.review.enabled');
         $this->defaultMode = (string) $config->get('stories.story.default_mode');
     }
 
@@ -90,29 +78,58 @@ final class GenerateStoryCommand extends Command
                 ? ($forcedLore ?? $this->randomLore())
                 : null;
 
+            $story = new Story([
+                'slug' => '',
+                'title' => '',
+                'mode' => $mode === 'original' ? StoryMode::Original : StoryMode::Folklore,
+                'lore_slug' => $lore['slug'] ?? null,
+                'lore_name' => $lore['name'] ?? null,
+                'premise' => $premise !== '' ? $premise : null,
+                'status' => StoryStatus::Draft,
+            ]);
+
             try {
-                $story = $this->generateWithRetries($premise, $mode, $lore['slug'] ?? null);
-                $review = $this->reviewStory($story, $skipReview);
-
-                if (! $dryRun) {
-                    $this->writeStory($story, $review);
-                }
-
-                $succeeded++;
-
-                if ($review instanceof StoryReview && isset($verdicts[$review->verdict])) {
-                    $verdicts[$review->verdict]++;
-                }
-
-                $bar->clear();
-                $this->renderStoryTable($story, $review, $mode, $lore['name'] ?? null);
-                $bar->display();
+                $result = $this->script->run($story, null, [
+                    'skip_review' => $skipReview,
+                    'dry_run' => $dryRun,
+                ]);
             } catch (Throwable $exception) {
                 $bar->clear();
                 $this->error($exception->getMessage());
                 $bar->display();
+                $bar->advance();
+
+                continue;
             }
 
+            $bar->clear();
+
+            foreach ($result['warnings'] ?? [] as $warning) {
+                $this->warn((string) $warning);
+            }
+
+            if (($result['ok'] ?? true) === false) {
+                $this->error((string) ($result['error'] ?? 'No se pudo generar la historia.'));
+                $bar->display();
+                $bar->advance();
+
+                continue;
+            }
+
+            $succeeded++;
+            $verdict = $result['verdict'] ?? null;
+
+            if (is_string($verdict) && isset($verdicts[$verdict])) {
+                $verdicts[$verdict]++;
+            }
+
+            $this->renderStoryTable(
+                $result['story'],
+                $result['review'] instanceof StoryReview ? $result['review'] : null,
+                $mode,
+                $lore['name'] ?? null,
+            );
+            $bar->display();
             $bar->advance();
         }
 
@@ -151,25 +168,6 @@ final class GenerateStoryCommand extends Command
         }
 
         return $mode;
-    }
-
-    private function generateWithRetries(string $premise, string $mode, ?string $loreSlug): Story
-    {
-        $lastException = null;
-
-        for ($attempt = 1; $attempt <= self::GENERATION_ATTEMPTS; $attempt++) {
-            try {
-                return $this->generator->generate($premise, $mode, $loreSlug);
-            } catch (InvalidStoryException $exception) {
-                $lastException = $exception;
-
-                if ($attempt < self::GENERATION_ATTEMPTS) {
-                    $this->warn("Intento {$attempt} rechazado: {$exception->getMessage()} Reintentando...");
-                }
-            }
-        }
-
-        throw $lastException ?? new RuntimeException('No se pudo generar la historia.');
     }
 
     /**
@@ -216,44 +214,7 @@ final class GenerateStoryCommand extends Command
         return $entries[array_rand($entries)];
     }
 
-    private function reviewStory(Story $story, bool $skipReview): ?StoryReview
-    {
-        if ($skipReview || ! $this->reviewEnabled) {
-            return null;
-        }
-
-        return $this->reviewer->review($story);
-    }
-
-    private function writeStory(Story $story, ?StoryReview $review): void
-    {
-        $this->files->ensureDirectoryExists($this->outputDirectory);
-
-        $filename = sprintf(
-            '%s-%s.json',
-            date('Y-m-d'),
-            Str::slug($story->title),
-        );
-
-        $payload = $story->toArray();
-
-        if ($review instanceof StoryReview) {
-            $payload['review'] = $review->toArray();
-        }
-
-        $json = json_encode(
-            $payload,
-            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE,
-        );
-
-        if ($json === false) {
-            throw new RuntimeException('No se pudo serializar la historia a JSON.');
-        }
-
-        $this->files->put($this->outputDirectory.DIRECTORY_SEPARATOR.$filename, $json);
-    }
-
-    private function renderStoryTable(Story $story, ?StoryReview $review, string $mode, ?string $loreName): void
+    private function renderStoryTable(StoryScript $story, ?StoryReview $review, string $mode, ?string $loreName): void
     {
         $seconds = $story->estimatedDurationSeconds();
 

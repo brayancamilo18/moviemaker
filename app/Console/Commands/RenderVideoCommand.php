@@ -4,20 +4,14 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\DataObjects\Shot;
-use App\Services\Ffmpeg\MediaProbe;
-use App\Services\Storage\TempSweeper;
-use App\Services\Story\StoryValidator;
-use App\Services\Video\FinalEncoder;
-use App\Services\Video\SceneComposer;
-use App\Services\Video\ShotClipRenderer;
-use App\Services\Video\SubtitleGenerator;
-use App\Services\Video\VideoAssembler;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
+use App\Services\Pipeline\RenderStep;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
-use RuntimeException;
 use Throwable;
 
 final class RenderVideoCommand extends Command
@@ -35,129 +29,37 @@ final class RenderVideoCommand extends Command
 
     private readonly string $outputDirectory;
 
-    private readonly string $workRoot;
-
-    private readonly float $outroSeconds;
-
-    private readonly float $tailSeconds;
-
-    private readonly float $syncTolerance;
-
-    private ?string $fromStep = null;
-
     public function __construct(
-        private ShotClipRenderer $clips,
-        private SceneComposer $scenes,
-        private VideoAssembler $assembler,
-        private FinalEncoder $encoder,
-        private SubtitleGenerator $subtitles,
-        private StoryValidator $validator,
-        private TempSweeper $sweeper,
+        private RenderStep $render,
         private Filesystem $files,
-        private MediaProbe $probe,
         Repository $config,
     ) {
         parent::__construct();
 
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
-        $this->workRoot = storage_path('app/'.$config->get('stories.video.work_path'));
-        $this->outroSeconds = (float) $config->get('stories.video.outro_seconds');
-        $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds');
-        $this->syncTolerance = (float) $config->get('stories.video.sync_tolerance');
-    }
-
-    /**
-     * Hasta dónde llega el habla en la mezcla. Los planos cubren esto y solo esto: la cola de
-     * ambiente que la mezcla añade después suena ya sobre el outro.
-     */
-    private function bodyDuration(float $audioDuration): float
-    {
-        return round($audioDuration - $this->tailSeconds, 3);
-    }
-
-    /**
-     * Lo que tienen que medir el vídeo mudo y el máster: el habla más el outro entero.
-     */
-    private function masterDuration(float $audioDuration): float
-    {
-        return round($this->bodyDuration($audioDuration) + $this->outroSeconds, 3);
     }
 
     public function handle(): int
     {
-        $this->sweepOrphans();
-
         $from = $this->resolveFrom();
 
         if ($from === false) {
             return self::FAILURE;
         }
 
-        $this->fromStep = $from;
+        $story = $this->resolveStory((string) $this->argument('file'));
 
-        $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
-
-        if ($storyFile === null) {
+        if (! $story instanceof Story) {
             return self::FAILURE;
         }
-
-        $payload = $this->readJson($storyFile, 'El guion no es un JSON válido.');
-
-        if ($payload === null) {
-            return self::FAILURE;
-        }
-
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $storyDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
-        $loaded = $this->readShots($storyDirectory.DIRECTORY_SEPARATOR.'shots.json');
-
-        if ($loaded === null) {
-            return self::FAILURE;
-        }
-
-        [$shots] = $loaded;
-
-        $audioPath = $this->mixPath($storyDirectory);
-        $preflight = $this->preflight($shots, $audioPath, $slug);
-
-        if ($preflight === false) {
-            return self::FAILURE;
-        }
-
-        $report = $this->validator->validate($slug);
-
-        if (! $this->renderValidation($report)) {
-            return self::FAILURE;
-        }
-
-        $audioDuration = $this->probe->tryDuration((string) $audioPath);
-
-        if ($audioDuration === null) {
-            $this->error('ffprobe no pudo leer la duración del mix de audio.');
-
-            return self::FAILURE;
-        }
-
-        $grouped = $this->groupByScene($shots);
-
-        if ((bool) $this->option('dry-run')) {
-            $this->printPlan($shots, $grouped, $this->plan($grouped), $audioDuration);
-
-            return self::SUCCESS;
-        }
-
-        $graded = ! (bool) $this->option('no-grade');
-        $workDir = $this->workRoot.DIRECTORY_SEPARATOR.$slug;
-        $silentPath = $workDir.DIRECTORY_SEPARATOR.'silent.mp4';
-        $videoPath = $storyDirectory.DIRECTORY_SEPARATOR.($graded ? 'video.mp4' : 'video-nograde.mp4');
-        $subtitlesPath = $storyDirectory.DIRECTORY_SEPARATOR.'subtitles.srt';
-        $started = hrtime(true);
 
         try {
-            $clipPaths = $this->renderClips($shots, $workDir);
-            $scenePaths = $this->composeScenes($grouped, $clipPaths, $workDir);
-            $this->assembleVideo($scenePaths, $audioDuration, $silentPath);
-            $this->encodeVideo($silentPath, (string) $audioPath, $videoPath);
+            $result = $this->render->run($story, $this->progressCallback(), [
+                'from' => $from,
+                'keep_intermediates' => (bool) $this->option('keep-intermediates'),
+                'no_grade' => (bool) $this->option('no-grade'),
+                'dry_run' => (bool) $this->option('dry-run'),
+            ]);
         } catch (Throwable $exception) {
             $this->newLine();
             $this->error($exception->getMessage());
@@ -165,58 +67,118 @@ final class RenderVideoCommand extends Command
             return self::FAILURE;
         }
 
-        $elapsed = (hrtime(true) - $started) / 1e9;
+        $this->renderSweep($result['swept'] ?? null);
 
-        // Los subtítulos son un sidecar: si fallan, el render sigue siendo válido y hay que
-        // apuntarlo en el guion igualmente. Media hora de codificación no se tira por un SRT.
-        try {
-            $this->writeSubtitles($storyDirectory.DIRECTORY_SEPARATOR.'timings.json', $subtitlesPath);
-        } catch (Throwable $exception) {
-            $this->warn('No se pudieron generar los subtítulos: '.$exception->getMessage());
+        if (isset($result['validation']) && ! $this->renderValidation($result['validation'])) {
+            return self::FAILURE;
         }
 
-        $videoDuration = $this->probe->tryDuration($videoPath) ?? 0.0;
-        $bytes = $this->files->isFile($videoPath) ? $this->files->size($videoPath) : 0;
+        if (($result['ok'] ?? true) === false) {
+            if (($result['blank_line'] ?? false) === true) {
+                $this->newLine();
+            }
 
-        if (! (bool) $this->option('keep-intermediates')) {
-            $this->files->deleteDirectory($workDir);
+            $this->error((string) ($result['error'] ?? 'El render falló.'));
+
+            foreach ($result['hints'] ?? [] as $hint) {
+                $this->line((string) $hint);
+            }
+
+            return self::FAILURE;
+        }
+
+        if ((bool) ($result['dry_run'] ?? false)) {
+            $this->printPlan($result);
+
+            return self::SUCCESS;
+        }
+
+        if (($result['skipped_clips'] ?? 0) > 0) {
+            $this->comment('  Omitidos '.$result['skipped_clips'].' clips ya válidos.');
+        }
+
+        if (($result['skipped_scenes'] ?? 0) > 0) {
+            $this->comment('  Omitidas '.$result['skipped_scenes'].' escenas ya válidas.');
+        }
+
+        if (($result['skipped_assemble'] ?? false) === true) {
+            $this->comment('  Vídeo mudo ya válido, se omite.');
+        }
+
+        if (($result['skipped_encode'] ?? false) === true) {
+            $this->comment('  Vídeo final ya válido, se omite.');
+        }
+
+        if (is_string($result['subtitle_warning'] ?? null)) {
+            $this->warn((string) $result['subtitle_warning']);
+        } elseif (is_string($result['subtitles_path'] ?? null)) {
+            $this->line('Subtítulos: '.$result['subtitles_path']);
+        }
+
+        if (! (bool) ($result['kept_intermediates'] ?? false)) {
             $this->comment('Intermedios borrados.');
         }
 
-        $this->printSummary($videoDuration, $audioDuration, $bytes, $elapsed, $videoPath);
-        $expected = $this->masterDuration($audioDuration);
-        $this->updateStoryPayload($storyFile, $payload, [
-            // Un render sin gradar no es publicable: apunta a su propia clave y deja intacto el
-            // puntero al máster gradado.
-            'mp4' => $graded ? $videoPath : $this->previousVideoPath($payload, 'mp4'),
-            'mp4_nograde' => $graded ? $this->previousVideoPath($payload, 'mp4_nograde') : $videoPath,
-            'subtitles' => $this->files->isFile($subtitlesPath) ? $subtitlesPath : null,
-            'durationSeconds' => round($videoDuration, 3),
-            'audioDurationSeconds' => round($audioDuration, 3),
-            'deltaSeconds' => round($videoDuration - $expected, 3),
-            'bytes' => $bytes,
-            'elapsedSeconds' => round($elapsed, 1),
-            'realtimeFactor' => round($elapsed / max($videoDuration, 0.001), 2),
-            'grade' => $graded,
-            'keptIntermediates' => (bool) $this->option('keep-intermediates'),
-        ]);
+        $this->printSummary(
+            (float) $result['video_seconds'],
+            (float) $result['audio_duration'],
+            (int) $result['bytes'],
+            (float) $result['elapsed'],
+            (string) $result['video_path'],
+            (float) $result['outro_seconds'],
+            (float) $result['expected_duration'],
+            (float) $result['sync_tolerance'],
+        );
 
         return self::SUCCESS;
     }
 
-    private function sweepOrphans(): void
+    /**
+     * @return (callable(string, int, int): void)
+     */
+    private function progressCallback(): callable
     {
-        $swept = $this->sweeper->sweep();
+        $bar = null;
+        $currentTotal = 0;
 
-        if ($swept['entries'] === 0) {
-            return;
-        }
+        return function (string $label, int $done, int $total) use (&$bar, &$currentTotal): void {
+            if ($bar === null || $total !== $currentTotal) {
+                if ($bar !== null && $currentTotal > 0) {
+                    $bar->finish();
+                    $this->newLine();
+                }
 
-        $this->comment(sprintf(
-            'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
-            $swept['entries'],
-            $swept['bytes'] / 1048576,
-        ));
+                $currentTotal = $total;
+                $bar = $this->output->createProgressBar(max(1, $total));
+                $bar->setFormat('%current%/%max% [%bar%] %percent:3s%%  %message%');
+                $bar->setMessage($label);
+                $bar->start();
+
+                if ($label === 'clips') {
+                    $this->info('Clips');
+                } elseif ($label === 'escenas') {
+                    $this->info('Escenas');
+                } elseif ($label === 'concat + outro') {
+                    $this->info('Ensamblado');
+                } elseif (str_contains($label, 'encode')) {
+                    $this->info('Codificación final');
+                }
+            }
+
+            if ($label !== '') {
+                $bar->setMessage($label);
+            }
+
+            if ($done > 0) {
+                $bar->setProgress($done);
+            }
+
+            if ($done >= $total && $total > 0) {
+                $bar->finish();
+                $this->newLine();
+                $bar = null;
+            }
+        };
     }
 
     /**
@@ -242,42 +204,19 @@ final class RenderVideoCommand extends Command
     }
 
     /**
-     * @param  list<Shot>  $shots
+     * @param  array{entries?: int, bytes?: int}|null  $swept
      */
-    private function preflight(array $shots, ?string $audioPath, string $slug): bool
+    private function renderSweep(?array $swept): void
     {
-        if ($audioPath === null) {
-            $this->error('No hay mix de audio. Ejecuta story:mix primero.');
-
-            return false;
+        if ($swept === null || ($swept['entries'] ?? 0) === 0) {
+            return;
         }
 
-        $missing = [];
-
-        foreach ($shots as $shot) {
-            $path = trim((string) $shot->imagePath);
-
-            if ($path === '' || ! $this->files->isFile($path) || $this->files->size($path) < 1) {
-                $missing[] = $shot->order;
-            }
-        }
-
-        if ($missing !== []) {
-            $this->error('Faltan imágenes de estos planos: #'.implode('  #', $missing).'.');
-            $this->line('Ejecuta story:images antes de renderizar.');
-
-            return false;
-        }
-
-        $outro = $this->validator->outroCheck($slug);
-
-        if ($outro['blocking'] && $outro['status'] === 'fail') {
-            $this->error($outro['detail']);
-
-            return false;
-        }
-
-        return true;
+        $this->comment(sprintf(
+            'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
+            $swept['entries'],
+            ($swept['bytes'] ?? 0) / 1048576,
+        ));
     }
 
     /**
@@ -314,231 +253,22 @@ final class RenderVideoCommand extends Command
     }
 
     /**
-     * @param  list<Shot>  $shots
-     * @return array<string, string>
+     * @param  array<string, mixed>  $result
      */
-    private function renderClips(array $shots, string $workDir): array
-    {
-        $this->info('Clips');
-        $bar = $this->output->createProgressBar(count($shots));
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%%  %message%');
-        $bar->setMessage('');
-        $bar->start();
-
-        $paths = [];
-        $skipped = 0;
-        $grouped = $this->groupByScene($shots);
-
-        try {
-            foreach ($shots as $shot) {
-                $path = $this->clipPath($workDir, $shot);
-                $paths[(string) $shot->order] = $path;
-                $bar->setMessage('plano '.$shot->order);
-
-                $followedByXfade = $this->followedByXfade($shot, $grouped);
-                $expected = $this->clips->durationFor($shot, $followedByXfade);
-                $force = $this->shouldRerun('clips');
-
-                if (! $force && $this->isValidVideo($path, $expected)) {
-                    $skipped++;
-                    $bar->advance();
-
-                    continue;
-                }
-
-                $this->clips->render($shot, $path, $followedByXfade);
-                $bar->advance();
-            }
-        } finally {
-            $bar->finish();
-            $this->newLine();
-        }
-
-        if ($skipped > 0) {
-            $this->comment("  Omitidos {$skipped} clips ya válidos.");
-        }
-
-        return $paths;
-    }
-
-    /**
-     * @param  array<int, list<Shot>>  $grouped
-     * @param  array<string, string>  $clipPaths
-     * @return list<string>
-     */
-    private function composeScenes(array $grouped, array $clipPaths, string $workDir): array
-    {
-        $this->info('Escenas');
-        $bar = $this->output->createProgressBar(count($grouped));
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%%  %message%');
-        $bar->setMessage('');
-        $bar->start();
-
-        $paths = [];
-        $skipped = 0;
-
-        try {
-            foreach ($grouped as $order => $shots) {
-                $path = $this->scenePath($workDir, $order);
-                $paths[] = $path;
-                $bar->setMessage('escena '.$order);
-
-                $clips = [];
-
-                foreach ($shots as $shot) {
-                    $clips[] = [
-                        'path' => $clipPaths[(string) $shot->order],
-                        'shot' => $shot,
-                    ];
-                }
-
-                $expected = $this->scenes->calculateOffsets($shots)['duration'];
-                $force = $this->shouldRerun('scenes');
-
-                if (! $force && $this->isValidVideo($path, $expected)) {
-                    $skipped++;
-                    $bar->advance();
-
-                    continue;
-                }
-
-                $this->scenes->compose($clips, $path);
-                $bar->advance();
-            }
-        } finally {
-            $bar->finish();
-            $this->newLine();
-        }
-
-        if ($skipped > 0) {
-            $this->comment("  Omitidas {$skipped} escenas ya válidas.");
-        }
-
-        return $paths;
-    }
-
-    /**
-     * @param  list<string>  $scenePaths
-     */
-    private function assembleVideo(array $scenePaths, float $audioDuration, string $silentPath): void
-    {
-        $this->info('Ensamblado');
-        $expected = $this->masterDuration($audioDuration);
-
-        if (! $this->shouldRerun('assemble') && $this->isValidVideo($silentPath, $expected)) {
-            $this->comment('  Vídeo mudo ya válido, se omite.');
-
-            return;
-        }
-
-        $bar = $this->output->createProgressBar(1);
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%%  %message%');
-        $bar->setMessage('concat + outro');
-        $bar->start();
-
-        try {
-            $this->assembler->assemble(
-                $scenePaths,
-                $this->bodyDuration($audioDuration),
-                $silentPath,
-                (bool) $this->option('keep-intermediates'),
-            );
-        } finally {
-            $bar->advance();
-            $bar->finish();
-            $this->newLine();
-        }
-    }
-
-    private function encodeVideo(string $silentPath, string $audioPath, string $videoPath): void
-    {
-        $this->info('Codificación final');
-
-        if (! $this->files->isFile($silentPath)) {
-            throw new RuntimeException('No hay vídeo mudo válido. Ejecuta sin --from o con --from=assemble.');
-        }
-
-        $audioDuration = $this->probe->tryDuration($audioPath) ?? 0.0;
-        $grade = ! (bool) $this->option('no-grade');
-        $expected = $this->masterDuration($audioDuration);
-
-        if (! $this->shouldRerun('encode') && $this->isValidVideo($videoPath, $expected)) {
-            $this->comment('  Vídeo final ya válido, se omite.');
-
-            return;
-        }
-
-        $bar = $this->output->createProgressBar(1);
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%%  %message%');
-        $bar->setMessage($grade ? 'gradación + encode' : 'encode sin gradación');
-        $bar->start();
-
-        try {
-            $this->encoder->encode($silentPath, $audioPath, $videoPath, $grade);
-        } finally {
-            $bar->advance();
-            $bar->finish();
-            $this->newLine();
-        }
-    }
-
-    private function writeSubtitles(string $timingsPath, string $outputPath): void
-    {
-        if (! $this->files->isFile($timingsPath)) {
-            $this->warn('No hay timings.json; no se generan subtítulos.');
-
-            return;
-        }
-
-        $timings = $this->readJson($timingsPath, 'timings.json no es un JSON válido.');
-
-        if ($timings === null) {
-            $this->warn('No se pudieron leer los timings; no se generan subtítulos.');
-
-            return;
-        }
-
-        $this->subtitles->generate($timings, $outputPath);
-        $this->line('Subtítulos: '.$outputPath);
-    }
-
-    /**
-     * @param  list<Shot>  $shots
-     * @param  array<int, list<Shot>>  $grouped
-     * @param  array{scenes: list<array{order: int, shots: int, duration: float, joins: list<string>}>, body: float, silent: float}  $plan
-     */
-    private function printPlan(array $shots, array $grouped, array $plan, float $audioDuration): void
+    private function printPlan(array $result): void
     {
         $this->warn('Modo simulación: no se renderizará.');
         $rows = [];
 
-        foreach ($shots as $shot) {
-            $join = '—';
-            $sceneShots = $grouped[$shot->sceneOrder] ?? [];
-
-            foreach ($sceneShots as $index => $candidate) {
-                if ($candidate->order !== $shot->order) {
-                    continue;
-                }
-
-                if ($index > 0) {
-                    $join = mb_strtolower(trim($shot->motion)) === 'static' ? 'corte' : 'fade';
-                }
-
-                break;
-            }
-
-            $real = round(max(0.0, $shot->end - $shot->start), 3);
-            $clip = $this->clips->durationFor($shot, $this->followedByXfade($shot, $grouped));
-
+        foreach ($result['shot_rows'] as $shot) {
             $rows[] = [
-                '#'.$shot->order,
-                $shot->sceneOrder,
-                $shot->motion,
-                sprintf('%.3f', $real),
-                sprintf('%.3f', $clip),
-                sprintf('%+.3f', $clip - $real),
-                $join,
+                '#'.$shot['order'],
+                $shot['sceneOrder'],
+                $shot['motion'],
+                sprintf('%.3f', $shot['real']),
+                sprintf('%.3f', $shot['clip']),
+                sprintf('%+.3f', $shot['extra']),
+                $shot['join'],
             ];
         }
 
@@ -546,7 +276,7 @@ final class RenderVideoCommand extends Command
 
         $sceneRows = [];
 
-        foreach ($plan['scenes'] as $scene) {
+        foreach ($result['scene_rows'] as $scene) {
             $sceneRows[] = [
                 $scene['order'],
                 $scene['shots'],
@@ -557,57 +287,26 @@ final class RenderVideoCommand extends Command
 
         $this->table(['Escena', 'Planos', 'Duración s', 'Empalmes'], $sceneRows);
 
-        $body = $this->bodyDuration($audioDuration);
+        $audioDuration = (float) $result['audio_duration'];
+        $outroSeconds = (float) $result['outro_seconds'];
+        $tailSeconds = (float) $result['tail_seconds'];
+        $plan = $result['plan'];
+        $body = round($audioDuration - $tailSeconds, 3);
         $delta = $plan['body'] - $body;
-        $master = $this->masterDuration($audioDuration);
+        $master = round($body + $outroSeconds, 3);
         $this->newLine();
-        $this->line('Planos: '.count($shots).'  Escenas: '.count($grouped));
+        $this->line('Planos: '.count($result['shots']).'  Escenas: '.count($result['grouped']));
         $this->line(sprintf('Cuerpo previsto: %s (%.3f s)', $this->formatClock($plan['body']), $plan['body']));
-        $this->line(sprintf('Outro: %.1f s  Vídeo mudo previsto: %s', $this->outroSeconds, $this->formatClock($plan['silent'])));
+        $this->line(sprintf('Outro: %.1f s  Vídeo mudo previsto: %s', $outroSeconds, $this->formatClock($plan['silent'])));
         $this->line(sprintf('Audio: %s (%.3f s)', $this->formatClock($audioDuration), $audioDuration));
-        $this->line(sprintf('Habla: %s (%.3f s, el resto es la cola de %.1f s)', $this->formatClock($body), $body, $this->tailSeconds));
+        $this->line(sprintf('Habla: %s (%.3f s, el resto es la cola de %.1f s)', $this->formatClock($body), $body, $tailSeconds));
         $this->line(sprintf('Máster previsto: %s (%.3f s)', $this->formatClock($master), $master));
-        $this->line($this->deltaLine($delta, 'cuerpo−habla'));
+        $this->line($this->deltaLine($delta, 'cuerpo−habla', (float) $result['sync_tolerance']));
         $this->comment(sprintf(
             'El outro arranca al acabar el habla, así que la cola de %.1f s de la mezcla suena sobre él y al audio solo se le añaden %.1f s de silencio.',
-            $this->tailSeconds,
-            $this->outroSeconds - $this->tailSeconds,
+            $tailSeconds,
+            $outroSeconds - $tailSeconds,
         ));
-    }
-
-    /**
-     * @param  array<int, list<Shot>>  $grouped
-     * @return array{scenes: list<array{order: int, shots: int, duration: float, joins: list<string>}>, body: float, silent: float}
-     */
-    private function plan(array $grouped): array
-    {
-        $scenes = [];
-        $body = 0.0;
-
-        foreach ($grouped as $order => $shots) {
-            $offsets = $this->scenes->calculateOffsets($shots);
-            $joins = [];
-
-            foreach ($offsets['offsets'] as $offset) {
-                $joins[] = $offset === null ? 'corte' : 'fade';
-            }
-
-            $scenes[] = [
-                'order' => $order,
-                'shots' => count($shots),
-                'duration' => $offsets['duration'],
-                'joins' => $joins,
-            ];
-            $body += $offsets['duration'];
-        }
-
-        $body = round($body, 3);
-
-        return [
-            'scenes' => $scenes,
-            'body' => $body,
-            'silent' => round($body + $this->outroSeconds, 3),
-        ];
     }
 
     private function printSummary(
@@ -616,151 +315,33 @@ final class RenderVideoCommand extends Command
         int $bytes,
         float $elapsed,
         string $videoPath,
+        float $outroSeconds,
+        float $expected,
+        float $syncTolerance,
     ): void {
-        $expected = $this->masterDuration($audioDuration);
         $delta = $videoDuration - $expected;
 
         $this->newLine();
         $this->info('Render listo.');
         $this->line('  Vídeo: '.$this->formatClock($videoDuration).sprintf(' (%.3f s)', $videoDuration));
         $this->line('  Audio: '.$this->formatClock($audioDuration).sprintf(' (%.3f s)', $audioDuration));
-        $this->line(sprintf('  Outro: %.1f s  Esperado: %s (%.3f s)', $this->outroSeconds, $this->formatClock($expected), $expected));
-        $this->line('  '.$this->deltaLine($delta, 'vídeo−(habla+outro)'));
+        $this->line(sprintf('  Outro: %.1f s  Esperado: %s (%.3f s)', $outroSeconds, $this->formatClock($expected), $expected));
+        $this->line('  '.$this->deltaLine($delta, 'vídeo−(habla+outro)', $syncTolerance));
         $this->line(sprintf('  Tamaño: %.1f MiB', $bytes / 1048576));
         $this->line(sprintf('  Tiempo: %.1f s', $elapsed));
         $this->line(sprintf('  Factor tiempo real: %.2fx', $elapsed / max($videoDuration, 0.001)));
         $this->line('  Fichero: '.$videoPath);
     }
 
-    private function deltaLine(float $delta, string $label): string
+    private function deltaLine(float $delta, string $label, float $syncTolerance): string
     {
         $text = sprintf('Desfase %s: %+.3f s', $label, $delta);
 
-        if (abs($delta) > $this->syncTolerance) {
+        if (abs($delta) > $syncTolerance) {
             return '<fg=red>'.$text.'</>';
         }
 
         return $text;
-    }
-
-    /**
-     * La ruta que un render anterior dejó en el guion, para no perderla al escribir la de este.
-     *
-     * @param  array<string, mixed>  $payload
-     */
-    private function previousVideoPath(array $payload, string $key): ?string
-    {
-        $video = $payload['video'] ?? null;
-
-        if (! is_array($video)) {
-            return null;
-        }
-
-        $path = $video[$key] ?? null;
-
-        return is_string($path) && $path !== '' ? $path : null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @param  array<string, mixed>  $video
-     */
-    private function updateStoryPayload(string $storyFile, array $payload, array $video): void
-    {
-        $payload['video'] = $video;
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-
-        if ($json === false) {
-            throw new RuntimeException('No se pudo serializar el JSON de la historia.');
-        }
-
-        $this->files->put($storyFile, $json."\n");
-    }
-
-    /**
-     * @param  list<Shot>  $shots
-     * @return array<int, list<Shot>>
-     */
-    private function groupByScene(array $shots): array
-    {
-        $grouped = [];
-
-        foreach ($shots as $shot) {
-            $grouped[$shot->sceneOrder][] = $shot;
-        }
-
-        ksort($grouped);
-
-        foreach ($grouped as $order => $sceneShots) {
-            usort($sceneShots, static fn (Shot $left, Shot $right): int => $left->order <=> $right->order);
-            $grouped[$order] = $sceneShots;
-        }
-
-        return $grouped;
-    }
-
-    private function shouldRerun(string $step): bool
-    {
-        if ($this->fromStep === null) {
-            return false;
-        }
-
-        return array_search($step, self::STEPS, true) >= array_search($this->fromStep, self::STEPS, true);
-    }
-
-    /**
-     * @param  array<int, list<Shot>>  $grouped
-     */
-    private function followedByXfade(Shot $shot, array $grouped): bool
-    {
-        $scene = $grouped[$shot->sceneOrder] ?? [];
-
-        foreach ($scene as $index => $candidate) {
-            if ($candidate->order !== $shot->order) {
-                continue;
-            }
-
-            $next = $scene[$index + 1] ?? null;
-
-            if ($next === null) {
-                return false;
-            }
-
-            return mb_strtolower(trim($next->motion)) !== 'static';
-        }
-
-        return false;
-    }
-
-    private function clipPath(string $workDir, Shot $shot): string
-    {
-        return $workDir.DIRECTORY_SEPARATOR.'clips'.DIRECTORY_SEPARATOR.'shot-'.sprintf('%03d', $shot->order).'.mp4';
-    }
-
-    private function scenePath(string $workDir, int $order): string
-    {
-        return $workDir.DIRECTORY_SEPARATOR.'scenes'.DIRECTORY_SEPARATOR.'scene-'.sprintf('%02d', $order).'.mp4';
-    }
-
-    private function isValidVideo(string $path, ?float $expected = null): bool
-    {
-        if (! $this->files->isFile($path) || $this->files->size($path) < 1) {
-            return false;
-        }
-
-        $duration = $this->probe->tryDuration($path);
-
-        if ($duration === null) {
-            return false;
-        }
-
-        // Aceptar lo cacheado nunca puede ser más laxo que verificarlo: si lo fuera, un artefacto
-        // desfasado se daría por bueno aquí y el paso siguiente lo rechazaría en cada reejecución.
-        if ($expected !== null && abs($duration - $expected) > $this->syncTolerance) {
-            return false;
-        }
-
-        return true;
     }
 
     private function formatClock(float $seconds): string
@@ -777,82 +358,26 @@ final class RenderVideoCommand extends Command
         return sprintf('%02d:%02d', $minutes, $secs);
     }
 
-    private function mixPath(string $directory): ?string
+    private function resolveStory(string $file): ?Story
     {
-        foreach (['narration_mix.wav', 'narration_mix.mp3'] as $name) {
-            $path = $directory.DIRECTORY_SEPARATOR.$name;
+        $storyFile = $this->resolveStoryFile($file);
 
-            if ($this->files->isFile($path) && $this->files->size($path) > 0) {
-                return $path;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * @return array{0: list<Shot>, 1: list<int>, 2: ?int}|null
-     */
-    private function readShots(string $path): ?array
-    {
-        if (! $this->files->isFile($path)) {
-            $this->error('No hay shots.json. Ejecuta story:images primero.');
-
+        if ($storyFile === null) {
             return null;
         }
 
-        $decoded = $this->readJson($path, 'shots.json no es un JSON válido.');
+        $payload = $this->readJson($storyFile, 'El guion no es un JSON válido.');
 
-        if ($decoded === null || ! isset($decoded['shots']) || ! is_array($decoded['shots'])) {
-            $this->error('shots.json no tiene el esquema esperado.');
-
+        if ($payload === null) {
             return null;
         }
 
-        $shots = [];
-        $placeholders = [];
-        $plannerVersion = array_key_exists('plannerVersion', $decoded)
-            ? (int) $decoded['plannerVersion']
-            : null;
-
-        foreach ($decoded['shots'] as $row) {
-            if (! is_array($row) || ! isset($row['order'], $row['sceneOrder'])) {
-                continue;
-            }
-
-            $imagePath = isset($row['imagePath']) && is_string($row['imagePath']) ? $row['imagePath'] : null;
-            $threat = $row['threatStage'] ?? null;
-            $placeholder = (bool) ($row['placeholder'] ?? false);
-
-            if (is_string($imagePath) && str_starts_with(basename($imagePath), 'placeholder-')) {
-                $placeholder = true;
-            }
-
-            $shots[] = new Shot(
-                order: (int) $row['order'],
-                sceneOrder: (int) $row['sceneOrder'],
-                start: (float) ($row['start'] ?? 0),
-                end: (float) ($row['end'] ?? 0),
-                sourceText: is_string($row['sourceText'] ?? null) ? $row['sourceText'] : '',
-                framing: is_string($row['framing'] ?? null) ? $row['framing'] : '',
-                motion: is_string($row['motion'] ?? null) ? $row['motion'] : 'static',
-                subject: is_string($row['subject'] ?? null) ? $row['subject'] : '',
-                threatStage: is_string($threat) && $threat !== '' ? $threat : null,
-                imagePath: $imagePath,
-            );
-
-            if ($placeholder) {
-                $placeholders[] = (int) $row['order'];
-            }
-        }
-
-        if ($shots === []) {
-            $this->error('shots.json no contiene planos.');
-
-            return null;
-        }
-
-        return [$shots, $placeholders, $plannerVersion];
+        return new Story([
+            'slug' => pathinfo($storyFile, PATHINFO_FILENAME),
+            'title' => is_string($payload['title'] ?? null) ? $payload['title'] : pathinfo($storyFile, PATHINFO_FILENAME),
+            'mode' => StoryMode::Original,
+            'status' => StoryStatus::Draft,
+        ]);
     }
 
     private function resolveStoryFile(string $file): ?string

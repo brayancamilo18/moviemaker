@@ -4,19 +4,14 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Contracts\TextToSpeech;
-use App\DataObjects\NarrationSentence;
-use App\DataObjects\Story;
-use App\Exceptions\TtsUnavailableException;
-use App\Services\Audio\NarrationAssembler;
-use App\Services\Audio\SentenceSplitter;
-use App\Services\Audio\TranscriptTimer;
-use App\Services\Tts\KokoroTts;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
+use App\Services\Pipeline\NarrationStep;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
-use RuntimeException;
 use Throwable;
 
 final class NarrateStoryCommand extends Command
@@ -33,202 +28,115 @@ final class NarrateStoryCommand extends Command
 
     private readonly string $outputDirectory;
 
-    private readonly string $defaultVoice;
-
-    private readonly float $defaultSpeed;
-
-    private readonly bool $outroEnabled;
-
-    private readonly string $outroText;
-
-    private readonly int $outroOrder;
-
     public function __construct(
-        private TextToSpeech $tts,
-        private SentenceSplitter $splitter,
-        private NarrationAssembler $assembler,
-        private TranscriptTimer $timer,
+        private NarrationStep $narration,
         private Filesystem $files,
         Repository $config,
     ) {
         parent::__construct();
 
         $this->outputDirectory = storage_path('app/'.$config->get('stories.output_path'));
-        $this->defaultVoice = (string) $config->get('stories.tts.voice');
-        $this->defaultSpeed = (float) $config->get('stories.tts.speed');
-        $this->outroEnabled = (bool) $config->get('stories.story.outro.enabled');
-        $this->outroText = (string) $config->get('stories.story.outro.text');
-        $this->outroOrder = (int) $config->get('stories.story.outro.scene_order');
     }
 
     public function handle(): int
     {
-        $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
+        $story = $this->resolveStory((string) $this->argument('file'));
 
-        if ($storyFile === null) {
+        if (! $story instanceof Story) {
             return self::FAILURE;
         }
-
-        $payload = $this->readStoryPayload($storyFile);
-
-        if ($payload === null) {
-            return self::FAILURE;
-        }
-
-        $skipTimings = (bool) $this->option('skip-timings');
-        $timingsOnly = (bool) $this->option('timings-only');
-
-        if ($skipTimings && $timingsOnly) {
-            $this->error('No combines --skip-timings y --timings-only.');
-
-            return self::FAILURE;
-        }
-
-        if ($timingsOnly) {
-            return $this->alignExistingMaster($storyFile, $payload);
-        }
-
-        if (! $this->tts->isAvailable()) {
-            $this->error('El sidecar de Kokoro no está levantado.');
-            $this->line('Arráncalo con: '.KokoroTts::START_COMMAND);
-
-            return self::FAILURE;
-        }
-
-        if (! $skipTimings) {
-            $problem = $this->timer->modelProblem();
-
-            if ($problem !== null) {
-                $this->error($problem);
-                $this->line('También puedes saltarte la alineación con --skip-timings.');
-
-                return self::FAILURE;
-            }
-        }
-
-        $story = Story::fromArray($payload);
-        $voice = $this->resolveVoice();
-        $speed = $this->resolveSpeed();
-        $skipCache = (bool) $this->option('no-cache');
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $outputDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
-        $options = [
-            'voice' => $voice,
-            'speed' => $speed,
-            'skip_cache' => $skipCache,
-        ];
-
-        $sentences = $this->splitSentences($story);
-
-        if ($sentences === []) {
-            $this->error('El guion no tiene frases que narrar.');
-
-            return self::FAILURE;
-        }
-
-        $startedAt = microtime(true);
-        $cacheHits = 0;
-        $clips = [];
-        $alignment = null;
 
         try {
-            $clips = $this->synthesizeSentences($sentences, $options, $skipCache, $cacheHits);
-            $master = $this->assembler->assemble($slug, $clips);
-
-            $timingsPath = null;
-
-            if (! $skipTimings) {
-                $aligned = $this->timer->time($slug, $master['wav'], $sentences);
-                $timingsPath = $outputDirectory.DIRECTORY_SEPARATOR.'timings.json';
-                $alignment = $this->timer->alignmentReport($aligned, $master['wav']);
-            }
-
-            $this->writeAudioMetadata($storyFile, $payload, $master, $timingsPath, $voice, $speed, count($sentences));
-        } catch (TtsUnavailableException $exception) {
-            $this->cleanupOutputs($outputDirectory);
-            $this->newLine();
-            $this->error('El sidecar de Kokoro no está levantado.');
-            $this->line('Arráncalo con: '.KokoroTts::START_COMMAND);
-
-            return self::FAILURE;
+            $result = $this->narration->run($story, $this->progressCallback(), [
+                'voice' => $this->option('voice'),
+                'speed' => $this->option('speed'),
+                'skip_cache' => (bool) $this->option('no-cache'),
+                'skip_timings' => (bool) $this->option('skip-timings'),
+                'timings_only' => (bool) $this->option('timings-only'),
+            ]);
         } catch (Throwable $exception) {
-            $this->cleanupOutputs($outputDirectory);
             $this->newLine();
             $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
-        $elapsed = microtime(true) - $startedAt;
-        $this->renderSummary($master['duration'], count($sentences), $cacheHits, $elapsed);
+        if (($result['ok'] ?? true) === false && ! isset($result['alignment'])) {
+            if (($result['blank_line'] ?? false) === true) {
+                $this->newLine();
+            }
 
-        if ($alignment === null) {
+            $this->error((string) ($result['error'] ?? 'La narración falló.'));
+
+            foreach ($result['hints'] ?? [] as $hint) {
+                $this->line((string) $hint);
+            }
+
+            return self::FAILURE;
+        }
+
+        if ((bool) ($result['timings_only'] ?? false)) {
+            $this->info('Alineando el máster existente con whisper.cpp…');
+            $this->info('timings.json listo: '.(string) $result['timings_path']);
+
+            return $this->renderAlignmentReport(
+                $result['alignment'],
+                $result['alignment_problems'] ?? [],
+            );
+        }
+
+        $this->renderSummary(
+            (float) $result['narration_seconds'],
+            (int) $result['sentence_count'],
+            (int) $result['cache_hits'],
+            (float) $result['elapsed'],
+        );
+
+        if ($result['alignment'] === null) {
             return self::SUCCESS;
         }
 
-        return $this->renderAlignmentReport($alignment);
+        return $this->renderAlignmentReport(
+            $result['alignment'],
+            $result['alignment_problems'] ?? [],
+        );
     }
 
     /**
-     * @param  array<string, mixed>  $payload
+     * @return (callable(string, int, int): void)
      */
-    private function alignExistingMaster(string $storyFile, array $payload): int
+    private function progressCallback(): callable
     {
-        $problem = $this->timer->modelProblem();
+        $bar = null;
 
-        if ($problem !== null) {
-            $this->error($problem);
+        return function (string $label, int $done, int $total) use (&$bar): void {
+            if ($bar === null) {
+                $bar = $this->output->createProgressBar(max(1, $total));
+                $bar->setFormat('%current%/%max% [%bar%] %percent:3s%% %message%');
+                $bar->setMessage('');
+                $bar->start();
+            }
 
-            return self::FAILURE;
-        }
+            if ($label !== '') {
+                $bar->setMessage($this->truncate($label));
+            }
 
-        $story = Story::fromArray($payload);
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $outputDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
-        $wav = $outputDirectory.DIRECTORY_SEPARATOR.'narration.wav';
+            if ($done > 0) {
+                $bar->setProgress($done);
+            }
 
-        if (! $this->files->isFile($wav)) {
-            $this->error('No hay narration.wav. Ejecuta story:narrate primero.');
-
-            return self::FAILURE;
-        }
-
-        $sentences = $this->splitSentences($story);
-
-        if ($sentences === []) {
-            $this->error('El guion no tiene frases que narrar.');
-
-            return self::FAILURE;
-        }
-
-        $this->info('Alineando el máster existente con whisper.cpp…');
-
-        try {
-            $aligned = $this->timer->time($slug, $wav, $sentences);
-        } catch (Throwable $exception) {
-            $this->error($exception->getMessage());
-
-            return self::FAILURE;
-        }
-
-        $timingsPath = $outputDirectory.DIRECTORY_SEPARATOR.'timings.json';
-        $audio = is_array($payload['audio'] ?? null) ? $payload['audio'] : [];
-        $audio['timings'] = $timingsPath;
-        $payload['audio'] = $audio;
-        $this->writeStoryPayload($storyFile, $payload);
-
-        $this->info('timings.json listo: '.$timingsPath);
-
-        return $this->renderAlignmentReport($this->timer->alignmentReport($aligned, $wav));
+            if ($done >= $total && $total > 0) {
+                $bar->finish();
+                $this->newLine();
+            }
+        };
     }
 
     /**
-     * Presenta la calidad de la alineación y decide el código de salida: unos timings derivados
-     * arrastran a shots.json, sounds.json y al render, así que no pueden pasar por buenos.
-     *
      * @param  array{sentences: int, textAligned: int, sequential: int, textRatio: float, speechEnd: float, narrationEnd: float, uncovered: float}  $report
+     * @param  list<string>  $problems
      */
-    private function renderAlignmentReport(array $report): int
+    private function renderAlignmentReport(array $report, array $problems): int
     {
         $this->newLine();
         $this->line(sprintf(
@@ -244,8 +152,6 @@ final class NarrateStoryCommand extends Command
             $report['narrationEnd'],
             $report['uncovered'],
         ));
-
-        $problems = $this->timer->alignmentProblems($report);
 
         if ($problems === []) {
             return self::SUCCESS;
@@ -263,102 +169,6 @@ final class NarrateStoryCommand extends Command
         return self::FAILURE;
     }
 
-    /**
-     * Parte el guion original por escenas y le pega la fonética frase a frase: lo que se sintetiza
-     * y lo que se publica en timings.json salen de la misma frase.
-     *
-     * @return list<NarrationSentence>
-     */
-    private function splitSentences(Story $story): array
-    {
-        $scenes = $this->outroEnabled
-            ? $story->scenesForNarrationWithOutro($this->outroText, $this->outroOrder)
-            : $story->scenesForNarration();
-
-        return $this->splitter->splitScenes(
-            $scenes,
-            static fn (string $sentence): string => $story->textForTts($sentence),
-        );
-    }
-
-    /**
-     * @param  list<NarrationSentence>  $sentences
-     * @param  array{voice: string, speed: float, skip_cache: bool}  $options
-     * @return list<array{path: string, pauseAfter: float}>
-     */
-    private function synthesizeSentences(array $sentences, array $options, bool $skipCache, int &$cacheHits): array
-    {
-        $bar = $this->output->createProgressBar(count($sentences));
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%% %message%');
-        $bar->setMessage('');
-        $bar->start();
-
-        $clips = [];
-
-        try {
-            foreach ($sentences as $sentence) {
-                $bar->setMessage($this->truncate($sentence->text));
-                $spoken = $sentence->forTts();
-
-                if (! $skipCache && $this->tts->isCached($spoken, $options)) {
-                    $cacheHits++;
-                }
-
-                $clips[] = [
-                    'path' => $this->tts->synthesize($spoken, $options),
-                    'pauseAfter' => $sentence->pauseAfter,
-                ];
-
-                $bar->advance();
-            }
-        } finally {
-            $bar->finish();
-            $this->newLine();
-        }
-
-        return $clips;
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @param  array{wav: string, mp3: string, duration: float}  $master
-     */
-    private function writeAudioMetadata(
-        string $storyFile,
-        array $payload,
-        array $master,
-        ?string $timingsPath,
-        string $voice,
-        float $speed,
-        int $sentenceCount,
-    ): void {
-        $payload['audio'] = [
-            'wav' => $master['wav'],
-            'mp3' => $master['mp3'],
-            'timings' => $timingsPath,
-            'durationSeconds' => round($master['duration'], 3),
-            'sentenceCount' => $sentenceCount,
-            'voice' => $voice,
-            'speed' => $speed,
-        ];
-
-        $this->writeStoryPayload($storyFile, $payload);
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function writeStoryPayload(string $storyFile, array $payload): void
-    {
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-
-        if ($json === false) {
-            throw new RuntimeException('No se pudo serializar el JSON de la historia.');
-        }
-
-        $this->files->put($storyFile, $json."\n");
-    }
-
     private function renderSummary(float $duration, int $sentenceCount, int $cacheHits, float $elapsed): void
     {
         $totalSeconds = (int) round($duration);
@@ -373,15 +183,26 @@ final class NarrateStoryCommand extends Command
         $this->line(sprintf('  Factor tiempo real: %.2fx', $rtf));
     }
 
-    private function cleanupOutputs(string $directory): void
+    private function resolveStory(string $file): ?Story
     {
-        foreach (['narration.wav', 'narration.mp3', 'timings.json'] as $name) {
-            $path = $directory.DIRECTORY_SEPARATOR.$name;
+        $storyFile = $this->resolveStoryFile($file);
 
-            if ($this->files->exists($path)) {
-                $this->files->delete($path);
-            }
+        if ($storyFile === null) {
+            return null;
         }
+
+        $payload = $this->readStoryPayload($storyFile);
+
+        if ($payload === null) {
+            return null;
+        }
+
+        return new Story([
+            'slug' => pathinfo($storyFile, PATHINFO_FILENAME),
+            'title' => is_string($payload['title'] ?? null) ? $payload['title'] : pathinfo($storyFile, PATHINFO_FILENAME),
+            'mode' => StoryMode::Original,
+            'status' => StoryStatus::Draft,
+        ]);
     }
 
     private function resolveStoryFile(string $file): ?string
@@ -423,24 +244,6 @@ final class NarrateStoryCommand extends Command
 
         /** @var array<string, mixed> $decoded */
         return $decoded;
-    }
-
-    private function resolveVoice(): string
-    {
-        $voice = trim((string) ($this->option('voice') ?: $this->defaultVoice));
-
-        return $voice !== '' ? $voice : $this->defaultVoice;
-    }
-
-    private function resolveSpeed(): float
-    {
-        $speed = $this->option('speed');
-
-        if ($speed === null || $speed === '') {
-            return $this->defaultSpeed;
-        }
-
-        return (float) $speed;
     }
 
     private function truncate(string $text, int $width = 60): string

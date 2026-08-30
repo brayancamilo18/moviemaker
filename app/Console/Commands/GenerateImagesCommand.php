@@ -4,25 +4,16 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Contracts\ImageGenerator;
-use App\Contracts\JsonLlm;
 use App\DataObjects\PlannedShot;
 use App\DataObjects\Shot;
-use App\DataObjects\ShotPlan;
-use App\DataObjects\Story;
-use App\DataObjects\VisualBible;
-use App\Services\Audio\NarrationClock;
-use App\Services\Image\ShotDirector;
-use App\Services\Image\ShotPlanner;
-use App\Services\Image\ShotPlanRepository;
-use App\Services\Image\ShotPromptBuilder;
-use App\Services\Image\VisualBibleGenerator;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
+use App\Services\Pipeline\ImagesStep;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
-use InvalidArgumentException;
 use JsonException;
-use RuntimeException;
 use Throwable;
 
 final class GenerateImagesCommand extends Command
@@ -41,14 +32,7 @@ final class GenerateImagesCommand extends Command
     private readonly float $rateLimitSeconds;
 
     public function __construct(
-        private ImageGenerator $images,
-        private ShotPlanner $planner,
-        private ShotDirector $director,
-        private ShotPromptBuilder $prompts,
-        private VisualBibleGenerator $bibles,
-        private ShotPlanRepository $plans,
-        private NarrationClock $clock,
-        private JsonLlm $llm,
+        private ImagesStep $images,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -60,21 +44,9 @@ final class GenerateImagesCommand extends Command
 
     public function handle(): int
     {
-        $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
+        $story = $this->resolveStory((string) $this->argument('file'));
 
-        if ($storyFile === null) {
-            return self::FAILURE;
-        }
-
-        $payload = $this->readJson($storyFile, 'El guion no es un JSON válido.');
-
-        if ($payload === null) {
-            return self::FAILURE;
-        }
-
-        if (! isset($payload['scenes']) || ! is_array($payload['scenes'])) {
-            $this->error('El JSON no contiene un guion de historia.');
-
+        if (! $story instanceof Story) {
             return self::FAILURE;
         }
 
@@ -84,335 +56,112 @@ final class GenerateImagesCommand extends Command
             return self::FAILURE;
         }
 
-        $force = (bool) $this->option('force');
-        $redirect = (bool) $this->option('redirect');
-        $dryRun = (bool) $this->option('dry-run');
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $storyDirectory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
-        $timingsPath = $storyDirectory.DIRECTORY_SEPARATOR.'timings.json';
-        $narrationPath = $storyDirectory.DIRECTORY_SEPARATOR.'narration.wav';
-
-        $timings = $this->readTimings($timingsPath);
-
-        if ($timings === null) {
-            return self::FAILURE;
-        }
-
-        $story = Story::fromArray($payload);
-
         try {
-            $duration = $this->clock->narrationEnd($narrationPath);
-        } catch (InvalidArgumentException|RuntimeException $exception) {
-            $this->error($exception->getMessage());
-            $this->line('Ejecuta story:narrate primero.');
-
-            return self::FAILURE;
-        }
-
-        $shots = $this->planner->plan($timings, $story, $duration);
-
-        if ($shots === []) {
-            $this->error('El planificador no produjo ningún plano.');
-
-            return self::FAILURE;
-        }
-
-        $persisted = $this->plans->read($slug);
-        $samePlan = $persisted instanceof ShotPlan && $persisted->describes($shots) ? $persisted : null;
-
-        $story = $this->ensureVisualBible($storyFile, $payload, $story);
-
-        if ($story === null) {
-            return self::FAILURE;
-        }
-
-        $bible = $story->visualBible;
-
-        if (! $bible instanceof VisualBible) {
-            $this->error('La historia no tiene biblia visual.');
-
-            return self::FAILURE;
-        }
-
-        try {
-            $shots = $this->directShots($shots, $story, $bible, $samePlan, $redirect);
-            $prompts = [];
-
-            foreach ($shots as $shot) {
-                $prompts[] = $this->prompts->build($shot, $bible);
-            }
+            $result = $this->images->run($story, $this->progressCallback(), [
+                'only' => $only,
+                'force' => (bool) $this->option('force'),
+                'redirect' => (bool) $this->option('redirect'),
+                'dry_run' => (bool) $this->option('dry-run'),
+            ]);
         } catch (Throwable $exception) {
+            $this->newLine();
             $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
-        $selected = $this->selectedShots($shots, $only);
+        foreach ($result['warnings'] ?? [] as $warning) {
+            $this->warn((string) $warning);
+        }
 
-        if ($selected === []) {
+        if (($result['ok'] ?? true) === false) {
+            if (($result['partial'] ?? false) === true) {
+                $this->newLine();
+            }
+
+            $this->error((string) ($result['error'] ?? 'La generación de imágenes falló.'));
+
+            foreach ($result['hints'] ?? [] as $hint) {
+                $this->line((string) $hint);
+            }
+
+            if (($result['partial'] ?? false) === true) {
+                $this->line('Los planos ya generados quedan guardados en '.(string) $result['shots_path'].'.');
+            }
+
             return self::FAILURE;
         }
 
-        if ($dryRun) {
+        if ((bool) ($result['bible_generated'] ?? false)) {
+            $this->info('No hay biblia visual. Generándola…');
+            $this->line('Biblia visual escrita con '.(string) $result['llm_name'].'.');
+            $this->warnAboutFallback($result['fallback_notice'] ?? null);
+        }
+
+        if ((bool) ($result['direction_reused'] ?? false)) {
+            $this->line('El plan no ha cambiado: se reutiliza la dirección de shots.json (--redirect para volver a dirigir).');
+        } else {
+            $this->line('Planos dirigidos con '.(string) $result['llm_name'].'.');
+            $this->warnAboutFallback($result['fallback_notice'] ?? null);
+        }
+
+        if ((bool) ($result['dry_run'] ?? false)) {
             $this->warn('Modo simulación: no se generarán imágenes.');
-            $this->printPrompts($selected, $shots, $prompts, $slug);
+            $this->printPrompts(
+                $result['selected'],
+                $result['shots'],
+                $result['prompts'],
+                (string) $result['slug'],
+            );
 
             return self::SUCCESS;
         }
 
-        if (! $this->images->isAvailable()) {
+        if (! (bool) ($result['provider_available'] ?? true)) {
             $this->warn('El proveedor de imágenes no responde. Los planos nuevos pueden acabar en marcador.');
         }
 
-        $this->printEstimate(count($selected));
-
-        $rows = $this->baselineRows($shots, $prompts, $samePlan, $slug);
-
-        try {
-            $rows = $this->generateShots($shots, $selected, $rows, $prompts, $slug, $force);
-        } catch (Throwable $exception) {
-            $this->newLine();
-            $this->error($exception->getMessage());
-            $this->line('Los planos ya generados quedan guardados en '.$this->plans->pathFor($slug).'.');
-
-            return self::FAILURE;
-        }
-
-        $this->plans->write($slug, $this->planFrom($rows));
-        $this->renderSummary($this->planner->stats($shots), $rows, $this->plans->pathFor($slug));
+        $this->printEstimate(count($result['selected']));
+        $this->renderSummary($result['stats'], $result['rows'], (string) $result['shots_path']);
 
         return self::SUCCESS;
     }
 
     /**
-     * Con un plan equivalente ya dirigido, rehidrata la dirección persistida en lugar de volver
-     * a llamar al director: si la description cambiara, cambiaría el prompt y con él la caché.
-     *
-     * @param  list<Shot>  $shots
-     * @return list<Shot>
+     * @return (callable(string, int, int): void)
      */
-    private function directShots(
-        array $shots,
-        Story $story,
-        VisualBible $bible,
-        ?ShotPlan $samePlan,
-        bool $redirect,
-    ): array {
-        if ($samePlan instanceof ShotPlan && $samePlan->plannerVersion !== ShotPlanner::VERSION) {
-            $this->warn(sprintf(
-                'shots.json viene del planificador v%d y ahora es v%d: se vuelve a dirigir.',
-                $samePlan->plannerVersion,
-                ShotPlanner::VERSION,
-            ));
+    private function progressCallback(): callable
+    {
+        $bar = null;
 
-            $samePlan = null;
-        }
+        return function (string $label, int $done, int $total) use (&$bar): void {
+            if ($bar === null) {
+                $bar = $this->output->createProgressBar(max(1, $total));
+                $bar->setFormat('%current%/%max% [%bar%] %percent:3s%% restante %remaining%  %message%');
+                $bar->setMessage('');
+                $bar->start();
+            }
 
-        if ($redirect || ! $samePlan instanceof ShotPlan || ! $samePlan->isDirected()) {
-            $directed = $this->director->direct($shots, $story, $bible);
-            $this->line('Planos dirigidos con '.$this->llm->name().'.');
-            $this->warnAboutFallback();
+            if ($label !== '') {
+                $bar->setMessage($this->truncate($label));
+            }
 
-            return $directed;
-        }
+            if ($done > 0) {
+                $bar->setProgress($done);
+            }
 
-        $this->line('El plan no ha cambiado: se reutiliza la dirección de shots.json (--redirect para volver a dirigir).');
-
-        $stored = $samePlan->byOrder();
-        $directed = [];
-
-        foreach ($shots as $shot) {
-            $row = $stored[$shot->order];
-
-            $directed[] = new Shot(
-                order: $shot->order,
-                sceneOrder: $shot->sceneOrder,
-                start: $shot->start,
-                end: $shot->end,
-                sourceText: $shot->sourceText,
-                framing: $row->shot->framing,
-                motion: $shot->motion,
-                subject: $row->shot->subject,
-                threatStage: $row->shot->threatStage,
-                journeyLeg: $row->shot->journeyLeg,
-                lightStage: $row->shot->lightStage,
-                description: $row->shot->description,
-                characterSlugs: $row->shot->characterSlugs,
-                imagePath: $shot->imagePath,
-                isOutro: $shot->isOutro,
-            );
-        }
-
-        return $directed;
+            if ($done >= $total && $total > 0) {
+                $bar->finish();
+                $this->newLine();
+            }
+        };
     }
 
-    private function warnAboutFallback(): void
+    private function warnAboutFallback(mixed $notice): void
     {
-        $notice = $this->llm->fallbackNotice();
-
-        if ($notice !== null) {
+        if (is_string($notice) && $notice !== '') {
             $this->warn($notice);
         }
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function ensureVisualBible(string $storyFile, array $payload, Story $story): ?Story
-    {
-        if ($story->visualBible instanceof VisualBible) {
-            return $story;
-        }
-
-        $this->info('No hay biblia visual. Generándola…');
-
-        try {
-            $bible = $this->bibles->generate($story);
-        } catch (Throwable $exception) {
-            $this->error('No se pudo generar la biblia visual: '.$exception->getMessage());
-
-            return null;
-        }
-
-        $this->line('Biblia visual escrita con '.$this->llm->name().'.');
-        $this->warnAboutFallback();
-
-        $payload['visualBible'] = $bible->toArray();
-        $this->writeJson($storyFile, $payload);
-
-        return $story->withVisualBible($bible);
-    }
-
-    /**
-     * @param  list<Shot>  $shots
-     * @param  list<int>|null  $only
-     * @return list<Shot>
-     */
-    private function selectedShots(array $shots, ?array $only): array
-    {
-        if ($only === null) {
-            return $shots;
-        }
-
-        $byOrder = [];
-
-        foreach ($shots as $shot) {
-            $byOrder[$shot->order] = true;
-        }
-
-        $missing = [];
-
-        foreach ($only as $order) {
-            if (! isset($byOrder[$order])) {
-                $missing[] = $order;
-            }
-        }
-
-        if ($missing !== []) {
-            $this->warn('No existen estos planos: '.implode(', ', $missing).'.');
-        }
-
-        $wanted = array_fill_keys($only, true);
-        $selected = [];
-
-        foreach ($shots as $shot) {
-            if (isset($wanted[$shot->order])) {
-                $selected[] = $shot;
-            }
-        }
-
-        if ($selected === []) {
-            $this->error('Ningún plano de --only coincide con el plan.');
-        }
-
-        return $selected;
-    }
-
-    /**
-     * Punto de partida de shots.json: las filas ya persistidas se conservan tal cual (una fila que
-     * --only no toca debe seguir describiendo la imagen a la que apunta) y el resto nace sin imagen.
-     *
-     * @param  list<Shot>  $shots
-     * @param  list<string>  $prompts
-     * @return list<PlannedShot>
-     */
-    private function baselineRows(array $shots, array $prompts, ?ShotPlan $samePlan, string $slug): array
-    {
-        $stored = $samePlan?->byOrder() ?? [];
-        $rows = [];
-
-        foreach ($shots as $index => $shot) {
-            $rows[] = $stored[$shot->order] ?? PlannedShot::fromShot(
-                $shot,
-                $prompts[$index] ?? '',
-                $this->baseSeed($slug, $shot->order),
-            );
-        }
-
-        return $rows;
-    }
-
-    /**
-     * @param  list<Shot>  $shots
-     * @param  list<Shot>  $selected
-     * @param  list<PlannedShot>  $rows
-     * @param  list<string>  $prompts
-     * @return list<PlannedShot>
-     */
-    private function generateShots(
-        array $shots,
-        array $selected,
-        array $rows,
-        array $prompts,
-        string $slug,
-        bool $force,
-    ): array {
-        $generateOrders = [];
-
-        foreach ($selected as $shot) {
-            $generateOrders[$shot->order] = true;
-        }
-
-        $bar = $this->output->createProgressBar(count($selected));
-        $bar->setFormat('%current%/%max% [%bar%] %percent:3s%% restante %remaining%  %message%');
-        $bar->setMessage('');
-        $bar->start();
-
-        try {
-            foreach ($shots as $index => $shot) {
-                if (! isset($generateOrders[$shot->order])) {
-                    continue;
-                }
-
-                $bar->setMessage($this->truncate('#'.$shot->order.' '.$shot->framing));
-
-                $prompt = $prompts[$index] ?? '';
-                $seed = $this->seedFor($slug, $shot, $rows[$index] ?? null, $force);
-                $path = $this->images->generate($prompt, $seed);
-
-                $rows[$index] = PlannedShot::fromShot($shot, $prompt, $seed, $path);
-                $this->plans->write($slug, $this->planFrom($rows));
-
-                $bar->advance();
-            }
-        } finally {
-            $bar->finish();
-            $this->newLine();
-        }
-
-        return $rows;
-    }
-
-    /**
-     * @param  list<PlannedShot>  $rows
-     */
-    private function planFrom(array $rows): ShotPlan
-    {
-        return new ShotPlan(
-            version: ShotPlan::VERSION,
-            plannerVersion: ShotPlanner::VERSION,
-            shots: $rows,
-        );
     }
 
     /**
@@ -448,23 +197,6 @@ final class GenerateImagesCommand extends Command
             $this->line('  '.$prompt);
             $this->newLine();
         }
-    }
-
-    private function seedFor(string $slug, Shot $shot, ?PlannedShot $previous, bool $force): int
-    {
-        $base = $this->baseSeed($slug, $shot->order);
-
-        if (! $force) {
-            return $base;
-        }
-
-        $previousSeed = $previous instanceof PlannedShot && $previous->seed > 0
-            ? $previous->seed
-            : $base;
-
-        $seed = ($previousSeed + 1) & 0x7FFFFFFF;
-
-        return $seed === 0 ? 1 : $seed;
     }
 
     private function baseSeed(string $slug, int $order): int
@@ -531,37 +263,32 @@ final class GenerateImagesCommand extends Command
         return array_values($selected);
     }
 
-    /**
-     * @return array<string, mixed>|null
-     */
-    private function readTimings(string $path): ?array
+    private function resolveStory(string $file): ?Story
     {
-        if (! $this->files->isFile($path)) {
-            $this->error('No hay timings.json.');
+        $storyFile = $this->resolveStoryFile($file);
 
-            $wav = dirname($path).DIRECTORY_SEPARATOR.'narration.wav';
-            $slug = basename(dirname($path));
+        if ($storyFile === null) {
+            return null;
+        }
 
-            if ($this->files->isFile($wav)) {
-                $this->line('El máster de audio sí está. Alinea con:');
-                $this->line("  php artisan story:narrate {$slug}.json --timings-only");
-                $this->line('Hace falta whisper.cpp y WHISPER_MODEL (ruta a un ggml-*.bin).');
-            } else {
-                $this->line('Ejecuta story:narrate primero (sin --skip-timings).');
-            }
+        $payload = $this->readJson($storyFile, 'El guion no es un JSON válido.');
+
+        if ($payload === null) {
+            return null;
+        }
+
+        if (! isset($payload['scenes']) || ! is_array($payload['scenes'])) {
+            $this->error('El JSON no contiene un guion de historia.');
 
             return null;
         }
 
-        $timings = $this->readJson($path, 'timings.json no es un JSON válido.');
-
-        if ($timings === null || ! isset($timings['sentences']) || ! is_array($timings['sentences'])) {
-            $this->error('timings.json no tiene el esquema esperado.');
-
-            return null;
-        }
-
-        return $timings;
+        return new Story([
+            'slug' => pathinfo($storyFile, PATHINFO_FILENAME),
+            'title' => is_string($payload['title'] ?? null) ? $payload['title'] : pathinfo($storyFile, PATHINFO_FILENAME),
+            'mode' => StoryMode::Original,
+            'status' => StoryStatus::Draft,
+        ]);
     }
 
     private function resolveStoryFile(string $file): ?string
@@ -603,22 +330,6 @@ final class GenerateImagesCommand extends Command
 
         /** @var array<string, mixed> $decoded */
         return $decoded;
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function writeJson(string $path, array $payload): void
-    {
-        $this->files->ensureDirectoryExists(dirname($path));
-
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-
-        if ($json === false) {
-            throw new RuntimeException('No se pudo serializar el JSON.');
-        }
-
-        $this->files->put($path, $json."\n");
     }
 
     private function printEstimate(int $count): void

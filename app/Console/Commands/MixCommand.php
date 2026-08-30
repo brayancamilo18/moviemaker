@@ -5,16 +5,14 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\DataObjects\CoverageReport;
-use App\DataObjects\Story;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
 use App\Services\Audio\AttributionWriter;
-use App\Services\Audio\CoverageAuditor;
-use App\Services\Audio\StoryMixer;
-use App\Services\Audio\StorySoundManifest;
-use App\Services\Storage\TempSweeper;
+use App\Services\Pipeline\SoundStep;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
-use InvalidArgumentException;
 use JsonException;
 use Throwable;
 
@@ -38,11 +36,8 @@ final class MixCommand extends Command
     private readonly float $targetTruePeak;
 
     public function __construct(
-        private StoryMixer $mixer,
-        private StorySoundManifest $manifest,
-        private CoverageAuditor $auditor,
+        private SoundStep $sounds,
         private AttributionWriter $attribution,
-        private TempSweeper $sweeper,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -55,114 +50,79 @@ final class MixCommand extends Command
 
     public function handle(): int
     {
-        $this->sweepOrphans();
+        $story = $this->resolveStory((string) $this->argument('file'));
 
-        $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
-
-        if ($storyFile === null) {
-            return self::FAILURE;
-        }
-
-        $payload = $this->readStoryPayload($storyFile);
-
-        if ($payload === null) {
-            return self::FAILURE;
-        }
-
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $story = Story::fromArray($payload);
-        $dryRun = (bool) $this->option('dry-run');
-        $directory = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug;
-        $narration = $directory.DIRECTORY_SEPARATOR.'narration.wav';
-        $timingsPath = $directory.DIRECTORY_SEPARATOR.'timings.json';
-
-        if (! $this->files->isFile($narration)) {
-            $this->error('No hay narration.wav. Ejecuta story:narrate primero.');
-
-            return self::FAILURE;
-        }
-
-        if (! $this->files->isFile($timingsPath)) {
-            $this->error('No hay timings.json. Ejecuta story:narrate primero.');
-
+        if (! $story instanceof Story) {
             return self::FAILURE;
         }
 
         try {
-            if (! $this->manifest->exists($slug)) {
-                $this->manifest->sync($slug, $story, $this->readTimings($timingsPath));
-            }
-
-            $cues = $this->manifest->load($slug)['cues'];
-            $report = $this->auditor->audit($story, $cues, $narration);
-            $this->renderCoverage($report);
-
-            if (! $report->passed) {
-                $this->error('Hay bloqueantes. No se mezcla.');
-
-                return self::FAILURE;
-            }
-
-            $result = $this->mixer->mix($slug, $story, [
-                'noAmbience' => (bool) $this->option('no-ambience'),
-                'noSfx' => (bool) $this->option('no-sfx'),
-                'noMusic' => (bool) $this->option('no-music'),
-                'dryRun' => $dryRun,
+            $result = $this->sounds->run($story, null, [
+                'mix' => true,
+                'no_music' => (bool) $this->option('no-music'),
+                'no_sfx' => (bool) $this->option('no-sfx'),
+                'no_ambience' => (bool) $this->option('no-ambience'),
+                'dry_run' => (bool) $this->option('dry-run'),
             ]);
-        } catch (InvalidArgumentException $exception) {
-            $this->error($exception->getMessage());
-
-            return self::FAILURE;
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
+        $this->renderSweep($result['swept'] ?? null);
+
+        if (isset($result['coverage']) && $result['coverage'] instanceof CoverageReport) {
+            $this->renderCoverage($result['coverage']);
+        }
+
+        if (($result['ok'] ?? true) === false) {
+            $this->error((string) ($result['error'] ?? 'La mezcla falló.'));
+
+            return self::FAILURE;
+        }
+
         $this->renderTracks($result['tracks']);
-        $this->renderSkippedSfx($result['sfxSkipped']);
+        $this->renderSkippedSfx($result['sfx_skipped']);
         $this->line(sprintf(
             'Duración del máster: %.3f s (última frase %.3f s + cola %.1f s).',
-            $result['duration'],
-            $result['lastTranscribedPhraseEnd'],
-            $result['tailSeconds'],
+            $result['master_seconds'],
+            $result['last_transcribed_phrase_end'],
+            $result['tail_seconds'],
         ));
 
-        if ($dryRun) {
+        if ((bool) ($result['dry_run'] ?? false)) {
             $this->comment('Simulación: no se generó audio.');
 
             return self::SUCCESS;
         }
 
         $this->renderMeasurement($result['measurement']);
-        $credits = $this->attribution->cueCredits($result['usedCues']);
-        $this->renderCredits($credits);
+        $this->renderCredits($result['credits']);
         $this->info('Mezcla: '.$result['wav']);
         $this->line('Escucha: '.$result['mp3']);
-        $this->line('Créditos: '.$this->writeCredits($slug, $credits));
+        $this->line('Créditos: '.$result['credits_path']);
 
         return self::SUCCESS;
     }
 
-    private function sweepOrphans(): void
+    /**
+     * @param  array{entries?: int, bytes?: int}|null  $swept
+     */
+    private function renderSweep(?array $swept): void
     {
-        $swept = $this->sweeper->sweep();
-
-        if ($swept['entries'] === 0) {
+        if ($swept === null || ($swept['entries'] ?? 0) === 0) {
             return;
         }
 
         $this->comment(sprintf(
             'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
             $swept['entries'],
-            $swept['bytes'] / 1048576,
+            ($swept['bytes'] ?? 0) / 1048576,
         ));
     }
 
     /**
-     * Un efecto sin ancla no suena, y eso hay que decirlo: si no, la historia pierde golpes en
-     * silencio y nadie sabe si es que la escena era muda o que el ancla no casó.
-     *
      * @param  list<array<string, mixed>>  $skipped
      */
     private function renderSkippedSfx(array $skipped): void
@@ -208,21 +168,6 @@ final class MixCommand extends Command
         foreach ($report->blocking as $blocking) {
             $this->error('  · '.$blocking);
         }
-    }
-
-    /**
-     * @return array{scenes?: list<array<string, mixed>>, sentences?: list<array<string, mixed>>}
-     */
-    private function readTimings(string $path): array
-    {
-        try {
-            /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return [];
-        }
-
-        return $decoded;
     }
 
     /**
@@ -293,15 +238,26 @@ final class MixCommand extends Command
         }
     }
 
-    /**
-     * @param  list<array{file: string, author: string, sourceUrl: string, license: string}>  $credits
-     */
-    private function writeCredits(string $slug, array $credits): string
+    private function resolveStory(string $file): ?Story
     {
-        $path = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'credits.txt';
-        $this->attribution->write($path, $this->attribution->storyDocument($slug, $credits));
+        $storyFile = $this->resolveStoryFile($file);
 
-        return $path;
+        if ($storyFile === null) {
+            return null;
+        }
+
+        $payload = $this->readStoryPayload($storyFile);
+
+        if ($payload === null) {
+            return null;
+        }
+
+        return new Story([
+            'slug' => pathinfo($storyFile, PATHINFO_FILENAME),
+            'title' => is_string($payload['title'] ?? null) ? $payload['title'] : pathinfo($storyFile, PATHINFO_FILENAME),
+            'mode' => StoryMode::Original,
+            'status' => StoryStatus::Draft,
+        ]);
     }
 
     private function resolveStoryFile(string $file): ?string

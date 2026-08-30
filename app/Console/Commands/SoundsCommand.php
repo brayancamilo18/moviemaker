@@ -4,17 +4,16 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Contracts\JsonLlm;
 use App\DataObjects\CoverageReport;
 use App\DataObjects\ResolvedSound;
-use App\DataObjects\Story;
+use App\Enums\StoryMode;
+use App\Enums\StoryStatus;
+use App\Models\Story;
 use App\Services\Audio\CoverageAuditor;
-use App\Services\Audio\StorySoundManifest;
-use App\Services\Image\ShotPlanner;
+use App\Services\Pipeline\SoundStep;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
-use InvalidArgumentException;
 use JsonException;
 use Throwable;
 
@@ -31,9 +30,8 @@ final class SoundsCommand extends Command
     private readonly string $outputDirectory;
 
     public function __construct(
-        private StorySoundManifest $manifest,
+        private SoundStep $sounds,
         private CoverageAuditor $auditor,
-        private JsonLlm $llm,
         private Filesystem $files,
         Repository $config,
     ) {
@@ -44,76 +42,45 @@ final class SoundsCommand extends Command
 
     public function handle(): int
     {
-        $storyFile = $this->resolveStoryFile((string) $this->argument('file'));
+        $story = $this->resolveStory((string) $this->argument('file'));
 
-        if ($storyFile === null) {
-            return self::FAILURE;
-        }
-
-        $payload = $this->readStoryPayload($storyFile);
-
-        if ($payload === null) {
-            return self::FAILURE;
-        }
-
-        $slug = pathinfo($storyFile, PATHINFO_FILENAME);
-        $story = Story::fromArray($payload);
-        $timings = $this->readTimings($slug);
-        $refresh = (bool) $this->option('refresh');
-        $refreshCue = trim((string) $this->option('refresh-cue'));
-        $auditOnly = (bool) $this->option('audit');
-
-        if (! $auditOnly && ! $this->assertDirectedShots($slug)) {
+        if (! $story instanceof Story) {
             return self::FAILURE;
         }
 
         try {
-            if ($auditOnly) {
-                if (! $this->manifest->exists($slug)) {
-                    $this->error('No hay sounds.json. Ejecuta story:sounds sin --audit primero.');
-
-                    return self::FAILURE;
-                }
-
-                $manifest = $this->manifest->load($slug);
-            } else {
-                $manifest = $this->manifest->sync(
-                    $slug,
-                    $story,
-                    $timings,
-                    $refresh,
-                    $refreshCue !== '' ? $refreshCue : null,
-                );
-            }
-        } catch (InvalidArgumentException $exception) {
-            $this->error($exception->getMessage());
-
-            return self::FAILURE;
+            $result = $this->sounds->run($story, null, [
+                'refresh' => (bool) $this->option('refresh'),
+                'refresh_cue' => trim((string) $this->option('refresh-cue')),
+                'audit' => (bool) $this->option('audit'),
+            ]);
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
-        $notice = $this->llm->fallbackNotice();
+        if (($result['ok'] ?? true) === false && ! isset($result['cues'])) {
+            $this->error((string) ($result['error'] ?? 'La resolución de sonido falló.'));
 
-        if ($notice !== null) {
+            return self::FAILURE;
+        }
+
+        $notice = $result['fallback_notice'] ?? null;
+
+        if (is_string($notice) && $notice !== '') {
             $this->warn($notice);
         }
 
-        $this->renderTable($manifest['cues']);
-        $this->renderSummary($manifest['cues']);
-        $this->line('sounds.json: '.$this->manifest->pathFor($slug));
+        $this->renderTable($result['cues']);
+        $this->renderSummary($result['cues']);
+        $this->line('sounds.json: '.(string) $result['path']);
 
-        if ($auditOnly) {
-            $report = $this->auditor->audit(
-                $story,
-                $manifest['cues'],
-                $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'narration.wav',
-            );
+        if ((bool) ($result['audit'] ?? false)) {
+            $report = $result['coverage'];
             $this->renderCoverage($report);
 
-            return $report->passed ? self::SUCCESS : self::FAILURE;
+            return $report instanceof CoverageReport && $report->passed ? self::SUCCESS : self::FAILURE;
         }
 
         $this->comment('Si el algoritmo elige mal, edita la ruta en sounds.json y vuelve a mezclar.');
@@ -169,8 +136,12 @@ final class SoundsCommand extends Command
         ));
     }
 
-    private function renderCoverage(CoverageReport $report): void
+    private function renderCoverage(mixed $report): void
     {
+        if (! $report instanceof CoverageReport) {
+            return;
+        }
+
         $this->newLine();
 
         foreach ($report->warnings as $warning) {
@@ -206,66 +177,26 @@ final class SoundsCommand extends Command
         };
     }
 
-    /**
-     * @return array{scenes?: list<array<string, mixed>>, sentences?: list<array<string, mixed>>}
-     */
-    private function readTimings(string $slug): array
+    private function resolveStory(string $file): ?Story
     {
-        $path = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'timings.json';
+        $storyFile = $this->resolveStoryFile($file);
 
-        if (! $this->files->isFile($path)) {
-            return [];
+        if ($storyFile === null) {
+            return null;
         }
 
-        try {
-            /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return [];
+        $payload = $this->readStoryPayload($storyFile);
+
+        if ($payload === null) {
+            return null;
         }
 
-        return $decoded;
-    }
-
-    private function assertDirectedShots(string $slug): bool
-    {
-        $path = $this->outputDirectory.DIRECTORY_SEPARATOR.$slug.DIRECTORY_SEPARATOR.'shots.json';
-
-        if (! $this->files->isFile($path)) {
-            $this->error('No hay shots.json. Ejecuta story:images primero.');
-
-            return false;
-        }
-
-        try {
-            /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($this->files->get($path), true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            $this->error('shots.json no es un JSON válido.');
-
-            return false;
-        }
-
-        if (! isset($decoded['shots']) || ! is_array($decoded['shots']) || $decoded['shots'] === []) {
-            $this->error('shots.json no contiene planos.');
-
-            return false;
-        }
-
-        $version = array_key_exists('plannerVersion', $decoded) ? (int) $decoded['plannerVersion'] : 0;
-
-        if ($version < ShotPlanner::VERSION) {
-            $seen = array_key_exists('plannerVersion', $decoded) ? (string) $version : 'ausente';
-            $this->error(sprintf(
-                'shots.json tiene plannerVersion %s; hace falta %d. Regenera con story:images.',
-                $seen,
-                ShotPlanner::VERSION,
-            ));
-
-            return false;
-        }
-
-        return true;
+        return new Story([
+            'slug' => pathinfo($storyFile, PATHINFO_FILENAME),
+            'title' => is_string($payload['title'] ?? null) ? $payload['title'] : pathinfo($storyFile, PATHINFO_FILENAME),
+            'mode' => StoryMode::Original,
+            'status' => StoryStatus::Draft,
+        ]);
     }
 
     private function resolveStoryFile(string $file): ?string
