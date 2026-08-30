@@ -8,10 +8,10 @@ use App\Enums\StoryStatus;
 use App\Models\Story;
 use App\Services\Pipeline\ImagesStep;
 use App\Services\Pipeline\NarrationStep;
+use App\Services\Llm\LlmUsageMeter;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\RenderStep;
-use App\Services\Llm\TokenLedger;
 use App\Services\Pipeline\ScriptStep;
 use App\Services\Pipeline\SoundStep;
 use Illuminate\Container\Container;
@@ -66,7 +66,7 @@ final class RunPipelineStep implements ShouldQueue
         RenderStep $render,
         PipelineProgress $progress,
         PipelineDispatcher $dispatcher,
-        TokenLedger $tokenLedger,
+        LlmUsageMeter $meter,
     ): void {
         $story = Story::query()->findOrFail($this->storyId);
 
@@ -95,7 +95,7 @@ final class RunPipelineStep implements ShouldQueue
         }
 
         $this->applyMetrics($story, $result);
-        $this->recordLedger($story, $tokenLedger);
+        $this->recordUsage($story, $meter);
         $this->recordWarnings($story, $result);
         $this->transitionAfterStep($story);
         $progress->clear($this->storyId);
@@ -204,22 +204,23 @@ final class RunPipelineStep implements ShouldQueue
         ]);
     }
 
-    private function recordLedger(Story $story, TokenLedger $tokenLedger): void
+    private function recordUsage(Story $story, LlmUsageMeter $meter): void
     {
-        $ledger = $tokenLedger->drain();
+        $summary = $meter->summary();
+        $meter->reset();
 
-        if ($ledger['calls'] > 0) {
-            $story->increment('llm_cost_usd', $ledger['costUsd']);
+        if ($summary['calls'] > 0) {
+            $story->increment('llm_cost_usd', $summary['costUsd']);
         }
 
         $story->events()->create([
             'type' => 'step_completed',
             'payload' => [
                 'step' => $this->step,
-                'inputTokens' => $ledger['inputTokens'],
-                'outputTokens' => $ledger['outputTokens'],
-                'costUsd' => $ledger['costUsd'],
-                'calls' => $ledger['calls'],
+                'inputTokens' => $summary['inputTokens'],
+                'outputTokens' => $summary['outputTokens'],
+                'costUsd' => $summary['costUsd'],
+                'calls' => $summary['calls'],
             ],
         ]);
     }

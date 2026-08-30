@@ -31,7 +31,7 @@ final class GeminiClient implements JsonLlm
         private int $timeout,
         private int $maxRetries,
         private LoggerInterface $logger,
-        private TokenLedger $ledger,
+        private LlmUsageMeter $meter,
     ) {}
 
     /**
@@ -104,11 +104,18 @@ final class GeminiClient implements JsonLlm
             'output_tokens' => $usage['candidatesTokenCount'] ?? null,
             'max_tokens' => $budget,
         ]);
-        $this->account(
-            $task,
-            (int) ($usage['promptTokenCount'] ?? 0),
-            (int) ($usage['candidatesTokenCount'] ?? 0),
-        );
+
+        try {
+            $this->meter->record(
+                'gemini',
+                $this->model($task),
+                $task,
+                (int) ($usage['promptTokenCount'] ?? 0),
+                (int) ($usage['candidatesTokenCount'] ?? 0),
+            );
+        } catch (Throwable $exception) {
+            $this->logger->warning('No se pudo registrar el consumo de Gemini: '.$exception->getMessage());
+        }
 
         $text = $payload['candidates'][0]['content']['parts'][0]['text'] ?? null;
 
@@ -185,25 +192,6 @@ final class GeminiClient implements JsonLlm
     private function model(LlmTask $task): string
     {
         return $this->models[$task->value] ?? $this->models['default'];
-    }
-
-    private function account(LlmTask $task, int $inputTokens, int $outputTokens): void
-    {
-        try {
-            $this->ledger->record(
-                'gemini',
-                $this->model($task),
-                $task,
-                $inputTokens,
-                $outputTokens,
-            );
-        } catch (Throwable $exception) {
-            $this->logger->warning('No se pudo registrar el gasto de tokens.', [
-                'provider' => 'gemini',
-                'task' => $task->value,
-                'error' => $exception->getMessage(),
-            ]);
-        }
     }
 
     private function tokenBudget(LlmTask $task, ?int $maxTokensOverride = null): int
