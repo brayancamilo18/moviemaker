@@ -162,6 +162,8 @@ final class StoryControllerTest extends TestCase
                 ->where('snapshot.status', StoryStatus::Draft->value)
                 ->where('snapshot.progress.step', 'script')
                 ->where('snapshot.progress.label', 'guion')
+                ->where('queue.likelyNoWorker', false)
+                ->where('snapshot.queue.likelyNoWorker', false)
             );
     }
 
@@ -186,7 +188,11 @@ final class StoryControllerTest extends TestCase
             ->assertJsonPath('verdict', 'publish')
             ->assertJsonPath('scene_count', 12)
             ->assertJsonPath('used_fallback', true)
-            ->assertJsonPath('failed_step', null);
+            ->assertJsonPath('failed_step', null)
+            ->assertJsonPath('queue.pending', 0)
+            ->assertJsonPath('queue.oldestPendingSeconds', null)
+            ->assertJsonPath('queue.failed', 0)
+            ->assertJsonPath('queue.likelyNoWorker', false);
     }
 
     public function test_retry_queues_the_failed_step_without_chaining(): void
@@ -246,7 +252,21 @@ final class StoryControllerTest extends TestCase
     {
         $this->get(route('pipeline'))
             ->assertOk()
-            ->assertInertia(fn (Assert $page): Assert => $page->component('Pipeline'));
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->component('Pipeline')
+                ->where('queue.likelyNoWorker', false)
+                ->where('queue.pending', 0));
+    }
+
+    public function test_the_queue_page_includes_queue_health(): void
+    {
+        $this->get(route('queue'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->component('Queue')
+                ->where('queue.likelyNoWorker', false)
+                ->where('queue.pending', 0)
+                ->where('queue.failed', 0));
     }
 
     public function test_live_llm_health_returns_json_without_throwing(): void

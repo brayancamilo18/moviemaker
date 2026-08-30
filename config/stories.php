@@ -68,6 +68,8 @@ return [
     'pipeline' => [
         'progress_ttl' => 3600,
         'failed_message_max' => 2000,
+        'stale_job_seconds' => 15,
+        'stale_draft_seconds' => 30,
     ],
 
     'tts' => [

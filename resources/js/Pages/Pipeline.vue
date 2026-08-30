@@ -39,13 +39,24 @@ const STEP_LABELS = {
     render: 'Render',
 };
 
+const WORKER_COMMAND = 'php artisan queue:work --tries=1';
+
+const EMPTY_QUEUE = {
+    pending: 0,
+    oldestPendingSeconds: null,
+    failed: 0,
+    likelyNoWorker: false,
+};
+
 const props = defineProps({
     story: { type: Object, default: null },
     progress: { type: Object, default: null },
     snapshot: { type: Object, default: null },
+    queue: { type: Object, default: null },
 });
 
-const snapshot = ref(props.snapshot ?? emptySnapshot(props.story, props.progress));
+const snapshot = ref(props.snapshot ?? emptySnapshot(props.story, props.progress, props.queue));
+const copied = ref(false);
 let timer = 0;
 
 const heading = computed(() => {
@@ -69,6 +80,25 @@ const scriptReadyIdle = computed(
 );
 
 const fallbackOn = computed(() => Boolean(snapshot.value?.used_fallback));
+
+const queue = computed(() => snapshot.value?.queue ?? props.queue ?? EMPTY_QUEUE);
+
+const staleDraft = computed(() => {
+    if (!props.story || snapshot.value?.status !== 'borrador' || inProgress.value) {
+        return false;
+    }
+
+    const created = snapshot.value?.created_at ?? props.story.created_at;
+    const limit = snapshot.value?.stale_draft_seconds ?? 30;
+
+    if (!created) {
+        return false;
+    }
+
+    return (Date.now() - new Date(created).getTime()) / 1000 > limit;
+});
+
+const showWorkerWarning = computed(() => Boolean(queue.value.likelyNoWorker) || staleDraft.value);
 
 const verdictMeta = computed(() => {
     const key = snapshot.value?.verdict;
@@ -104,7 +134,7 @@ const barPercent = computed(() => {
     return Math.max(0, Math.min(100, Math.round((100 * progress.done) / progress.total)));
 });
 
-function emptySnapshot(story, progress) {
+function emptySnapshot(story, progress, queueStatus) {
     if (!story) {
         return null;
     }
@@ -121,7 +151,22 @@ function emptySnapshot(story, progress) {
         score: story.score,
         scene_count: story.scene_count,
         used_fallback: Boolean(story.used_fallback),
+        created_at: story.created_at ?? null,
+        stale_draft_seconds: 30,
+        queue: queueStatus ?? EMPTY_QUEUE,
     };
+}
+
+async function copyWorkerCommand() {
+    try {
+        await navigator.clipboard.writeText(WORKER_COMMAND);
+        copied.value = true;
+        window.setTimeout(() => {
+            copied.value = false;
+        }, 2000);
+    } catch {
+        // El comando sigue visible para copiar a mano.
+    }
 }
 
 function completedCount(current) {
@@ -244,6 +289,28 @@ onUnmounted(() => {
                     />
                     <span>{{ snapshot?.status_label }}</span>
                     <span v-if="snapshot?.scene_count">· {{ snapshot.scene_count }} escenas</span>
+                </div>
+            </div>
+
+            <div
+                v-if="showWorkerWarning"
+                class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
+            >
+                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
+                <div class="min-w-0 flex-1">
+                    <p class="text-[12.5px] font-extrabold text-amber">
+                        El pipeline está esperando. Hay {{ queue.pending }} trabajo(s) en cola y ninguno se está ejecutando. Arranca el worker en otra terminal:
+                    </p>
+                    <div class="mt-2.5 flex items-center gap-2">
+                        <code class="flex-1 truncate border border-[#6B4C1C] bg-[#151006] px-2.5 py-1.5 font-mono text-[11.5px] text-text">{{ WORKER_COMMAND }}</code>
+                        <button
+                            type="button"
+                            class="shrink-0 border border-[#6B4C1C] px-3 py-1.5 text-[11px] font-extrabold text-amber hover:bg-[#22180A]"
+                            @click="copyWorkerCommand"
+                        >
+                            {{ copied ? 'Copiado' : 'Copiar' }}
+                        </button>
+                    </div>
                 </div>
             </div>
 

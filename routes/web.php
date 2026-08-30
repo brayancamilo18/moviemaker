@@ -5,12 +5,17 @@ declare(strict_types=1);
 use App\Http\Controllers\StoryController;
 use App\Http\Controllers\StoryMediaController;
 use App\Services\Llm\ProviderHealth;
+use App\Services\Pipeline\QueueHealth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::redirect('/', '/queue');
 
-Route::get('/queue', fn () => Inertia::render('Queue'))->name('queue');
+Route::get('/queue', function (QueueHealth $queue) {
+    return Inertia::render('Queue', [
+        'queue' => $queue->status(),
+    ]);
+})->name('queue');
 Route::get('/stories/create', [StoryController::class, 'create'])->name('stories.create');
 Route::post('/stories', [StoryController::class, 'store'])->name('stories.store');
 Route::get('/stories/{story:id}/pipeline', [StoryController::class, 'pipeline'])->name('pipeline.show');
@@ -21,7 +26,11 @@ Route::post('/stories/{story:id}/discard', [StoryController::class, 'discard'])-
 Route::post('/llm/health', function (ProviderHealth $health) {
     return response()->json($health->check(live: true));
 })->name('llm.health');
-Route::get('/pipeline', fn () => Inertia::render('Pipeline'))->name('pipeline');
+Route::get('/pipeline', function (QueueHealth $queue) {
+    return Inertia::render('Pipeline', [
+        'queue' => $queue->status(),
+    ]);
+})->name('pipeline');
 Route::get('/review', fn () => Inertia::render('Review'))->name('review');
 Route::get('/sheet', fn () => Inertia::render('ContactSheet'))->name('sheet');
 Route::get('/thumbnail', fn () => Inertia::render('Thumbnail'))->name('thumbnail');
