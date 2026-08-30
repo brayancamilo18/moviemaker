@@ -73,6 +73,7 @@ final readonly class PlannedShot
                 description: $shot->description,
                 characterSlugs: $shot->characterSlugs,
                 imagePath: $imagePath,
+                isOutro: $shot->isOutro,
             ),
             prompt: $prompt,
             seed: $seed,

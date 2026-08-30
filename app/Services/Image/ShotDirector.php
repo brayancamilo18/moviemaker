@@ -109,6 +109,10 @@ final class ShotDirector
 
     private readonly int $detailRatioMax;
 
+    private readonly int $outroSceneOrder;
+
+    private readonly string $outroImagePrompt;
+
     public function __construct(
         private JsonLlm $llm,
         Repository $config,
@@ -116,6 +120,8 @@ final class ShotDirector
         $this->threatRatioMin = $this->percent($config->get('stories.images.direction.threat_ratio_min'));
         $this->threatRatioMax = $this->percent($config->get('stories.images.direction.threat_ratio_max'));
         $this->detailRatioMax = $this->percent($config->get('stories.images.direction.detail_ratio_max'));
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->outroImagePrompt = trim((string) $config->get('stories.story.outro.image_prompt'));
     }
 
     private function percent(mixed $ratio): int
@@ -142,6 +148,14 @@ final class ShotDirector
         $floors = ['journey' => 0, 'light' => 0];
 
         foreach ($this->groupByScene($shots) as $sceneOrder => $sceneShots) {
+            if ($sceneOrder === $this->outroSceneOrder) {
+                foreach ($sceneShots as $shot) {
+                    $directedByOrder[$shot->order] = $this->directOutro($shot);
+                }
+
+                continue;
+            }
+
             foreach ($this->directScene($sceneShots, $story, $bible, $sceneOrder, $sceneCount, $floors) as $shot) {
                 $directedByOrder[$shot->order] = $shot;
             }
@@ -160,6 +174,30 @@ final class ShotDirector
         }
 
         return $directed;
+    }
+
+    /**
+     * El cierre del canal no se dirige: prompt fijo, plano único, fuera de Gemini.
+     */
+    private function directOutro(Shot $shot): Shot
+    {
+        return new Shot(
+            order: $shot->order,
+            sceneOrder: $shot->sceneOrder,
+            start: $shot->start,
+            end: $shot->end,
+            sourceText: $shot->sourceText,
+            framing: 'wide establishing',
+            motion: $shot->motion,
+            subject: $shot->subject,
+            threatStage: $shot->threatStage,
+            journeyLeg: $shot->journeyLeg,
+            lightStage: $shot->lightStage,
+            description: $this->outroImagePrompt,
+            characterSlugs: [],
+            imagePath: $shot->imagePath,
+            isOutro: true,
+        );
     }
 
     /**
@@ -414,6 +452,7 @@ final class ShotDirector
             description: $description,
             characterSlugs: $shot->characterSlugs,
             imagePath: $shot->imagePath,
+            isOutro: $shot->isOutro,
         );
     }
 

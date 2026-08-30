@@ -239,6 +239,7 @@ final class GenerateImagesCommand extends Command
                 description: $row->shot->description,
                 characterSlugs: $row->shot->characterSlugs,
                 imagePath: $shot->imagePath,
+                isOutro: $shot->isOutro,
             );
         }
 

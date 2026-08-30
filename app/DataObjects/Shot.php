@@ -27,6 +27,7 @@ final readonly class Shot
         /** @var list<string> */
         public array $characterSlugs = [],
         public ?string $imagePath = null,
+        public bool $isOutro = false,
     ) {}
 
     /**
@@ -44,7 +45,8 @@ final readonly class Shot
      *     lightStage?: string|null,
      *     description?: string,
      *     characterSlugs?: list<string>,
-     *     imagePath?: string|null
+     *     imagePath?: string|null,
+     *     isOutro?: bool
      * }  $data
      */
     public static function fromArray(array $data): self
@@ -77,6 +79,7 @@ final readonly class Shot
             description: trim((string) ($data['description'] ?? '')),
             characterSlugs: $slugs,
             imagePath: is_string($imagePath) && $imagePath !== '' ? $imagePath : null,
+            isOutro: (bool) ($data['isOutro'] ?? false),
         );
     }
 
@@ -95,7 +98,8 @@ final readonly class Shot
      *     lightStage: ?string,
      *     description: string,
      *     characterSlugs: list<string>,
-     *     imagePath: ?string
+     *     imagePath: ?string,
+     *     isOutro: bool
      * }
      */
     public function toArray(): array
@@ -115,6 +119,7 @@ final readonly class Shot
             'description' => $this->description,
             'characterSlugs' => $this->characterSlugs,
             'imagePath' => $this->imagePath,
+            'isOutro' => $this->isOutro,
         ];
     }
 

@@ -77,6 +77,17 @@ final class ShotPromptBuilder
             throw new InvalidArgumentException("El plano {$shot->order} no tiene description.");
         }
 
+        if ($shot->isOutro) {
+            return implode(', ', array_values(array_filter(
+                [
+                    $description,
+                    $this->styleSuffix,
+                    $this->channelNegatives(),
+                ],
+                static fn (string $part): bool => $part !== '',
+            )));
+        }
+
         $parts = [$this->part(self::RANK_DESCRIPTION, $this->sanitize($description))];
 
         if ($shot->subject === 'threat') {
@@ -250,6 +261,21 @@ final class ShotPromptBuilder
         }
 
         return '';
+    }
+
+    /**
+     * Negativos fijos del canal. El outro no suma los de la biblia: si no, el prompt
+     * cambiaría con cada historia y la imagen de cierre no reutilizaría caché.
+     */
+    private function channelNegatives(): string
+    {
+        return implode(', ', [
+            'no text',
+            'no watermark',
+            'no logos',
+            'no clear facial features',
+            'no direct eye contact',
+        ]);
     }
 
     private function negatives(VisualBible $bible): string

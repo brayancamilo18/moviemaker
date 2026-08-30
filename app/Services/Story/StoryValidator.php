@@ -176,7 +176,7 @@ final class StoryValidator
 
         $long = [];
 
-        foreach ($this->shots($context) as $shot) {
+        foreach ($this->storyShots($context) as $shot) {
             $duration = $shot->end - $shot->start;
 
             if ($duration > $this->maxShotDuration + 0.0005) {
@@ -372,7 +372,12 @@ final class StoryValidator
             return $this->warn('figure_ratio', $label, is_string($context['shotsError'] ?? null) ? (string) $context['shotsError'] : 'No hay planos.');
         }
 
-        $shots = $this->shots($context);
+        $shots = $this->storyShots($context);
+
+        if ($shots === []) {
+            return $this->ok('figure_ratio', $label, 'Sin planos de historia que contar.');
+        }
+
         $figures = 0;
 
         foreach ($shots as $shot) {
@@ -404,7 +409,12 @@ final class StoryValidator
             return $this->warn('detail_ratio', $label, is_string($context['shotsError'] ?? null) ? (string) $context['shotsError'] : 'No hay planos.');
         }
 
-        $shots = $this->shots($context);
+        $shots = $this->storyShots($context);
+
+        if ($shots === []) {
+            return $this->ok('detail_ratio', $label, 'Sin planos de historia que contar.');
+        }
+
         $details = 0;
 
         foreach ($shots as $shot) {
@@ -795,6 +805,20 @@ final class StoryValidator
         $shots = is_array($context['shots'] ?? null) ? $context['shots'] : [];
 
         return $shots;
+    }
+
+    /**
+     * Planos de la historia, sin el cierre fijo del canal.
+     *
+     * @param  array<string, mixed>  $context
+     * @return list<Shot>
+     */
+    private function storyShots(array $context): array
+    {
+        return array_values(array_filter(
+            $this->shots($context),
+            static fn (Shot $shot): bool => ! $shot->isOutro,
+        ));
     }
 
     /**

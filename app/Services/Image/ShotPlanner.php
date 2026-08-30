@@ -51,6 +51,8 @@ final class ShotPlanner
 
     private readonly float $maxHoldSlack;
 
+    private readonly int $outroSceneOrder;
+
     public function __construct(Repository $config)
     {
         $this->minDuration = (float) $config->get('stories.shots.min_duration');
@@ -59,6 +61,7 @@ final class ShotPlanner
         $this->tensionDuration = (float) $config->get('stories.shots.tension_duration');
         $this->atmosphereDuration = (float) $config->get('stories.shots.atmosphere_duration');
         $this->maxHoldSlack = (float) $config->get('stories.shots.max_hold_slack');
+        $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
     }
 
     /**
@@ -75,6 +78,15 @@ final class ShotPlanner
 
         foreach ($this->groupByScene($sentences, $knownScenes) as $sceneOrder => $sceneSentences) {
             $windows = $this->sentenceWindows($sceneSentences, $sceneEnds[$sceneOrder] ?? null);
+
+            if ($sceneOrder === $this->outroSceneOrder) {
+                if ($windows !== []) {
+                    $units[] = $this->outroUnit($windows);
+                }
+
+                continue;
+            }
+
             $windows = $this->attachBeats($windows, $story);
             $groups = $this->groupWindows($windows);
             $groups = $this->mergeShort($groups);
@@ -112,6 +124,10 @@ final class ShotPlanner
         $durations = [];
 
         foreach ($shots as $shot) {
+            if ($shot->isOutro) {
+                continue;
+            }
+
             $durations[] = $shot->end - $shot->start;
             $framing[$shot->framing] = ($framing[$shot->framing] ?? 0) + 1;
             $subject[$shot->subject] = ($subject[$shot->subject] ?? 0) + 1;
@@ -121,8 +137,20 @@ final class ShotPlanner
             }
         }
 
+        if ($durations === []) {
+            return [
+                'count' => 0,
+                'meanDuration' => 0.0,
+                'minDuration' => 0.0,
+                'maxDuration' => 0.0,
+                'framing' => $framing,
+                'subject' => $subject,
+                'threatStage' => $threatStage,
+            ];
+        }
+
         return [
-            'count' => count($shots),
+            'count' => count($durations),
             'meanDuration' => $this->seconds(array_sum($durations) / count($durations)),
             'minDuration' => $this->seconds(min($durations)),
             'maxDuration' => $this->seconds(max($durations)),
@@ -411,21 +439,26 @@ final class ShotPlanner
                 $runKey = $key;
             }
 
-            $subject = $this->subjectForRun($unit['subject'], $run);
-            $threatStage = in_array($subject, ['threat', 'both'], true)
-                ? $unit['threatStage']
-                : null;
+            $isOutro = $unit['sceneOrder'] === $this->outroSceneOrder;
+            $subject = $isOutro ? 'environment' : $this->subjectForRun($unit['subject'], $run);
+            $threatStage = $isOutro || ! in_array($subject, ['threat', 'both'], true)
+                ? null
+                : $unit['threatStage'];
 
             $sceneChanged = $previousScene !== $unit['sceneOrder'];
-            $framing = $this->nextFraming(
-                $framingIndex,
-                $previousFraming,
-                $sceneChanged,
-                $subject,
-                $threatStage,
-            );
+            $framing = $isOutro
+                ? 'wide establishing'
+                : $this->nextFraming(
+                    $framingIndex,
+                    $previousFraming,
+                    $sceneChanged,
+                    $subject,
+                    $threatStage,
+                );
             $duration = $unit['end'] - $unit['start'];
-            $motion = $this->nextMotion($motionIndex, $previousMotion, $unit['text'], $duration);
+            $motion = $isOutro
+                ? 'static'
+                : $this->nextMotion($motionIndex, $previousMotion, $unit['text'], $duration);
 
             $shots[] = new Shot(
                 order: $index + 1,
@@ -440,6 +473,7 @@ final class ShotPlanner
                 description: trim($this->scene($story, $unit['sceneOrder'])?->visualSummary ?? ''),
                 characterSlugs: [],
                 imagePath: null,
+                isOutro: $isOutro,
             );
 
             $previousFraming = $framing;
@@ -485,6 +519,17 @@ final class ShotPlanner
             }
 
             $end = max($start, $end);
+
+            if ($shot->isOutro) {
+                $windows[] = [
+                    'shot' => $shot,
+                    'start' => $start,
+                    'end' => $end,
+                    'continuation' => false,
+                ];
+
+                continue;
+            }
 
             if ($next === null) {
                 $speechEnd = max($start, min($this->seconds($shot->end), $end));
@@ -566,6 +611,7 @@ final class ShotPlanner
                 description: $source->description,
                 characterSlugs: $source->characterSlugs,
                 imagePath: $source->imagePath,
+                isOutro: $source->isOutro,
             );
 
             $previousFraming = $framing;
@@ -737,7 +783,11 @@ final class ShotPlanner
         foreach ($sentences as $sentence) {
             $sceneOrder = $sentence['sceneOrder'];
 
-            if ($knownScenes !== [] && ! in_array($sceneOrder, $knownScenes, true)) {
+            if (
+                $knownScenes !== []
+                && ! in_array($sceneOrder, $knownScenes, true)
+                && $sceneOrder !== $this->outroSceneOrder
+            ) {
                 continue;
             }
 
@@ -832,6 +882,31 @@ final class ShotPlanner
         }
 
         return $ends;
+    }
+
+    /**
+     * Un único plano que cubre toda la escena de cierre, sin trocear ni asignar beats narrativos.
+     *
+     * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $windows
+     * @return array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}
+     */
+    private function outroUnit(array $windows): array
+    {
+        $first = $windows[0];
+        $last = $windows[array_key_last($windows)];
+
+        return [
+            'sceneOrder' => $this->outroSceneOrder,
+            'start' => $first['start'],
+            'end' => $last['end'],
+            'text' => implode(' ', array_map(
+                static fn (array $window): string => $window['text'],
+                $windows,
+            )),
+            'beatIndex' => 0,
+            'subject' => 'environment',
+            'threatStage' => null,
+        ];
     }
 
     /**
