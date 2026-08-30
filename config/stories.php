@@ -72,6 +72,14 @@ return [
         'stale_draft_seconds' => 30,
     ],
 
+    'doctor' => [
+        'internet_timeout' => 10,
+        'config_cache_path' => 'bootstrap/cache/config.php',
+        'worker_command' => 'php artisan queue:work --tries=1',
+        'gemini_probe' => 'https://generativelanguage.googleapis.com',
+        'anthropic_probe' => 'https://api.anthropic.com',
+    ],
+
     'tts' => [
         'base_url' => env('TTS_BASE_URL', 'http://127.0.0.1:8020'),
         'voice' => env('TTS_VOICE', 'af_heart'),

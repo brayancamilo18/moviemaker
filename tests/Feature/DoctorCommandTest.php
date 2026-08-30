@@ -5,12 +5,19 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Contracts\TextToSpeech;
+use App\Services\Diagnostics\EnvironmentDoctor;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 final class DoctorCommandTest extends TestCase
 {
+    use RefreshDatabase;
+
     private string $workDirectory;
 
     protected function setUp(): void
@@ -31,6 +38,7 @@ final class DoctorCommandTest extends TestCase
         $config->set('stories.llm.anthropic.api_key', 'clave-de-respaldo');
         $config->set('stories.whisper.binary', 'php');
         $config->set('stories.whisper.model', $this->workDirectory.'/whisper/ggml-base.en.bin');
+        $config->set('stories.doctor.config_cache_path', $this->workDirectory.'/no-config-cache.php');
 
         $this->app->forgetInstance(TextToSpeech::class);
     }
@@ -78,6 +86,8 @@ final class DoctorCommandTest extends TestCase
 
         Http::fake([
             'http://127.0.0.1:8020/health' => Http::response('boom', 500),
+            '*generativelanguage.googleapis.com*' => Http::response('not found', 404),
+            '*api.anthropic.com*' => Http::response('unauthorized', 401),
         ]);
 
         $this->artisan('story:doctor')
@@ -213,11 +223,134 @@ final class DoctorCommandTest extends TestCase
             ->doesntExpectOutputToContain('token-secretisimo');
     }
 
+    public function test_model_keys_show_only_the_last_four_characters(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $this->artisan('story:doctor')
+            ->assertSuccessful()
+            ->expectsOutputToContain('termina en ueba')
+            ->expectsOutputToContain('termina en aldo')
+            ->doesntExpectOutputToContain('clave-de-prueba')
+            ->doesntExpectOutputToContain('clave-de-respaldo');
+    }
+
+    public function test_a_http_401_or_404_counts_as_connectivity(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $checks = $this->checksByName();
+
+        $this->assertTrue($checks['salida a Gemini']['ok']);
+        $this->assertSame('green', $checks['salida a Gemini']['status']);
+        $this->assertStringContainsString('HTTP 404', $checks['salida a Gemini']['detail']);
+        $this->assertTrue($checks['salida a Anthropic']['ok']);
+        $this->assertStringContainsString('HTTP 401', $checks['salida a Anthropic']['detail']);
+    }
+
+    public function test_a_connection_exception_is_a_blocking_network_failure(): void
+    {
+        $this->writeWhisperModel();
+
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), '127.0.0.1:8020/health')) {
+                return Http::response(['status' => 'ok', 'model_loaded' => true], 200);
+            }
+
+            throw new ConnectionException(
+                'cURL error 6: Could not resolve host: generativelanguage.googleapis.com',
+            );
+        });
+
+        $gemini = $this->checksByName()['salida a Gemini'];
+
+        $this->assertFalse($gemini['ok']);
+        $this->assertTrue($gemini['blocking']);
+        $this->assertSame('red', $gemini['status']);
+        $this->assertStringContainsString('Could not resolve host', $gemini['detail']);
+        $this->assertStringContainsString('Sin DNS', $gemini['detail']);
+    }
+
+    public function test_a_stale_queue_job_is_an_amber_warning_with_the_worker_command(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+        $this->app->make('config')->set('queue.default', 'database');
+
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => '{}',
+            'attempts' => 0,
+            'reserved_at' => null,
+            'available_at' => now()->getTimestamp() - 20,
+            'created_at' => now()->getTimestamp() - 20,
+        ]);
+
+        $cola = $this->checksByName()['cola'];
+
+        $this->assertFalse($cola['ok']);
+        $this->assertSame('amber', $cola['status']);
+        $this->assertStringContainsString('QUEUE_CONNECTION=database', $cola['detail']);
+        $this->assertSame('php artisan queue:work --tries=1', $cola['fix']);
+    }
+
+    public function test_a_cached_config_file_is_an_amber_warning(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $path = $this->workDirectory.'/cached-config.php';
+        (new Filesystem)->put($path, '<?php return [];');
+        $this->app->make('config')->set('stories.doctor.config_cache_path', $path);
+
+        $cache = $this->checksByName()['config cacheada'];
+
+        $this->assertFalse($cache['ok']);
+        $this->assertSame('amber', $cache['status']);
+        $this->assertSame('php artisan config:clear && php artisan cache:clear', $cache['fix']);
+    }
+
+    public function test_fix_hints_prints_the_command_for_each_failure(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $path = $this->workDirectory.'/cached-config.php';
+        (new Filesystem)->put($path, '<?php return [];');
+        $this->app->make('config')->set('stories.doctor.config_cache_path', $path);
+
+        $this->artisan('story:doctor', ['--fix-hints' => true])
+            ->assertSuccessful()
+            ->expectsOutputToContain('php artisan config:clear && php artisan cache:clear');
+    }
+
+    public function test_the_stories_table_is_reported_as_queryable(): void
+    {
+        $this->writeWhisperModel();
+        $this->fakeHealthySidecar();
+
+        $this->artisan('story:doctor')
+            ->assertSuccessful()
+            ->expectsOutputToContain('Tabla stories consultable');
+    }
+
     private function writeWhisperModel(): void
     {
         $path = $this->workDirectory.'/whisper/ggml-base.en.bin';
         (new Filesystem)->ensureDirectoryExists(dirname($path));
         (new Filesystem)->put($path, str_repeat('m', 2048));
+    }
+
+    /**
+     * @return array<string, array{name: string, ok: bool, blocking: bool, status: string, detail: string, fix: string}>
+     */
+    private function checksByName(): array
+    {
+        $checks = $this->app->make(EnvironmentDoctor::class)->checks();
+
+        return array_column($checks, null, 'name');
     }
 
     private function fakeHealthySidecar(): void
@@ -227,6 +360,8 @@ final class DoctorCommandTest extends TestCase
                 'status' => 'ok',
                 'model_loaded' => true,
             ], 200),
+            '*generativelanguage.googleapis.com*' => Http::response('not found', 404),
+            '*api.anthropic.com*' => Http::response('unauthorized', 401),
         ]);
     }
 }

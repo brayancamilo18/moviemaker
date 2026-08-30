@@ -10,9 +10,10 @@ use Illuminate\Console\Command;
 final class DoctorCommand extends Command
 {
     protected $signature = 'story:doctor
-        {--warn-only : Informa y sale con éxito aunque haya fallos bloqueantes}';
+        {--warn-only : Informa y sale con éxito aunque haya fallos bloqueantes}
+        {--fix-hints : Imprime el comando que resuelve cada fallo}';
 
-    protected $description = 'Comprueba binarios, modelos, credenciales y librería de audio del pipeline';
+    protected $description = 'Comprueba binarios, modelos, credenciales, cola y salida a internet del pipeline';
 
     public function __construct(
         private EnvironmentDoctor $doctor,
@@ -27,9 +28,9 @@ final class DoctorCommand extends Command
         $this->table(
             ['Comprobación', 'Estado', 'Detalle'],
             array_map(
-                static fn (array $check): array => [
+                fn (array $check): array => [
                     $check['name'],
-                    $check['ok'] ? 'OK' : 'FALLO',
+                    $this->statusLabel($check['status']),
                     $check['detail'],
                 ],
                 $checks,
@@ -37,14 +38,23 @@ final class DoctorCommand extends Command
         );
 
         $blocking = $this->doctor->hasBlockingFailure($checks);
-        $failed = $this->listFailures($checks);
+        $failed = $this->failedChecks($checks);
 
         if ($failed !== []) {
             $this->newLine();
             $this->line('Qué hay que arreglar:');
 
-            foreach ($failed as $line) {
-                $this->line('  '.$line);
+            foreach ($failed as $check) {
+                $this->line(sprintf(
+                    '  [%s] %s: %s',
+                    $check['blocking'] ? 'bloqueante' : 'aviso',
+                    $check['name'],
+                    $check['detail'],
+                ));
+
+                if ((bool) $this->option('fix-hints') && $check['fix'] !== '') {
+                    $this->line('    → '.$check['fix']);
+                }
             }
         }
 
@@ -75,26 +85,23 @@ final class DoctorCommand extends Command
     }
 
     /**
-     * @param  list<array{name: string, ok: bool, blocking: bool, detail: string}>  $checks
-     * @return list<string>
+     * @param  list<array{name: string, ok: bool, blocking: bool, status: string, detail: string, fix: string}>  $checks
+     * @return list<array{name: string, ok: bool, blocking: bool, status: string, detail: string, fix: string}>
      */
-    private function listFailures(array $checks): array
+    private function failedChecks(array $checks): array
     {
-        $lines = [];
+        return array_values(array_filter(
+            $checks,
+            static fn (array $check): bool => ! $check['ok'],
+        ));
+    }
 
-        foreach ($checks as $check) {
-            if ($check['ok']) {
-                continue;
-            }
-
-            $lines[] = sprintf(
-                '[%s] %s: %s',
-                $check['blocking'] ? 'bloqueante' : 'aviso',
-                $check['name'],
-                $check['detail'],
-            );
-        }
-
-        return $lines;
+    private function statusLabel(string $status): string
+    {
+        return match ($status) {
+            'green' => '<fg=green>OK</>',
+            'amber' => '<fg=yellow>AVISO</>',
+            default => '<fg=red>FALLO</>',
+        };
     }
 }
