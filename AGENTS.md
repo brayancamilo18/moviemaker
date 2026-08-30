@@ -3,7 +3,8 @@
 App Laravel que genera vídeos de historias de terror para YouTube. El pipeline está construido de
 punta a punta: del guion al MP4 con subtítulos.
 
-**Sin base de datos, sin colas, sin UI.** Todo se ejecuta con comandos artisan. Los artefactos de
+Hay SQLite y cola `database`; la UI aún no. Los comandos artisan siguen pudiendo ejecutar cada
+etapa a mano. El panel encola el mismo pipeline vía `PipelineDispatcher`. Los artefactos de
 cada historia viven en `storage/app/stories/{slug}/`; el guion se escribe plano en
 `storage/app/stories/{slug}.json`, donde el slug es `{YYYY-MM-DD}-{titulo-slugificado}`.
 
@@ -139,6 +140,24 @@ Notas de comportamiento que no se ven en la firma:
   `story:contactsheet`) todavía describen su argumento como «el JSON del guion generado en la
   Fase 1»: es nomenclatura muerta de cuando el repo se organizaba por fases. Se refieren
   simplemente al JSON que escribe `story:generate`.
+
+## Cola
+
+El pipeline del panel no se lanza con los comandos artisan: `PipelineDispatcher` encola
+`RunPipelineStep` (script → narration → images → sound → render). `sound` resuelve
+`sounds.json` y mezcla. Cada job, si termina bien, llama a `advance()` y encola el siguiente
+hasta `renderizada`. `runFrom($story, $step)` reencola desde un paso concreto, p. ej. tras
+`fallida`.
+
+`QUEUE_CONNECTION=database`. Hace falta un worker en marcha:
+
+```
+php artisan queue:work
+```
+
+Sin él, los jobs se quedan en la tabla `jobs` y la historia no avanza. Un job no se reintenta
+(`$tries = 1`, `$timeout = 3600`): si falla, el estado pasa a `fallida` y la persona decide.
+El progreso vive en caché bajo `pipeline:{id}` (TTL una hora); el panel lo sondea.
 
 ## timings.json (entrada del generador de imágenes)
 

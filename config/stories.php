@@ -65,6 +65,11 @@ return [
         'enabled' => true,
     ],
 
+    'pipeline' => [
+        'progress_ttl' => 3600,
+        'failed_message_max' => 2000,
+    ],
+
     'tts' => [
         'base_url' => env('TTS_BASE_URL', 'http://127.0.0.1:8020'),
         'voice' => env('TTS_VOICE', 'af_heart'),
