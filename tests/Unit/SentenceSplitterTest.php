@@ -144,9 +144,113 @@ final class SentenceSplitterTest extends TestCase
         $this->assertSame('The well was open.', $sentences[0]->forTts());
     }
 
+    public function test_an_enabled_outro_appends_the_configured_scene(): void
+    {
+        config(['stories.story.outro.enabled' => true]);
+
+        $story = $this->twoSceneStory();
+        $base = $story->scenesForNarration();
+        $scenes = $story->scenesForNarrationWithOutro(
+            trim((string) config('stories.story.outro.text')),
+            (int) config('stories.story.outro.scene_order'),
+        );
+
+        $this->assertCount(count($base) + 1, $scenes);
+        $outro = $scenes[array_key_last($scenes)];
+        $this->assertSame((int) config('stories.story.outro.scene_order'), $outro['order']);
+        $this->assertSame(trim((string) config('stories.story.outro.text')), $outro['text']);
+    }
+
+    public function test_a_disabled_outro_leaves_the_scene_count_unchanged(): void
+    {
+        $this->assertFalse((bool) config('stories.story.outro.enabled'));
+
+        $story = $this->twoSceneStory();
+        $scenes = $story->scenesForNarration();
+
+        $this->assertCount(count($story->scenes), $scenes);
+        $this->assertSame([1, 2], array_column($scenes, 'order'));
+        $this->assertSame([], array_values(array_filter(
+            $this->splitter()->splitScenes($scenes),
+            static fn (NarrationSentence $sentence): bool => $sentence->isOutro,
+        )));
+    }
+
+    public function test_only_outro_sentences_are_flagged_as_outro(): void
+    {
+        config(['stories.story.outro.enabled' => true]);
+        $splitter = $this->splitter();
+        $outroOrder = (int) config('stories.story.outro.scene_order');
+        $sentences = $splitter->splitScenes($this->narrationScenes($this->twoSceneStory()));
+
+        $this->assertNotEmpty(array_filter(
+            $sentences,
+            static fn (NarrationSentence $sentence): bool => $sentence->isOutro,
+        ));
+
+        foreach ($sentences as $sentence) {
+            $this->assertSame($sentence->sceneOrder === $outroOrder, $sentence->isOutro);
+        }
+    }
+
+    public function test_the_pause_before_the_outro_is_the_lead_pause_not_the_scene_gap(): void
+    {
+        config(['stories.story.outro.enabled' => true]);
+        $splitter = $this->splitter();
+        $lead = (float) config('stories.story.outro.lead_pause');
+        $betweenScenes = (float) config('stories.tts.pauses.between_scenes');
+        $outroOrder = (int) config('stories.story.outro.scene_order');
+        $sentences = $splitter->splitScenes($this->narrationScenes($this->twoSceneStory()));
+
+        $this->assertSame(3.0, $lead);
+        $this->assertSame(1.8, $betweenScenes);
+
+        $beforeOutro = null;
+
+        foreach ($sentences as $sentence) {
+            if ($sentence->sceneOrder === $outroOrder) {
+                break;
+            }
+
+            $beforeOutro = $sentence;
+        }
+
+        $this->assertInstanceOf(NarrationSentence::class, $beforeOutro);
+        $this->assertFalse($beforeOutro->isOutro);
+        $this->assertSame($lead, $beforeOutro->pauseAfter);
+        $this->assertNotEquals($betweenScenes, $beforeOutro->pauseAfter);
+    }
+
     private function splitter(): SentenceSplitter
     {
         return $this->app->make(SentenceSplitter::class);
+    }
+
+    private function twoSceneStory(): Story
+    {
+        return Story::fromArray([
+            'title' => 'Outro splitter fixture',
+            'hook' => 'The spring went bad.',
+            'description' => 'A fixture for the spoken channel outro.',
+            'tags' => ['test'],
+            'thumbnailPrompt' => 'A dry spring',
+            'scenes' => [
+                ['order' => 1, 'narration' => 'The door closed. I kept walking.', 'imagePrompt' => 'x', 'visualSummary' => 'x'],
+                ['order' => 2, 'narration' => 'Then the whistle came closer.', 'imagePrompt' => 'x', 'visualSummary' => 'x'],
+            ],
+            'pronunciations' => [],
+        ]);
+    }
+
+    /**
+     * @return list<array{order: int, text: string}>
+     */
+    private function narrationScenes(Story $story): array
+    {
+        return $story->scenesForNarrationWithOutro(
+            trim((string) config('stories.story.outro.text')),
+            (int) config('stories.story.outro.scene_order'),
+        );
     }
 
     /**
