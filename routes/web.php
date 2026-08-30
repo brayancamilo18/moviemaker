@@ -14,6 +14,10 @@ Route::get('/queue', fn () => Inertia::render('Queue'))->name('queue');
 Route::get('/stories/create', [StoryController::class, 'create'])->name('stories.create');
 Route::post('/stories', [StoryController::class, 'store'])->name('stories.store');
 Route::get('/stories/{story:id}/pipeline', [StoryController::class, 'pipeline'])->name('pipeline.show');
+Route::get('/stories/{story:id}/progress', [StoryController::class, 'progress'])->name('stories.progress');
+Route::post('/stories/{story:id}/retry', [StoryController::class, 'retry'])->name('stories.retry');
+Route::post('/stories/{story:id}/continue', [StoryController::class, 'continuePipeline'])->name('stories.continue');
+Route::post('/stories/{story:id}/discard', [StoryController::class, 'discard'])->name('stories.discard');
 Route::post('/llm/health', function (ProviderHealth $health) {
     return response()->json($health->check(live: true));
 })->name('llm.health');

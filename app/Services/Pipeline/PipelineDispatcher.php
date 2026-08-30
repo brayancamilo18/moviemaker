@@ -17,7 +17,10 @@ final class PipelineDispatcher
      */
     public const STEPS = ['script', 'narration', 'images', 'sound', 'render'];
 
-    public function __construct(private Dispatcher $bus) {}
+    public function __construct(
+        private Dispatcher $bus,
+        private PipelineProgress $progress,
+    ) {}
 
     public function advance(Story $story, bool $chain = true): void
     {
@@ -34,7 +37,7 @@ final class PipelineDispatcher
             return;
         }
 
-        $this->bus->dispatch(new RunPipelineStep($story->id, $step, $chain));
+        $this->queue($story, $step, $chain);
     }
 
     public function runFrom(Story $story, string $step, bool $chain = true): void
@@ -43,6 +46,12 @@ final class PipelineDispatcher
             throw new InvalidArgumentException("Paso de pipeline desconocido: {$step}.");
         }
 
+        $this->queue($story, $step, $chain);
+    }
+
+    private function queue(Story $story, string $step, bool $chain): void
+    {
+        $this->progress->put($story->id, $step, $step, 0, 1);
         $this->bus->dispatch(new RunPipelineStep($story->id, $step, $chain));
     }
 }

@@ -12,6 +12,7 @@ use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Story\StoryPromptBuilder;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -94,7 +95,52 @@ final class StoryController extends Controller
         return $this->inertia->render('Pipeline', [
             'story' => $story,
             'progress' => $this->progress->get($story->id),
+            'snapshot' => $this->snapshot($story),
         ]);
+    }
+
+    public function progress(Story $story): JsonResponse
+    {
+        return response()->json($this->snapshot($story->fresh() ?? $story));
+    }
+
+    public function retry(Story $story): RedirectResponse
+    {
+        if ($story->status !== StoryStatus::Failed) {
+            abort(422, 'La historia no está fallida.');
+        }
+
+        $step = (string) $story->failed_step;
+
+        if (! in_array($step, PipelineDispatcher::STEPS, true)) {
+            abort(422, 'No hay un paso fallido que reintentar.');
+        }
+
+        $this->dispatcher->runFrom($story, $step, chain: false);
+
+        return redirect()->route('pipeline.show', $story);
+    }
+
+    public function continuePipeline(Story $story): RedirectResponse
+    {
+        if ($story->status !== StoryStatus::ScriptReady) {
+            abort(422, 'El pipeline solo se continúa con el guion listo.');
+        }
+
+        $this->dispatcher->advance($story, chain: true);
+
+        return redirect()->route('pipeline.show', $story);
+    }
+
+    public function discard(Story $story): RedirectResponse
+    {
+        if (! $story->status->canTransitionTo(StoryStatus::Discarded)) {
+            abort(422, 'Esta historia no se puede descartar.');
+        }
+
+        $story->transitionTo(StoryStatus::Discarded);
+
+        return redirect()->route('queue');
     }
 
     /**
@@ -146,5 +192,27 @@ final class StoryController extends Controller
         }
 
         throw new InvalidArgumentException("No hay una ficha de folklore con el slug '{$slug}'.");
+    }
+
+    /**
+     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool}
+     */
+    private function snapshot(Story $story): array
+    {
+        $status = $story->status;
+
+        return [
+            'status' => $status->value,
+            'status_label' => $status->label(),
+            'status_color' => $status->color(),
+            'progress' => $this->progress->get($story->id),
+            'failed_step' => $story->failed_step,
+            'failed_message' => $story->failed_message,
+            'title' => $story->title,
+            'verdict' => $story->verdict?->value,
+            'score' => $story->score,
+            'scene_count' => $story->scene_count,
+            'used_fallback' => (bool) $story->used_fallback,
+        ];
     }
 }

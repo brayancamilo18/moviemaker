@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Enums\ReviewVerdict;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
 use App\Jobs\RunPipelineStep;
@@ -158,9 +159,87 @@ final class StoryControllerTest extends TestCase
                 ->where('story.id', $story->id)
                 ->where('progress.step', 'script')
                 ->where('progress.label', 'guion')
-                ->where('progress.done', 0)
-                ->where('progress.total', 1)
+                ->where('snapshot.status', StoryStatus::Draft->value)
+                ->where('snapshot.progress.step', 'script')
+                ->where('snapshot.progress.label', 'guion')
             );
+    }
+
+    public function test_progress_json_includes_status_label_color_and_metrics(): void
+    {
+        $story = Story::factory()->create([
+            'status' => StoryStatus::ScriptReady,
+            'title' => 'The mill chain',
+            'verdict' => ReviewVerdict::Publish,
+            'score' => 8.4,
+            'scene_count' => 12,
+            'used_fallback' => true,
+        ]);
+
+        $this->get(route('stories.progress', $story))
+            ->assertOk()
+            ->assertJsonPath('status', StoryStatus::ScriptReady->value)
+            ->assertJsonPath('status_label', StoryStatus::ScriptReady->label())
+            ->assertJsonPath('status_color', StoryStatus::ScriptReady->color())
+            ->assertJsonPath('progress', null)
+            ->assertJsonPath('title', 'The mill chain')
+            ->assertJsonPath('verdict', 'publish')
+            ->assertJsonPath('scene_count', 12)
+            ->assertJsonPath('used_fallback', true)
+            ->assertJsonPath('failed_step', null);
+    }
+
+    public function test_retry_queues_the_failed_step_without_chaining(): void
+    {
+        Bus::fake();
+
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Failed,
+            'failed_step' => 'images',
+            'failed_message' => 'Pollinations no respondió.',
+        ]);
+
+        $this->post(route('stories.retry', $story))
+            ->assertRedirect(route('pipeline.show', $story));
+
+        Bus::assertDispatched(
+            RunPipelineStep::class,
+            static fn (RunPipelineStep $job): bool => $job->storyId === $story->id
+                && $job->step === 'images'
+                && $job->chain === false,
+        );
+
+        $this->assertSame(
+            'images',
+            $this->app->make(PipelineProgress::class)->get($story->id)['step'] ?? null,
+        );
+    }
+
+    public function test_continue_advances_from_script_ready_with_chaining(): void
+    {
+        Bus::fake();
+
+        $story = Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+
+        $this->post(route('stories.continue', $story))
+            ->assertRedirect(route('pipeline.show', $story));
+
+        Bus::assertDispatched(
+            RunPipelineStep::class,
+            static fn (RunPipelineStep $job): bool => $job->storyId === $story->id
+                && $job->step === 'narration'
+                && $job->chain === true,
+        );
+    }
+
+    public function test_discard_from_failed_returns_to_the_queue(): void
+    {
+        $story = Story::factory()->create(['status' => StoryStatus::Failed]);
+
+        $this->post(route('stories.discard', $story))
+            ->assertRedirect(route('queue'));
+
+        $this->assertSame(StoryStatus::Discarded, $story->fresh()?->status);
     }
 
     public function test_the_listing_pipeline_route_still_renders(): void
