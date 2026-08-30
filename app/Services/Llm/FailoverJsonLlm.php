@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Llm;
 
 use App\Contracts\JsonLlm;
+use App\Exceptions\LlmTruncatedException;
 use App\Exceptions\LlmUnavailableException;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -24,6 +25,7 @@ final class FailoverJsonLlm implements JsonLlm
         private LoggerInterface $logger,
         private ProviderHealthStore $store,
         private ProviderHealth $health,
+        private int $truncationRetryCap = 64000,
     ) {}
 
     /**
@@ -36,12 +38,21 @@ final class FailoverJsonLlm implements JsonLlm
         array $schema,
         LlmTask $task = LlmTask::Script,
         float $temperature = 1.0,
+        ?int $maxTokensOverride = null,
     ): array {
         if ($this->reason === null && $this->primary->isAvailable()) {
             $started = hrtime(true);
 
             try {
-                $result = $this->primary->generateJson($systemInstruction, $userPrompt, $schema, $task, $temperature);
+                $result = $this->generateOn(
+                    $this->primary,
+                    $systemInstruction,
+                    $userPrompt,
+                    $schema,
+                    $task,
+                    $temperature,
+                    $maxTokensOverride,
+                );
                 $this->record($this->primary, 'gemini', true, $this->elapsedMs($started), null);
 
                 return $result;
@@ -58,7 +69,15 @@ final class FailoverJsonLlm implements JsonLlm
         $started = hrtime(true);
 
         try {
-            $result = $this->fallback->generateJson($systemInstruction, $userPrompt, $schema, $task, $temperature);
+            $result = $this->generateOn(
+                $this->fallback,
+                $systemInstruction,
+                $userPrompt,
+                $schema,
+                $task,
+                $temperature,
+                $maxTokensOverride,
+            );
             $this->record($this->fallback, 'anthropic', true, $this->elapsedMs($started), null);
 
             return $result;
@@ -91,6 +110,48 @@ final class FailoverJsonLlm implements JsonLlm
             rtrim($this->reason, '.').'.',
             $this->fallback->name(),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $schema
+     * @return array<string, mixed>
+     */
+    private function generateOn(
+        JsonLlm $client,
+        string $systemInstruction,
+        string $userPrompt,
+        array $schema,
+        LlmTask $task,
+        float $temperature,
+        ?int $maxTokensOverride,
+    ): array {
+        try {
+            return $client->generateJson(
+                $systemInstruction,
+                $userPrompt,
+                $schema,
+                $task,
+                $temperature,
+                $maxTokensOverride,
+            );
+        } catch (LlmTruncatedException $exception) {
+            $retryBudget = min($exception->budget * 2, $this->truncationRetryCap);
+
+            $this->logger->warning('La generación se truncó; se reintenta con más presupuesto.', [
+                'task' => $task->value,
+                'original' => $exception->budget,
+                'retry' => $retryBudget,
+            ]);
+
+            return $client->generateJson(
+                $systemInstruction,
+                $userPrompt,
+                $schema,
+                $task,
+                $temperature,
+                $retryBudget,
+            );
+        }
     }
 
     private function fallBack(string $reason): void

@@ -6,6 +6,7 @@ namespace App\Services\Llm;
 
 use App\Contracts\JsonLlm;
 use App\Exceptions\LlmGenerationException;
+use App\Exceptions\LlmTruncatedException;
 use App\Exceptions\LlmUnavailableException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
@@ -47,10 +48,13 @@ final class AnthropicClient implements JsonLlm
         array $schema,
         LlmTask $task = LlmTask::Script,
         float $temperature = 1.0,
+        ?int $maxTokensOverride = null,
     ): array {
+        $budget = $this->tokenBudget($task, $maxTokensOverride);
+
         $response = $this->send([
             'model' => $this->model($task),
-            'max_tokens' => $this->tokenBudget($task),
+            'max_tokens' => $budget,
             'temperature' => min($temperature, self::MAX_TEMPERATURE),
             'system' => $systemInstruction,
             'messages' => [
@@ -72,12 +76,25 @@ final class AnthropicClient implements JsonLlm
 
         $stopReason = $payload['stop_reason'] ?? null;
 
-        if (in_array($stopReason, ['max_tokens', 'refusal'], true)) {
+        if ($stopReason === 'max_tokens') {
+            throw new LlmTruncatedException(
+                sprintf(
+                    'La generación de Anthropic terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
+                    $task->value,
+                    $stopReason,
+                    $budget,
+                ),
+                $task,
+                $budget,
+            );
+        }
+
+        if ($stopReason === 'refusal') {
             throw new LlmGenerationException(sprintf(
                 'La generación de Anthropic terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
                 $task->value,
                 $stopReason,
-                $this->tokenBudget($task),
+                $budget,
             ));
         }
 
@@ -86,7 +103,7 @@ final class AnthropicClient implements JsonLlm
             'task' => $task->value,
             'input_tokens' => $usage['input_tokens'] ?? null,
             'output_tokens' => $usage['output_tokens'] ?? null,
-            'max_tokens' => $this->tokenBudget($task),
+            'max_tokens' => $budget,
         ]);
 
         $text = $this->text($payload);
@@ -196,8 +213,12 @@ final class AnthropicClient implements JsonLlm
         return $this->models[$task->value] ?? $this->models['default'];
     }
 
-    private function tokenBudget(LlmTask $task): int
+    private function tokenBudget(LlmTask $task, ?int $maxTokensOverride = null): int
     {
+        if ($maxTokensOverride !== null) {
+            return $maxTokensOverride;
+        }
+
         return $this->maxTokens[$task->value] ?? $this->maxTokens['default'];
     }
 

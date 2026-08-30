@@ -59,6 +59,7 @@ class AppServiceProvider extends ServiceProvider
                 logger: $app->make(LoggerInterface::class),
                 store: $app->make(ProviderHealthStore::class),
                 health: $app->make(ProviderHealth::class),
+                truncationRetryCap: (int) $config->get('stories.llm.truncation_retry_cap'),
             );
         });
 

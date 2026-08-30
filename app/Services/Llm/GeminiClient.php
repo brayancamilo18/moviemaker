@@ -6,6 +6,7 @@ namespace App\Services\Llm;
 
 use App\Contracts\JsonLlm;
 use App\Exceptions\LlmGenerationException;
+use App\Exceptions\LlmTruncatedException;
 use App\Exceptions\LlmUnavailableException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
@@ -42,7 +43,10 @@ final class GeminiClient implements JsonLlm
         array $schema,
         LlmTask $task = LlmTask::Script,
         float $temperature = 1.0,
+        ?int $maxTokensOverride = null,
     ): array {
+        $budget = $this->tokenBudget($task, $maxTokensOverride);
+
         $response = $this->send([
             'systemInstruction' => [
                 'parts' => [
@@ -59,7 +63,7 @@ final class GeminiClient implements JsonLlm
             ],
             'generationConfig' => [
                 'temperature' => $temperature,
-                'maxOutputTokens' => $this->tokenBudget($task),
+                'maxOutputTokens' => $budget,
                 'responseMimeType' => 'application/json',
                 'responseSchema' => $schema,
             ],
@@ -70,12 +74,25 @@ final class GeminiClient implements JsonLlm
 
         $finishReason = $payload['candidates'][0]['finishReason'] ?? null;
 
-        if (in_array($finishReason, ['MAX_TOKENS', 'SAFETY'], true)) {
+        if ($finishReason === 'MAX_TOKENS') {
+            throw new LlmTruncatedException(
+                sprintf(
+                    'La generación de Gemini terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
+                    $task->value,
+                    $finishReason,
+                    $budget,
+                ),
+                $task,
+                $budget,
+            );
+        }
+
+        if ($finishReason === 'SAFETY') {
             throw new LlmGenerationException(sprintf(
                 'La generación de Gemini terminó de forma incompleta en la tarea %s. Motivo: %s. Tope usado: %d tokens de salida.',
                 $task->value,
                 $finishReason,
-                $this->tokenBudget($task),
+                $budget,
             ));
         }
 
@@ -84,7 +101,7 @@ final class GeminiClient implements JsonLlm
             'task' => $task->value,
             'input_tokens' => $usage['promptTokenCount'] ?? null,
             'output_tokens' => $usage['candidatesTokenCount'] ?? null,
-            'max_tokens' => $this->tokenBudget($task),
+            'max_tokens' => $budget,
         ]);
 
         $text = $payload['candidates'][0]['content']['parts'][0]['text'] ?? null;
@@ -164,8 +181,12 @@ final class GeminiClient implements JsonLlm
         return $this->models[$task->value] ?? $this->models['default'];
     }
 
-    private function tokenBudget(LlmTask $task): int
+    private function tokenBudget(LlmTask $task, ?int $maxTokensOverride = null): int
     {
+        if ($maxTokensOverride !== null) {
+            return $maxTokensOverride;
+        }
+
         return $this->maxTokens[$task->value] ?? $this->maxTokens['default'];
     }
 

@@ -426,6 +426,7 @@ final class ShotDirectorTest extends TestCase
                 array $schema,
                 LlmTask $task = LlmTask::Script,
                 float $temperature = 1.0,
+                ?int $maxTokensOverride = null,
             ): array {
                 $this->systemInstruction = $systemInstruction;
                 $this->userPrompts[] = $userPrompt;

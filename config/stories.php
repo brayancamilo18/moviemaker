@@ -12,6 +12,9 @@ return [
         // Respaldo cuando el principal se cae. AI_FEATURES_ENABLED lo apaga sin borrar la clave.
         'fallback' => (bool) env('AI_FEATURES_ENABLED', true) ? 'anthropic' : '',
 
+        // Techo del reintento cuando la salida se corta por presupuesto, no por indisponibilidad.
+        'truncation_retry_cap' => 64000,
+
         'gemini' => [
             'api_key' => env('GEMINI_API_KEY'),
             'base_url' => 'https://generativelanguage.googleapis.com/v1beta',

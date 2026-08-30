@@ -272,6 +272,7 @@ final class PipelineJobTest extends TestCase
                 array $schema,
                 LlmTask $task = LlmTask::Script,
                 float $temperature = 1.0,
+                ?int $maxTokensOverride = null,
             ): array {
                 return $this->story;
             }

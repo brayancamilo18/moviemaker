@@ -21,6 +21,7 @@ interface JsonLlm
         array $schema,
         LlmTask $task = LlmTask::Script,
         float $temperature = 1.0,
+        ?int $maxTokensOverride = null,
     ): array;
 
     public function isAvailable(): bool;

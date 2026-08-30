@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Contracts\JsonLlm;
 use App\Exceptions\LlmGenerationException;
+use App\Exceptions\LlmTruncatedException;
 use App\Exceptions\LlmUnavailableException;
 use App\Services\Llm\FailoverJsonLlm;
 use App\Services\Llm\LlmTask;
@@ -186,6 +187,57 @@ final class LlmFailoverTest extends TestCase
         $this->assertSame(['reply' => 'ok'], $llm->generateJson('s', 'u', []));
     }
 
+    public function test_a_truncated_response_retries_the_same_provider_with_double_budget(): void
+    {
+        $store = $this->app->make(ProviderHealthStore::class);
+        $primary = $this->truncatingLlm('gemini-3.6-flash', succeedOnRetry: true);
+        $fallback = $this->fakeLlm('claude-haiku-4-5', true, ['reply' => 'no']);
+
+        $llm = new FailoverJsonLlm(
+            primary: $primary,
+            fallback: $fallback,
+            logger: $this->app->make(LoggerInterface::class),
+            store: $store,
+            health: $this->app->make(ProviderHealth::class),
+        );
+
+        $this->assertSame(['reply' => 'ok'], $llm->generateJson('s', 'u', [], LlmTask::Review));
+        $this->assertSame(2, $primary->calls);
+        $this->assertSame([null, 16000], $primary->overrides);
+        $this->assertNull($llm->fallbackNotice());
+
+        $stored = $store->get();
+        $this->assertNotNull($stored);
+        $this->assertTrue($stored['report']['gemini']['reachable']);
+        $this->assertArrayNotHasKey('anthropic', $stored['report']);
+    }
+
+    public function test_a_second_truncation_does_not_switch_provider(): void
+    {
+        $store = $this->app->make(ProviderHealthStore::class);
+        $primary = $this->truncatingLlm('gemini-3.6-flash', succeedOnRetry: false);
+        $fallback = $this->fakeLlm('claude-haiku-4-5', true, ['reply' => 'no']);
+
+        $llm = new FailoverJsonLlm(
+            primary: $primary,
+            fallback: $fallback,
+            logger: $this->app->make(LoggerInterface::class),
+            store: $store,
+            health: $this->app->make(ProviderHealth::class),
+        );
+
+        try {
+            $llm->generateJson('s', 'u', [], LlmTask::Script);
+            $this->fail('Se esperaba LlmTruncatedException.');
+        } catch (LlmTruncatedException $exception) {
+            $this->assertSame(LlmTask::Script, $exception->task);
+        }
+
+        $this->assertSame(2, $primary->calls);
+        $this->assertNull($llm->fallbackNotice());
+        $this->assertNull($store->get());
+    }
+
     public function test_without_fallback_the_saturation_is_still_an_error(): void
     {
         $this->app->make('config')->set('stories.llm.fallback', '');
@@ -196,6 +248,56 @@ final class LlmFailoverTest extends TestCase
         $this->expectExceptionMessage('saturado');
 
         $this->app->make(StoryGenerator::class)->generate();
+    }
+
+    private function truncatingLlm(string $name, bool $succeedOnRetry): JsonLlm
+    {
+        return new class($name, $succeedOnRetry) implements JsonLlm
+        {
+            public int $calls = 0;
+
+            /** @var list<?int> */
+            public array $overrides = [];
+
+            public function __construct(
+                private string $modelName,
+                private bool $succeedOnRetry,
+            ) {}
+
+            public function generateJson(
+                string $systemInstruction,
+                string $userPrompt,
+                array $schema,
+                LlmTask $task = LlmTask::Script,
+                float $temperature = 1.0,
+                ?int $maxTokensOverride = null,
+            ): array {
+                $this->calls++;
+                $this->overrides[] = $maxTokensOverride;
+                $budget = $maxTokensOverride ?? 8000;
+
+                if ($this->calls === 1 || ! $this->succeedOnRetry) {
+                    throw new LlmTruncatedException('corto', $task, $budget);
+                }
+
+                return ['reply' => 'ok'];
+            }
+
+            public function isAvailable(): bool
+            {
+                return true;
+            }
+
+            public function name(): string
+            {
+                return $this->modelName;
+            }
+
+            public function fallbackNotice(): ?string
+            {
+                return null;
+            }
+        };
     }
 
     /**
@@ -220,6 +322,7 @@ final class LlmFailoverTest extends TestCase
                 array $schema,
                 LlmTask $task = LlmTask::Script,
                 float $temperature = 1.0,
+                ?int $maxTokensOverride = null,
             ): array {
                 if ($this->result instanceof Throwable) {
                     throw $this->result;
