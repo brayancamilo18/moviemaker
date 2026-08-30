@@ -233,6 +233,10 @@ function discard() {
     router.post(`/stories/${props.story.id}/discard`);
 }
 
+function reviewAgain() {
+    router.post(`/stories/${props.story.slug}/review-again`);
+}
+
 onMounted(async () => {
     if (!props.story?.id) {
         return;
@@ -400,6 +404,9 @@ onUnmounted(() => {
                 <h2 class="mt-2 text-[18px] font-extrabold tracking-[-0.02em]">
                     {{ snapshot.title || 'Sin título' }}
                 </h2>
+                <p v-if="snapshot.verdict == null" class="mt-2 text-[12px] text-amber">
+                    El guion se generó, pero la revisión automática falló.
+                </p>
                 <div class="mt-2 flex flex-wrap items-center gap-3 text-[13px]">
                     <span v-if="verdictMeta" class="font-extrabold" :style="{ color: verdictMeta.color }">
                         {{ verdictMeta.label }}
@@ -416,6 +423,14 @@ onUnmounted(() => {
                     >
                         Leer el guion
                     </Link>
+                    <button
+                        v-if="snapshot.verdict == null"
+                        type="button"
+                        class="border border-[#6B4C1C] px-3.5 py-2 text-[12px] font-extrabold text-amber hover:bg-[#22180A]"
+                        @click="reviewAgain"
+                    >
+                        Revisar ahora
+                    </button>
                     <button
                         type="button"
                         class="bg-amber px-3.5 py-2 text-[12px] font-extrabold text-[#151006] hover:bg-amber-hover"

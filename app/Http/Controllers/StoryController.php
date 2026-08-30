@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
+use App\Jobs\ReviewStory;
 use App\Models\Story;
 use App\Services\Llm\AnthropicClient;
 use App\Services\Llm\GeminiClient;
@@ -14,6 +15,7 @@ use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
 use App\Services\Story\StoryPromptBuilder;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -35,6 +37,7 @@ final class StoryController extends Controller
         private readonly PipelineProgress $progress,
         private readonly QueueHealth $queue,
         private readonly Repository $config,
+        private readonly Dispatcher $bus,
     ) {}
 
     public function create(): Response
@@ -171,6 +174,13 @@ final class StoryController extends Controller
         $this->dispatcher->advance($story, chain: true);
 
         return redirect()->route('pipeline.show', $story);
+    }
+
+    public function reviewAgain(Story $story): RedirectResponse
+    {
+        $this->bus->dispatch(new ReviewStory($story->id));
+
+        return back();
     }
 
     public function discard(Story $story): RedirectResponse

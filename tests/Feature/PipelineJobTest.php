@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Contracts\JsonLlm;
+use App\Enums\ReviewVerdict;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
 use App\Exceptions\LlmGenerationException;
+use App\Jobs\ReviewStory;
 use App\Jobs\RunPipelineStep;
 use App\Models\Story;
 use App\Models\StoryEvent;
@@ -206,6 +208,101 @@ final class PipelineJobTest extends TestCase
         $this->assertSame('mi-historia-2', $event->payload['assigned'] ?? null);
     }
 
+    public function test_a_failed_review_keeps_the_script_and_records_a_warning(): void
+    {
+        Bus::fake();
+
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'mode' => StoryMode::Original,
+            'lore_slug' => null,
+        ]);
+        $this->bindScriptLlm(reviewFails: true);
+        $this->app->call([new RunPipelineStep($story->id, 'script', chain: false), 'handle']);
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(StoryStatus::ScriptReady, $fresh->status);
+        $this->assertNull($fresh->verdict);
+        $this->assertNull($fresh->score);
+
+        $path = storage_path('app/'.$this->storiesDir).DIRECTORY_SEPARATOR.$fresh->slug.'.json';
+        $this->assertFileExists($path);
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertArrayNotHasKey('review', $payload);
+
+        $event = $fresh->events()->where('type', 'step_warning')->first();
+
+        $this->assertInstanceOf(StoryEvent::class, $event);
+        $this->assertSame('script', $event->payload['step'] ?? null);
+        $this->assertIsArray($event->payload['messages'] ?? null);
+        $this->assertStringStartsWith('Revisión automática fallida:', $event->payload['messages'][0] ?? '');
+    }
+
+    public function test_review_story_writes_the_review_without_changing_status(): void
+    {
+        $this->storiesDir = 'testing/pipeline-job-'.bin2hex(random_bytes(4));
+        $this->app->make('config')->set('stories.output_path', $this->storiesDir);
+        $this->app->make('config')->set('stories.review.enabled', true);
+
+        $slug = '2026-08-30-reviewed-mill';
+        $directory = storage_path('app/'.$this->storiesDir);
+        $this->app->make(Filesystem::class)->ensureDirectoryExists($directory);
+        $this->app->make(Filesystem::class)->put(
+            $directory.DIRECTORY_SEPARATOR.$slug.'.json',
+            json_encode($this->scriptFixture(), JSON_THROW_ON_ERROR),
+        );
+
+        $story = Story::factory()->create([
+            'slug' => $slug,
+            'status' => StoryStatus::ScriptReady,
+            'verdict' => null,
+            'score' => null,
+        ]);
+
+        Http::preventStrayRequests();
+        $this->app->instance(JsonLlm::class, $this->jsonLlm($this->scriptFixture(), $this->reviewFixture()));
+
+        $this->app->call([new ReviewStory($story->id), 'handle']);
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(StoryStatus::ScriptReady, $fresh->status);
+        $this->assertSame(ReviewVerdict::Publish, $fresh->verdict);
+        $this->assertSame(8.0, $fresh->score);
+
+        /** @var array<string, mixed> $payload */
+        $payload = json_decode(
+            $this->app->make(Filesystem::class)->get($directory.DIRECTORY_SEPARATOR.$slug.'.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $this->assertSame('publish', $payload['review']['verdict'] ?? null);
+        $this->assertSame(8, $payload['review']['score'] ?? null);
+    }
+
+    public function test_review_story_failure_does_not_mark_the_story_failed(): void
+    {
+        $story = Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+        $job = new ReviewStory($story->id);
+
+        $job->failed(new RuntimeException('sin sitio'));
+
+        $fresh = $story->fresh();
+
+        $this->assertInstanceOf(Story::class, $fresh);
+        $this->assertSame(StoryStatus::ScriptReady, $fresh->status);
+
+        $event = $fresh->events()->where('type', 'review_failed')->first();
+
+        $this->assertInstanceOf(StoryEvent::class, $event);
+        $this->assertSame('sin sitio', $event->note);
+    }
+
     public function test_an_existing_slug_is_not_replaced_by_a_returned_slug(): void
     {
         $story = Story::factory()->create(['slug' => 'kept-slug']);
@@ -251,20 +348,41 @@ final class PipelineJobTest extends TestCase
 
     private function bindSuccessfulScriptLlm(): void
     {
+        $this->bindScriptLlm(reviewFails: false);
+    }
+
+    private function bindScriptLlm(bool $reviewFails): void
+    {
         $this->storiesDir = 'testing/pipeline-job-'.bin2hex(random_bytes(4));
 
         $config = $this->app->make('config');
-        $config->set('stories.review.enabled', false);
+        $config->set('stories.review.enabled', $reviewFails);
         $config->set('stories.output_path', $this->storiesDir);
 
         Http::preventStrayRequests();
 
-        $this->app->instance(JsonLlm::class, new class($this->scriptFixture()) implements JsonLlm
+        $this->app->instance(JsonLlm::class, $this->jsonLlm(
+            $this->scriptFixture(),
+            $reviewFails ? new LlmGenerationException('sin sitio') : $this->reviewFixture(),
+        ));
+    }
+
+    /**
+     * @param  array<string, mixed>  $script
+     * @param  array<string, mixed>|Throwable  $review
+     */
+    private function jsonLlm(array $script, array|Throwable $review): JsonLlm
+    {
+        return new class($script, $review) implements JsonLlm
         {
             /**
-             * @param  array<string, mixed>  $story
+             * @param  array<string, mixed>  $script
+             * @param  array<string, mixed>|Throwable  $review
              */
-            public function __construct(private array $story) {}
+            public function __construct(
+                private array $script,
+                private array|Throwable $review,
+            ) {}
 
             public function generateJson(
                 string $systemInstruction,
@@ -274,7 +392,15 @@ final class PipelineJobTest extends TestCase
                 float $temperature = 1.0,
                 ?int $maxTokensOverride = null,
             ): array {
-                return $this->story;
+                if ($task === LlmTask::Review) {
+                    if ($this->review instanceof Throwable) {
+                        throw $this->review;
+                    }
+
+                    return $this->review;
+                }
+
+                return $this->script;
             }
 
             public function isAvailable(): bool
@@ -291,7 +417,22 @@ final class PipelineJobTest extends TestCase
             {
                 return null;
             }
-        });
+        };
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function reviewFixture(): array
+    {
+        return [
+            'nonNativePhrases' => [],
+            'clichedElements' => [],
+            'tensionDips' => [],
+            'ttsRisks' => [],
+            'score' => 8,
+            'verdict' => 'publish',
+        ];
     }
 
     /**

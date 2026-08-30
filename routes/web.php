@@ -22,6 +22,7 @@ Route::get('/stories/{story:id}/progress', [StoryController::class, 'progress'])
 Route::post('/stories/{story:id}/retry', [StoryController::class, 'retry'])->name('stories.retry');
 Route::post('/stories/{story:id}/continue', [StoryController::class, 'continuePipeline'])->name('stories.continue');
 Route::post('/stories/{story:id}/discard', [StoryController::class, 'discard'])->name('stories.discard');
+Route::post('/stories/{story}/review-again', [StoryController::class, 'reviewAgain'])->name('stories.review_again');
 Route::get('/stories/{story}/inspection/script', [StoryInspectionController::class, 'script'])
     ->name('stories.inspection.script');
 Route::get('/stories/{story}/review', [StoryController::class, 'review'])->name('review.show');

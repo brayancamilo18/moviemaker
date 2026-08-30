@@ -8,6 +8,7 @@ use App\Enums\ReviewVerdict;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
 use App\Jobs\CheckProviderHealth;
+use App\Jobs\ReviewStory;
 use App\Jobs\RunPipelineStep;
 use App\Models\Story;
 use App\Models\StoryEvent;
@@ -279,6 +280,22 @@ final class StoryControllerTest extends TestCase
             static fn (RunPipelineStep $job): bool => $job->storyId === $story->id
                 && $job->step === 'narration'
                 && $job->chain === true,
+        );
+    }
+
+    public function test_review_again_queues_the_review_job(): void
+    {
+        Bus::fake();
+
+        $story = Story::factory()->create(['status' => StoryStatus::ScriptReady]);
+
+        $this->from(route('pipeline.show', $story))
+            ->post(route('stories.review_again', $story))
+            ->assertRedirect(route('pipeline.show', $story));
+
+        Bus::assertDispatched(
+            ReviewStory::class,
+            static fn (ReviewStory $job): bool => $job->storyId === $story->id,
         );
     }
 

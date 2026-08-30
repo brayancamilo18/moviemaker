@@ -55,17 +55,28 @@ final class ScriptStep
 
         try {
             $script = $this->generateWithRetries($premise, $mode, $loreSlug, $warnings);
-            $review = $this->reviewStory($script, $skipReview);
-
-            if (! $dryRun) {
-                $slug = $this->writeStory($story, $script, $review);
-            } else {
-                $slug = $story->slug !== ''
-                    ? $story->slug
-                    : date('Y-m-d').'-'.Str::slug($script->title);
-            }
         } catch (Throwable $exception) {
             return ['ok' => false, 'error' => $exception->getMessage(), 'exception' => $exception, 'warnings' => $warnings];
+        }
+
+        if (! $dryRun) {
+            $slug = $this->writeStory($story, $script, null);
+        } else {
+            $slug = $story->slug !== ''
+                ? $story->slug
+                : date('Y-m-d').'-'.Str::slug($script->title);
+        }
+
+        $review = null;
+
+        try {
+            $review = $this->reviewStory($script, $skipReview);
+
+            if (! $dryRun && $review instanceof StoryReview) {
+                $this->writeStory($story, $script, $review, $slug);
+            }
+        } catch (Throwable $exception) {
+            $warnings[] = 'Revisión automática fallida: '.$exception->getMessage();
         }
 
         $this->progress($onProgress, $script->title, 1, 1);
@@ -122,15 +133,17 @@ final class ScriptStep
         return $this->reviewer->review($story);
     }
 
-    private function writeStory(Story $record, StoryScript $story, ?StoryReview $review): string
+    private function writeStory(Story $record, StoryScript $story, ?StoryReview $review, ?string $forcedSlug = null): string
     {
         $this->files->ensureDirectoryExists($this->outputDirectory);
 
         $useRecordSlug = $record->slug !== '' && ! str_starts_with($record->slug, 'draft-');
 
-        $filename = $useRecordSlug
-            ? $record->slug.'.json'
-            : sprintf('%s-%s.json', date('Y-m-d'), Str::slug($story->title));
+        $filename = $forcedSlug !== null && $forcedSlug !== ''
+            ? $forcedSlug.'.json'
+            : ($useRecordSlug
+                ? $record->slug.'.json'
+                : sprintf('%s-%s.json', date('Y-m-d'), Str::slug($story->title)));
 
         $payload = $story->toArray();
 

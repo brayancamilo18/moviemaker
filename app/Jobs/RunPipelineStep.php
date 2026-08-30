@@ -93,6 +93,7 @@ final class RunPipelineStep implements ShouldQueue
         }
 
         $this->applyMetrics($story, $result);
+        $this->recordWarnings($story, $result);
         $this->transitionAfterStep($story);
         $progress->clear($this->storyId);
 
@@ -166,6 +167,38 @@ final class RunPipelineStep implements ShouldQueue
         $mixed = $sound->run($story, $onProgress, ['mix' => true]);
 
         return $mixed + $resolved;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function recordWarnings(Story $story, array $result): void
+    {
+        $warnings = $result['warnings'] ?? [];
+
+        if (! is_array($warnings) || $warnings === []) {
+            return;
+        }
+
+        $messages = [];
+
+        foreach ($warnings as $warning) {
+            if (is_string($warning) && $warning !== '') {
+                $messages[] = $warning;
+            }
+        }
+
+        if ($messages === []) {
+            return;
+        }
+
+        $story->events()->create([
+            'type' => 'step_warning',
+            'payload' => [
+                'step' => $this->step,
+                'messages' => $messages,
+            ],
+        ]);
     }
 
     /**
