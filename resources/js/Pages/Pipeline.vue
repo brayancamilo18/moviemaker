@@ -1,494 +1,181 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { Head, Link, router } from '@inertiajs/vue3';
+import { computed } from 'vue';
+import { Head, router } from '@inertiajs/vue3';
 
-const STEPS = [
-    { key: 'script', label: 'Guion' },
-    { key: 'narration', label: 'Narración' },
-    { key: 'images', label: 'Imágenes' },
-    { key: 'sound', label: 'Sonido' },
-    { key: 'render', label: 'Render' },
-];
-
-const STATUS_COMPLETED = {
-    borrador: 0,
-    'guion listo': 1,
-    narrada: 2,
-    'imagenes listas': 3,
-    mezclada: 4,
-    renderizada: 5,
-    'pendiente de revision': 5,
-    'lista para publicar': 5,
-    descargada: 5,
-    publicada: 5,
-    fallida: 0,
-    descartada: 0,
-};
-
-const VERDICTS = {
-    publish: { label: 'publicar', color: '#4FA265' },
-    revise: { label: 'revisar', color: '#E2A044' },
-    discard: { label: 'descartar', color: '#D24A3C' },
-};
-
-const STEP_LABELS = {
-    script: 'Guion',
-    narration: 'Narración',
-    images: 'Imágenes',
-    sound: 'Sonido',
-    render: 'Render',
-};
-
-const WORKER_COMMAND = 'php artisan queue:work --tries=1';
-
-const EMPTY_QUEUE = {
-    pending: 0,
-    waiting: 0,
-    running: 0,
-    oldestWaitingSeconds: null,
-    failed: 0,
-    likelyNoWorker: false,
-    workerBusy: false,
-};
+const AMBER = '#E2A044';
+const GREEN = '#4FA265';
+const RED = '#D24A3C';
+const S1 = '#131316';
+const MUT = '#8E8D8A';
+const DIM = '#605F5D';
 
 const props = defineProps({
-    story: { type: Object, default: null },
-    progress: { type: Object, default: null },
-    snapshot: { type: Object, default: null },
+    active: { type: Array, default: () => [] },
+    selected: { type: Object, default: null },
     queue: { type: Object, default: null },
 });
 
-const snapshot = ref(props.snapshot ?? emptySnapshot(props.story, props.progress, props.queue));
-const copied = ref(false);
-const copiedFix = ref('');
-let timer = 0;
+const backupOn = computed(() => Boolean(props.selected?.story?.used_fallback));
+const backupCost = computed(() => props.selected?.backupCost ?? '');
+const backupTokens = computed(() => props.selected?.backupTokens ?? '');
 
-const heading = computed(() => {
-    const title = snapshot.value?.title?.trim();
+const pipeTitle = computed(() => props.selected?.story?.title ?? '');
 
-    if (title) {
-        return title;
+const pipeSub = computed(() => {
+    if (!props.selected) {
+        return '';
     }
 
-    return props.story ? 'Generando el guion…' : 'Progreso';
-});
+    const current = currentStepNum(props.selected.rows ?? []);
+    const failed = (props.selected.rows ?? []).some((row) => row.state === 'fallido');
+    const elapsed = props.selected.elapsed ?? '00:00';
 
-const inProgress = computed(() => snapshot.value?.progress ?? null);
-
-const settledFailure = computed(
-    () => snapshot.value?.status === 'fallida' && !inProgress.value,
-);
-
-const scriptReadyIdle = computed(
-    () => snapshot.value?.status === 'guion listo' && !inProgress.value,
-);
-
-const fallbackOn = computed(() => Boolean(snapshot.value?.used_fallback));
-
-const queue = computed(() => snapshot.value?.queue ?? props.queue ?? EMPTY_QUEUE);
-
-const blockedChecks = computed(() =>
-    (snapshot.value?.preflight?.checks ?? []).filter((check) => check && check.ok === false),
-);
-
-const preflightBlocked = computed(() => blockedChecks.value.length > 0);
-
-const verdictMeta = computed(() => {
-    const key = snapshot.value?.verdict;
-
-    return key && VERDICTS[key] ? VERDICTS[key] : null;
-});
-
-const steps = computed(() => {
-    const current = snapshot.value;
-    const doneThrough = completedCount(current);
-    const runningKey = current?.progress?.step ?? null;
-
-    return STEPS.map((step, index) => {
-        let state = 'pending';
-
-        if (index < doneThrough) {
-            state = 'done';
-        } else if (runningKey === step.key) {
-            state = 'running';
-        }
-
-        return { ...step, state };
-    });
-});
-
-const barPercent = computed(() => {
-    const progress = inProgress.value;
-
-    if (!progress || progress.total < 1) {
-        return 0;
+    if (failed) {
+        return 'Detenido en el paso ' + current + ' · ' + elapsed + ' transcurridos';
     }
 
-    return Math.max(0, Math.min(100, Math.round((100 * progress.done) / progress.total)));
+    return 'Paso ' + current + ' de 7 · ' + elapsed + ' transcurridos';
 });
 
-function emptySnapshot(story, progress, queueStatus) {
-    if (!story) {
-        return null;
+const rows = computed(() => (props.selected?.rows ?? []).map((row) => styleRow(row)));
+
+function currentStepNum(list) {
+    const failed = list.find((row) => row.state === 'fallido');
+
+    if (failed) {
+        return Number(failed.num);
     }
+
+    const running = list.find((row) => row.state === 'en curso');
+
+    if (running) {
+        return Number(running.num);
+    }
+
+    return list.length || 7;
+}
+
+function styleRow(row) {
+    const state = row.state;
+    const running = state === 'en curso';
+    const failed = state === 'fallido';
+    const color = state === 'hecho' ? GREEN : failed ? RED : running ? AMBER : '#4E4D4B';
+    const prog = Number(row.progress ?? 0);
 
     return {
-        status: story.status,
-        status_label: story.status,
-        status_color: '#8E8D8A',
-        progress,
-        failed_step: story.failed_step,
-        failed_message: story.failed_message,
-        title: story.title ?? '',
-        verdict: story.verdict,
-        score: story.score,
-        scene_count: story.scene_count,
-        used_fallback: Boolean(story.used_fallback),
-        created_at: story.created_at ?? null,
-        stale_draft_seconds: 30,
-        queue: queueStatus ?? EMPTY_QUEUE,
-        preflight: { step: null, checks: [] },
+        num: row.num,
+        name: row.name,
+        unit: row.unit,
+        time: row.time,
+        state,
+        wrap: 'padding:13px 15px;background:' + (failed ? '#160F0E' : S1),
+        dot: 'width:8px;height:8px;flex:none;background:' + color + (running ? ';animation:hs-pulse 1.4s infinite' : ''),
+        unitStyle: 'width:150px;text-align:right;font-size:11.5px;color:' + (state === 'en espera' ? '#4E4D4B' : MUT),
+        stateStyle: 'width:76px;text-align:right;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:800;color:' + color,
+        resume: () => resume(failed),
+        resumeLabel: failed ? 'Reanudar' : 'Reejecutar',
+        resumeStyle: state === 'en espera'
+            ? 'visibility:hidden;width:88px;border:0'
+            : 'width:88px;background:transparent;border:1px solid ' + (failed ? '#5A2E28' : '#26272B') + ';color:' + (failed ? '#E58C7F' : DIM) + ';padding:5px 0;font-size:11px;cursor:pointer;margin-left:10px',
+        barWrap: prog > 0 || running ? 'height:4px;background:#1B1C1F;margin-top:10px;margin-left:38px' : 'display:none',
+        bar: 'height:100%;width:' + (prog * 100) + '%;background:' + color,
+        errWrap: failed ? 'margin:12px 0 2px 38px;padding:12px 14px;background:#1C1211;border:1px solid #3A2622' : 'display:none',
+        error: row.error ?? '',
     };
 }
 
-async function copyWorkerCommand() {
-    try {
-        await navigator.clipboard.writeText(WORKER_COMMAND);
-        copied.value = true;
-        window.setTimeout(() => {
-            copied.value = false;
-        }, 2000);
-    } catch {
-        // El comando sigue visible para copiar a mano.
-    }
-}
+function resume(failed) {
+    const id = props.selected?.story?.id;
 
-async function copyFix(fix) {
-    try {
-        await navigator.clipboard.writeText(fix);
-        copiedFix.value = fix;
-        window.setTimeout(() => {
-            if (copiedFix.value === fix) {
-                copiedFix.value = '';
-            }
-        }, 2000);
-    } catch {
-        // El comando sigue visible para copiar a mano.
-    }
-}
-
-function completedCount(current) {
-    if (!current) {
-        return 0;
-    }
-
-    if (current.status === 'fallida') {
-        const index = STEPS.findIndex((step) => step.key === current.failed_step);
-
-        return index > 0 ? index : 0;
-    }
-
-    return STATUS_COMPLETED[current.status] ?? 0;
-}
-
-function shouldStop(current) {
-    if (!current) {
-        return true;
-    }
-
-    if (current.status === 'pendiente de revision') {
-        return true;
-    }
-
-    if (current.status === 'fallida' && !current.progress) {
-        return true;
-    }
-
-    return false;
-}
-
-function stop() {
-    if (timer) {
-        window.clearInterval(timer);
-        timer = 0;
-    }
-}
-
-async function tick() {
-    if (!props.story?.id) {
+    if (!failed || !id) {
         return;
     }
 
-    try {
-        const response = await fetch(`/stories/${props.story.id}/progress`, {
-            headers: { Accept: 'application/json' },
-            credentials: 'same-origin',
-        });
-
-        if (!response.ok) {
-            return;
-        }
-
-        snapshot.value = await response.json();
-
-        if (shouldStop(snapshot.value)) {
-            stop();
-        }
-    } catch {
-        // El siguiente intervalo lo reintenta; un fallo de red no tumba la pantalla.
-    }
+    router.post(`/stories/${id}/retry`);
 }
 
-function retry() {
-    router.post(`/stories/${props.story.id}/retry`);
-}
+function goQueue() {
+    const id = props.selected?.story?.id;
 
-function continuePipeline() {
-    router.post(`/stories/${props.story.id}/continue`);
-}
-
-function discard() {
-    router.post(`/stories/${props.story.id}/discard`);
-}
-
-function reviewAgain() {
-    router.post(`/stories/${props.story.slug}/review-again`);
-}
-
-onMounted(async () => {
-    if (!props.story?.id) {
+    if (!id) {
         return;
     }
 
-    if (shouldStop(snapshot.value)) {
-        return;
-    }
-
-    await tick();
-
-    if (!shouldStop(snapshot.value)) {
-        timer = window.setInterval(tick, 2000);
-    }
-});
-
-onUnmounted(() => {
-    stop();
-});
+    router.post(`/stories/${id}/discard`);
+}
 </script>
 
 <template>
-    <Head title="Progreso" />
+    <Head :title="pipeTitle || 'Progreso'" />
 
-    <div class="px-[30px] pt-[26px] pb-[60px] max-w-[1100px]">
-        <template v-if="!story">
-            <h1 class="text-[26px] font-extrabold tracking-[-0.02em]">Progreso</h1>
-            <p class="mt-1 text-[12px] text-text-muted">
-                No hay una historia abierta. Lanza una desde Nueva historia o ábrela desde la cola.
-            </p>
-        </template>
-
-        <template v-else>
-            <div class="mb-[22px]">
-                <h1 class="text-[26px] font-extrabold tracking-[-0.02em]">{{ heading }}</h1>
-                <div class="mt-1 flex items-center gap-2 text-[12px] text-text-muted">
-                    <span
-                        class="inline-block h-2 w-2 rounded-full"
-                        :style="{ background: snapshot?.status_color || '#8E8D8A' }"
-                    />
-                    <span>{{ snapshot?.status_label }}</span>
-                    <span v-if="snapshot?.scene_count">· {{ snapshot.scene_count }} escenas</span>
-                </div>
+    <div style="padding:26px 30px 60px;max-width:1100px;min-width:940px">
+        <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:22px">
+            <div style="flex:1">
+                <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em">{{ pipeTitle }}</h1>
+                <div style="font-size:12px;color:#8E8D8A;margin-top:4px">{{ pipeSub }}</div>
             </div>
+        </div>
 
-            <div
-                v-if="queue.likelyNoWorker"
-                class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
-            >
-                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
-                <div class="min-w-0 flex-1">
-                    <p class="text-[12.5px] font-extrabold text-amber">
-                        El pipeline está esperando. Hay {{ queue.pending }} trabajo(s) en cola y ninguno se está ejecutando. Arranca el worker en otra terminal:
-                    </p>
-                    <div class="mt-2.5 flex items-center gap-2">
-                        <code class="flex-1 truncate border border-[#6B4C1C] bg-[#151006] px-2.5 py-1.5 font-mono text-[11.5px] text-text">{{ WORKER_COMMAND }}</code>
-                        <button
-                            type="button"
-                            class="shrink-0 border border-[#6B4C1C] px-3 py-1.5 text-[11px] font-extrabold text-amber hover:bg-[#22180A]"
-                            @click="copyWorkerCommand"
-                        >
-                            {{ copied ? 'Copiado' : 'Copiar' }}
-                        </button>
+        <div
+            v-if="backupOn"
+            style="border:1px solid #6B4C1C;background:#1C150A;padding:13px 16px;display:flex;align-items:center;gap:14px;margin-bottom:20px"
+        >
+            <span style="width:3px;height:34px;background:#E2A044;flex:none"></span>
+            <div style="flex:1">
+                <div style="font-size:12.5px;font-weight:800;color:#E2A044">Respaldo de modelo activo — Claude Haiku</div>
+                <div style="font-size:11.5px;color:#B49A72;margin-top:2px">Cuota gratuita de Gemini agotada a las 03:12. Desde ese punto la generación cuesta dinero.</div>
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:16px;font-weight:800;color:#E2A044">{{ backupCost }}</div>
+                <div style="font-size:10.5px;color:#8E8D8A">{{ backupTokens }}</div>
+            </div>
+            <button
+                type="button"
+                disabled
+                title="Todavía no implementado"
+                class="hs-pause"
+                style="background:transparent;border:1px solid #6B4C1C;color:#E2A044;padding:7px 12px;cursor:pointer;font-size:11.5px"
+            >Pausar y esperar cuota</button>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:1px;background:#1F2024;border:1px solid #1F2024">
+            <div v-for="s in rows" :key="s.num" :style="s.wrap">
+                <div style="display:flex;align-items:center;gap:14px">
+                    <span :style="s.dot"></span>
+                    <span style="width:16px;font-size:10.5px;color:#4E4D4B">{{ s.num }}</span>
+                    <span style="flex:1;font-size:13.5px;font-weight:800;letter-spacing:-.01em">{{ s.name }}</span>
+                    <span :style="s.unitStyle">{{ s.unit }}</span>
+                    <span style="width:66px;text-align:right;font-size:11.5px;color:#8E8D8A">{{ s.time }}</span>
+                    <span :style="s.stateStyle">{{ s.state }}</span>
+                    <button type="button" @click="s.resume" :style="s.resumeStyle">{{ s.resumeLabel }}</button>
+                </div>
+                <div :style="s.barWrap"><div :style="s.bar"></div></div>
+                <div :style="s.errWrap">
+                    <div style="font-size:11.5px;color:#E58C7F;line-height:1.6;font-family:ui-monospace,Menlo,monospace">{{ s.error }}</div>
+                    <div style="display:flex;gap:8px;margin-top:11px">
+                        <button type="button" class="hs-resume-step" @click="s.resume" style="background:#E2A044;color:#151006;border:0;padding:8px 14px;font-weight:800;cursor:pointer;font-size:12px">Reanudar desde este paso</button>
+                        <button type="button" class="hs-trace" style="background:transparent;border:1px solid #3A2622;color:#E58C7F;padding:8px 14px;cursor:pointer;font-size:12px">Ver traza completa</button>
+                        <button type="button" class="hs-discard" @click="goQueue" style="background:transparent;border:1px solid #2A2B2F;color:#8E8D8A;padding:8px 14px;cursor:pointer;font-size:12px">Descartar historia</button>
                     </div>
                 </div>
             </div>
-
-            <div
-                v-else-if="queue.workerBusy"
-                class="mb-5 flex items-start gap-3.5 border border-border bg-surface-2 px-4 py-3.5"
-            >
-                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-text-dim" />
-                <p class="text-[12.5px] font-extrabold text-text-muted">
-                    El worker está ocupado con otro trabajo. Hay {{ queue.waiting }} en cola por delante.
-                </p>
-            </div>
-
-            <div
-                v-if="fallbackOn"
-                class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
-            >
-                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
-                <p class="text-[12.5px] font-extrabold text-amber">
-                    Se agotó la cuota de Gemini y se continuó con Claude Haiku.
-                </p>
-            </div>
-
-            <div
-                v-if="preflightBlocked"
-                class="mb-5 flex items-start gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
-            >
-                <span class="mt-0.5 h-[34px] w-[3px] shrink-0 bg-amber" />
-                <div class="min-w-0 flex-1">
-                    <p class="text-[12.5px] font-extrabold text-amber">
-                        El siguiente paso no puede ejecutarse todavía
-                    </p>
-                    <ul class="mt-3 flex flex-col gap-3">
-                        <li v-for="check in blockedChecks" :key="check.name">
-                            <p class="text-[12px] text-text">
-                                <span class="font-extrabold">{{ check.name }}.</span>
-                                {{ check.detail }}
-                            </p>
-                            <div v-if="check.fix" class="mt-2 flex items-center gap-2">
-                                <code class="flex-1 truncate border border-[#6B4C1C] bg-[#151006] px-2.5 py-1.5 font-mono text-[11.5px] text-text">{{ check.fix }}</code>
-                                <button
-                                    type="button"
-                                    class="shrink-0 border border-[#6B4C1C] px-3 py-1.5 text-[11px] font-extrabold text-amber hover:bg-[#22180A]"
-                                    @click="copyFix(check.fix)"
-                                >
-                                    {{ copiedFix === check.fix ? 'Copiado' : 'Copiar' }}
-                                </button>
-                            </div>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-
-            <div class="flex flex-col gap-px border border-[#1F2024] bg-[#1F2024]">
-                <div
-                    v-for="(step, index) in steps"
-                    :key="step.key"
-                    class="bg-surface-2 px-[15px] py-[13px]"
-                >
-                    <div class="flex items-center gap-3.5">
-                        <span
-                            v-if="step.state === 'done'"
-                            class="flex h-4 w-4 shrink-0 items-center justify-center text-[12px] font-extrabold text-ok"
-                        >
-                            ✓
-                        </span>
-                        <span
-                            v-else
-                            class="h-2 w-2 shrink-0 rounded-full"
-                            :class="step.state === 'running' ? 'animate-pulse bg-amber' : 'bg-text-dim'"
-                        />
-                        <span class="w-4 shrink-0 text-[10.5px] text-text-dim">{{ String(index + 1).padStart(2, '0') }}</span>
-                        <span class="flex-1 text-[13.5px] font-extrabold tracking-[-0.01em]">{{ step.label }}</span>
-                        <span
-                            v-if="step.state === 'running' && inProgress?.label"
-                            class="max-w-[320px] truncate text-[11.5px] text-text-muted"
-                        >
-                            {{ inProgress.label }}
-                        </span>
-                        <span
-                            class="w-[76px] text-right text-[10.5px] font-extrabold tracking-[0.07em] uppercase"
-                            :class="{
-                                'text-ok': step.state === 'done',
-                                'text-amber': step.state === 'running',
-                                'text-text-dim': step.state === 'pending',
-                            }"
-                        >
-                            {{ step.state === 'done' ? 'hecho' : step.state === 'running' ? 'en curso' : 'en espera' }}
-                        </span>
-                    </div>
-                    <div v-if="step.state === 'running'" class="mt-2.5 ml-[38px] h-1 bg-[#1B1C1F]">
-                        <div class="h-full bg-amber" :style="{ width: `${barPercent}%` }" />
-                    </div>
-                </div>
-            </div>
-
-            <section
-                v-if="settledFailure"
-                class="mt-5 border border-[#3A2622] bg-[#160F0E] px-4 py-3.5"
-            >
-                <div class="text-[11px] font-extrabold tracking-[0.09em] uppercase text-bad">Paso fallido</div>
-                <div class="mt-2 text-[13px] font-extrabold">
-                    {{ STEP_LABELS[snapshot.failed_step] || snapshot.failed_step }}
-                </div>
-                <p class="mt-2 font-mono text-[11.5px] leading-[1.6] text-[#E58C7F] whitespace-pre-wrap">
-                    {{ snapshot.failed_message || 'El paso del pipeline falló.' }}
-                </p>
-                <div class="mt-3.5 flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        class="bg-amber px-3.5 py-2 text-[12px] font-extrabold text-[#151006] hover:bg-amber-hover"
-                        @click="retry"
-                    >
-                        Reintentar este paso
-                    </button>
-                    <button
-                        type="button"
-                        class="border border-[#3A2622] px-3.5 py-2 text-[12px] text-[#E58C7F] hover:bg-[#221513]"
-                        @click="discard"
-                    >
-                        Descartar
-                    </button>
-                </div>
-            </section>
-
-            <section
-                v-if="scriptReadyIdle"
-                class="mt-5 border border-border bg-surface-2 px-4 py-4"
-            >
-                <div class="text-[11px] font-extrabold tracking-[0.09em] uppercase text-text-muted">Guion listo</div>
-                <h2 class="mt-2 text-[18px] font-extrabold tracking-[-0.02em]">
-                    {{ snapshot.title || 'Sin título' }}
-                </h2>
-                <p v-if="snapshot.verdict == null" class="mt-2 text-[12px] text-amber">
-                    El guion se generó, pero la revisión automática falló.
-                </p>
-                <div class="mt-2 flex flex-wrap items-center gap-3 text-[13px]">
-                    <span v-if="verdictMeta" class="font-extrabold" :style="{ color: verdictMeta.color }">
-                        {{ verdictMeta.label }}
-                    </span>
-                    <span v-else class="text-text-muted">sin veredicto</span>
-                    <span v-if="snapshot.score != null" class="text-text-muted">
-                        {{ Number(snapshot.score).toFixed(1) }}
-                    </span>
-                </div>
-                <div class="mt-4 flex flex-wrap gap-2">
-                    <Link
-                        :href="`/stories/${story.slug}/review`"
-                        class="border border-border px-3.5 py-2 text-[12px] text-text-muted hover:border-[#3A3B40] hover:text-text"
-                    >
-                        Leer el guion
-                    </Link>
-                    <button
-                        v-if="snapshot.verdict == null"
-                        type="button"
-                        class="border border-[#6B4C1C] px-3.5 py-2 text-[12px] font-extrabold text-amber hover:bg-[#22180A]"
-                        @click="reviewAgain"
-                    >
-                        Revisar ahora
-                    </button>
-                    <button
-                        type="button"
-                        class="bg-amber px-3.5 py-2 text-[12px] font-extrabold text-[#151006] hover:bg-amber-hover disabled:cursor-not-allowed disabled:opacity-40"
-                        :disabled="preflightBlocked"
-                        @click="continuePipeline"
-                    >
-                        Continuar el pipeline
-                    </button>
-                </div>
-            </section>
-        </template>
+        </div>
+        <div style="margin-top:14px;font-size:11px;color:#605F5D">Cualquier paso completado se puede reanudar: pasa el cursor por su fila y reejecuta desde ahí conservando lo anterior.</div>
     </div>
 </template>
+
+<style scoped>
+.hs-pause:disabled {
+    opacity: 1;
+    cursor: not-allowed;
+}
+.hs-resume-step:hover {
+    background: #F0B45E;
+}
+.hs-trace:hover {
+    background: #221513;
+}
+.hs-discard:hover {
+    color: #E8E6E3;
+}
+</style>

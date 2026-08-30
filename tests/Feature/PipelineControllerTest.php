@@ -159,6 +159,25 @@ final class PipelineControllerTest extends TestCase
             );
     }
 
+    public function test_selected_exposes_real_fallback_cost_and_tokens(): void
+    {
+        $story = Story::factory()->create([
+            'status' => StoryStatus::Draft,
+            'used_fallback' => true,
+            'llm_cost_usd' => 2.41,
+            'llm_input_tokens' => 1_500_000,
+            'llm_output_tokens' => 340_000,
+        ]);
+
+        $this->get(route('pipeline.show', $story))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page): Assert => $page
+                ->where('selected.story.used_fallback', true)
+                ->where('selected.backupCost', '2,22 €')
+                ->where('selected.backupTokens', '1,84 M tokens · Haiku')
+            );
+    }
+
     public function test_failed_row_exposes_the_message_and_keeps_later_rows_waiting(): void
     {
         $story = Story::factory()->create([

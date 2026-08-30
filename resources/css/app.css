@@ -64,3 +64,14 @@ body {
 *::-webkit-scrollbar-thumb:hover {
     background: #3a3b40;
 }
+
+@keyframes hs-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.35;
+    }
+}

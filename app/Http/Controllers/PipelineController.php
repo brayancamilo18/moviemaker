@@ -7,6 +7,7 @@ namespace App\Http\Controllers;
 use App\Enums\StoryStatus;
 use App\Models\Story;
 use App\Models\StoryEvent;
+use App\Services\Llm\SpendReport;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
 use Carbon\CarbonInterface;
@@ -45,6 +46,7 @@ final class PipelineController extends Controller
         private readonly ResponseFactory $inertia,
         private readonly QueueHealth $queue,
         private readonly PipelineProgress $progress,
+        private readonly SpendReport $spend,
     ) {}
 
     public function index(Request $request): Response
@@ -142,7 +144,7 @@ final class PipelineController extends Controller
     }
 
     /**
-     * @return array{story: array<string, mixed>, rows: list<array<string, mixed>>, elapsed: string}
+     * @return array{story: array<string, mixed>, rows: list<array<string, mixed>>, elapsed: string, backupCost: string, backupTokens: string}
      */
     private function detail(Story $story): array
     {
@@ -192,7 +194,19 @@ final class PipelineController extends Controller
             ],
             'rows' => $rows,
             'elapsed' => $this->elapsed($story),
+            'backupCost' => $this->spend->formatEuro((float) $story->llm_cost_usd),
+            'backupTokens' => $this->backupTokens($story),
         ];
+    }
+
+    private function backupTokens(Story $story): string
+    {
+        $total = (int) $story->llm_input_tokens + (int) $story->llm_output_tokens;
+        $amount = $total >= 1_000_000
+            ? number_format($total / 1_000_000, 2, ',', '').' M tokens'
+            : number_format($total, 0, ',', '.').' tokens';
+
+        return $amount.' · Haiku';
     }
 
     /**
