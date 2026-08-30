@@ -33,6 +33,9 @@ class AppServiceProvider extends ServiceProvider
     {
         // Singleton para que el cambio al respaldo valga para toda la ejecución: si cada servicio
         // recibiera su propia instancia, cada uno volvería a pagar los reintentos del principal.
+        $this->app->bind(GeminiClient::class, fn (Application $app): GeminiClient => $this->gemini($app));
+        $this->app->bind(AnthropicClient::class, fn (Application $app): AnthropicClient => $this->anthropic($app));
+
         $this->app->singleton(JsonLlm::class, function (Application $app): JsonLlm {
             $config = $app->make('config');
             $primary = $this->llmClient($app, (string) $config->get('stories.llm.provider'));
@@ -115,8 +118,8 @@ class AppServiceProvider extends ServiceProvider
     private function llmClient(Application $app, string $provider): JsonLlm
     {
         return match ($provider) {
-            'gemini' => $this->gemini($app),
-            'anthropic' => $this->anthropic($app),
+            'gemini' => $app->make(GeminiClient::class),
+            'anthropic' => $app->make(AnthropicClient::class),
             default => throw new InvalidArgumentException(
                 "Proveedor de LLM desconocido: {$provider}.",
             ),
