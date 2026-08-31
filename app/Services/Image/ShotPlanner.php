@@ -861,6 +861,12 @@ final class ShotPlanner
     }
 
     /**
+     * El `end` de `scenes[]` es la autoridad: ya llega hasta el arranque de la escena siguiente.
+     * El respaldo `end + pauseAfter` de las frases solo cubre las escenas que timings.json no
+     * describe, porque suma una pausa pedida al ensamblar sobre un `end` medido por whisper, y
+     * esas dos magnitudes no viven en la misma línea de tiempo: en cuanto whisper deriva, el
+     * respaldo se cuela en la escena siguiente y el teselado sale solapado.
+     *
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
      * @param  list<array{sceneOrder: int, start: float, end: float, text: string, pauseAfter: float}>  $sentences
      * @return array<int, float>
@@ -875,8 +881,15 @@ final class ShotPlanner
             }
         }
 
+        $timed = $ends;
+
         foreach ($sentences as $sentence) {
             $sceneOrder = $sentence['sceneOrder'];
+
+            if (isset($timed[$sceneOrder])) {
+                continue;
+            }
+
             $fallback = $sentence['end'] + $sentence['pauseAfter'];
             $ends[$sceneOrder] = max($ends[$sceneOrder] ?? $fallback, $fallback);
         }
