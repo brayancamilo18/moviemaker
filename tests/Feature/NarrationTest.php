@@ -357,6 +357,87 @@ final class NarrationTest extends TestCase
         $this->assertNotSame([], $aligned[1]['words']);
     }
 
+    public function test_a_sentence_anchored_by_text_cannot_end_after_the_master(): void
+    {
+        // Whisper se sale del WAV en audios largos. Antes nada acotaba a las frases ancladas por
+        // texto, así que colaban en timings.json habla que el máster no tiene y el render moría
+        // mucho después, al comprobar que el plano de cierre cubriera su propio audio.
+        $master = 8.0;
+        $aligned = $this->timer()->alignToSentences(
+            $this->whisperWords(['the', 'door', 'closed', 'behind', 'me', 'then', 'the', 'whistle',
+                'came', 'closer', 'nobody', 'answered', 'the', 'call', 'the', 'road', 'stayed',
+                'empty']),
+            $this->fourSentences(),
+            $master,
+        );
+
+        $this->assertSame(
+            ['text', 'text', 'text', 'text'],
+            array_column($aligned, 'alignment'),
+        );
+
+        foreach ($aligned as $row) {
+            $this->assertLessThanOrEqual($master, $row['end']);
+
+            foreach ($row['words'] as $word) {
+                $this->assertLessThanOrEqual($master, $word['end']);
+            }
+        }
+
+        // Whisper llega a 9.0 s con dieciocho palabras de medio segundo; el WAV se acaba en 8.0.
+        $this->assertEqualsWithDelta($master, $aligned[3]['end'], 0.001);
+        $this->assertMonotonic($aligned);
+    }
+
+    public function test_the_last_scene_never_ends_after_the_master(): void
+    {
+        // El final de la última escena es habla más la pausa pedida al ensamblar. Con el habla ya
+        // pegada al final del WAV, esa suma se salía del máster.
+        $master = 8.0;
+        $timer = $this->timer();
+        $timer->save('2026-01-01-clamped', $timer->alignToSentences(
+            $this->whisperWords(['the', 'door', 'closed', 'behind', 'me', 'then', 'the', 'whistle',
+                'came', 'closer', 'nobody', 'answered', 'the', 'call', 'the', 'road', 'stayed',
+                'empty']),
+            $this->fourSentences(),
+            $master,
+        ), $master);
+
+        $timings = json_decode(
+            $this->app->make(Filesystem::class)->get(
+                $this->storiesDirectory.'/2026-01-01-clamped/timings.json',
+            ),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertEqualsWithDelta($master, $timings['scenes'][0]['end'], 0.001);
+    }
+
+    public function test_saving_timings_that_do_not_fit_the_master_throws_instead_of_writing(): void
+    {
+        $files = $this->app->make(Filesystem::class);
+        $path = $this->storiesDirectory.'/2026-01-01-overflow/timings.json';
+
+        $this->expectExceptionMessage('La frase 1 acaba en 9.000 s y el máster dura 6.000 s: 3.000 s de más.');
+
+        try {
+            $this->timer()->save('2026-01-01-overflow', [[
+                'order' => 1,
+                'sceneOrder' => 1,
+                'text' => 'The door closed behind me.',
+                'ttsText' => 'The door closed behind me.',
+                'start' => 0.0,
+                'end' => 9.0,
+                'pauseAfter' => 0.45,
+                'alignment' => 'text',
+                'words' => [],
+            ]], 6.0);
+        } finally {
+            $this->assertFalse($files->exists($path));
+        }
+    }
+
     /**
      * @return list<NarrationSentence>
      */

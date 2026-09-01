@@ -45,6 +45,12 @@ final class TranscriptTimer
     /** Longitud mínima del prefijo común para aceptar dos tokens como el mismo. */
     private const FUZZY_PREFIX_LENGTH = 4;
 
+    /**
+     * Holgura al comprobar que timings.json cabe en el máster. Solo tiene que absorber el redondeo a
+     * milisegundos de seconds(), que puede subir un valor medio milisegundo.
+     */
+    private const MASTER_TOLERANCE = 0.001;
+
     /** Desde esta longitud se admite una letra de diferencia entre tokens. */
     private const FUZZY_DISTANCE_LENGTH = 5;
 
@@ -208,7 +214,11 @@ final class TranscriptTimer
             $rows[] = $row;
         }
 
-        return $this->interpolateHoles($rows, $this->speechLimit($words, $rows, $narrationEnd));
+        return $this->interpolateHoles(
+            $rows,
+            $this->speechLimit($words, $rows, $narrationEnd),
+            $narrationEnd,
+        );
     }
 
     /**
@@ -234,12 +244,13 @@ final class TranscriptTimer
     }
 
     /**
-     * Reparte las frases sin ancla dentro del hueco entre las dos que sí la tienen.
+     * Reparte las frases sin ancla dentro del hueco entre las dos que sí la tienen, y encierra a
+     * todas, ancladas incluidas, dentro del máster.
      *
      * @param  list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{start: float, end: float, token: string}>, weight: int}>  $rows
      * @return list<array{order: int, sceneOrder: int, text: string, ttsText: string, start: float, end: float, pauseAfter: float, alignment: 'text'|'sequential', words: list<array{token: string, start: float, end: float}>}>
      */
-    private function interpolateHoles(array $rows, float $limit): array
+    private function interpolateHoles(array $rows, float $limit, ?float $masterEnd = null): array
     {
         $count = count($rows);
         $previousEnd = 0.0;
@@ -287,13 +298,23 @@ final class TranscriptTimer
 
         foreach ($rows as $row) {
             unset($row['weight']);
-            $row['start'] = $this->seconds($row['start']);
-            $row['end'] = $this->seconds(max($row['end'], $row['start']));
+            $row['start'] = $this->seconds($this->withinMaster($row['start'], $masterEnd));
+            $row['end'] = $this->seconds($this->withinMaster(max($row['end'], $row['start']), $masterEnd));
             $row['words'] = $this->clampWords($row['words'], $row['start'], $row['end']);
             $aligned[] = $row;
         }
 
         return $aligned;
+    }
+
+    /**
+     * Nada de lo que se escriba puede caer más allá del final del WAV. NarrationClock fija la línea
+     * de tiempo y whisper solo orienta: en audios largos sigue colocando palabras después de que el
+     * fichero se haya terminado, y ese tiempo inventado no existe para ninguna etapa posterior.
+     */
+    private function withinMaster(float $value, ?float $masterEnd): float
+    {
+        return $masterEnd === null ? $value : min($value, $masterEnd);
     }
 
     /**
@@ -329,12 +350,13 @@ final class TranscriptTimer
      */
     public function time(string $slug, string $audioPath, array $sentences): array
     {
+        $narrationEnd = $this->clock->narrationEnd($audioPath);
         $aligned = $this->alignToSentences(
             $this->timestamps($audioPath),
             $sentences,
-            $this->clock->narrationEnd($audioPath),
+            $narrationEnd,
         );
-        $this->save($slug, $aligned);
+        $this->save($slug, $aligned, $narrationEnd);
 
         foreach ($this->alignmentProblems($this->alignmentReport($aligned, $audioPath)) as $problem) {
             $this->logger->warning($problem);
@@ -415,19 +437,26 @@ final class TranscriptTimer
 
     /**
      * @param  list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: string, words?: list<array{token: string, start: float, end: float}>}>  $sentences
+     * @param  float|null  $masterEnd  Duración del máster según NarrationClock, para comprobar que lo escrito cabe en él.
      */
-    public function save(string $slug, array $sentences): string
+    public function save(string $slug, array $sentences, ?float $masterEnd = null): string
     {
         $slug = $this->assertSlug($slug);
         $directory = $this->storiesDirectory.DIRECTORY_SEPARATOR.$slug;
         $this->files->ensureDirectoryExists($directory);
+
+        $scenes = $this->sceneWindows($sentences, $masterEnd);
+
+        if ($masterEnd !== null) {
+            $this->assertWithinMaster($sentences, $scenes, $masterEnd);
+        }
 
         $path = $directory.DIRECTORY_SEPARATOR.'timings.json';
         $json = json_encode(
             [
                 'version' => self::TIMINGS_VERSION,
                 'sentences' => $sentences,
-                'scenes' => $this->sceneWindows($sentences),
+                'scenes' => $scenes,
             ],
             JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE,
         );
@@ -439,6 +468,57 @@ final class TranscriptTimer
         $this->files->put($path, $json."\n");
 
         return $path;
+    }
+
+    /**
+     * timings.json no puede reclamar tiempo que el máster no tiene. NarrationClock fija la línea de
+     * tiempo y whisper solo orienta, así que un end por encima del WAV es un dato imposible. Se para
+     * aquí, nombrando qué se sale y por cuánto, en vez de dejar que el desfase viaje cuatro etapas y
+     * aparezca al renderizar como un plano de cierre que no cubre su propio audio.
+     *
+     * @param  list<array{order: int, start: float, end: float, words?: list<array{token: string, start: float, end: float}>}>  $sentences
+     * @param  list<array{order: int, start: float, end: float}>  $scenes
+     */
+    private function assertWithinMaster(array $sentences, array $scenes, float $masterEnd): void
+    {
+        $limit = $masterEnd + self::MASTER_TOLERANCE;
+
+        foreach ($sentences as $sentence) {
+            foreach ($sentence['words'] ?? [] as $word) {
+                if ($word['end'] > $limit) {
+                    throw new RuntimeException(sprintf(
+                        'La palabra «%s» de la frase %d acaba en %.3f s y el máster dura %.3f s: %.3f s de más.',
+                        $word['token'],
+                        $sentence['order'],
+                        $word['end'],
+                        $masterEnd,
+                        $word['end'] - $masterEnd,
+                    ));
+                }
+            }
+
+            if ($sentence['end'] > $limit) {
+                throw new RuntimeException(sprintf(
+                    'La frase %d acaba en %.3f s y el máster dura %.3f s: %.3f s de más.',
+                    $sentence['order'],
+                    $sentence['end'],
+                    $masterEnd,
+                    $sentence['end'] - $masterEnd,
+                ));
+            }
+        }
+
+        foreach ($scenes as $scene) {
+            if ($scene['end'] > $limit) {
+                throw new RuntimeException(sprintf(
+                    'La escena %d acaba en %.3f s y el máster dura %.3f s: %.3f s de más.',
+                    $scene['order'],
+                    $scene['end'],
+                    $masterEnd,
+                    $scene['end'] - $masterEnd,
+                ));
+            }
+        }
     }
 
     /**
@@ -733,10 +813,13 @@ final class TranscriptTimer
     }
 
     /**
+     * El final de la última escena es habla más la pausa pedida al ensamblar, y esa pausa es una
+     * petición, no una medida: sumada a un end que ya roza el final del WAV se sale del máster.
+     *
      * @param  list<array{order: int, sceneOrder: int, text: string, start: float, end: float, pauseAfter: float, alignment: string}>  $sentences
      * @return list<array{order: int, start: float, end: float, duration: float, sentenceCount: int}>
      */
-    private function sceneWindows(array $sentences): array
+    private function sceneWindows(array $sentences, ?float $masterEnd = null): array
     {
         $groups = [];
 
@@ -762,6 +845,8 @@ final class TranscriptTimer
             if ($end < $start) {
                 $end = $last['end'] + $last['pauseAfter'];
             }
+
+            $end = max($this->withinMaster($end, $masterEnd), $start);
 
             $scenes[] = [
                 'order' => $order,
