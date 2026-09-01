@@ -222,6 +222,7 @@ final class PipelineJobTest extends TestCase
 
     public function test_progress_stores_and_returns_label_done_and_total(): void
     {
+        $this->freezeTime();
         $progress = $this->app->make(PipelineProgress::class);
 
         $progress->put(17, 'images', 'plano 3', 3, 10, 'direct');
@@ -233,6 +234,8 @@ final class PipelineJobTest extends TestCase
                 'done' => 3,
                 'total' => 10,
                 'stage' => 'direct',
+                'queued' => false,
+                'started_at' => now()->getTimestamp(),
             ],
             $progress->get(17),
         );
@@ -270,7 +273,13 @@ final class PipelineJobTest extends TestCase
             },
         );
 
-        $this->assertSame(['generate', 'review', 'review'], $stages);
+        // One "generate" tick per draft on top of the opening one, then the
+        // review of the winner: the count follows the configured draft count.
+        $review = array_search('review', $stages, true);
+
+        $this->assertNotFalse($review, 'El paso de guion nunca informó de la revisión.');
+        $this->assertSame(['generate'], array_values(array_unique(array_slice($stages, 0, $review))));
+        $this->assertSame(['review'], array_values(array_unique(array_slice($stages, $review))));
     }
 
     public function test_advance_from_narrated_queues_the_images_step(): void

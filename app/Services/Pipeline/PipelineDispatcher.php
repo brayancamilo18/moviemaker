@@ -51,7 +51,7 @@ final class PipelineDispatcher
 
     private function queue(Story $story, string $step, bool $chain): void
     {
-        $this->progress->put($story->id, $step, $step, 0, 1);
+        $this->progress->put($story->id, $step, $step, 0, 1, queued: true);
         $this->bus->dispatch(new RunPipelineStep($story->id, $step, $chain));
     }
 }

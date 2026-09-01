@@ -225,7 +225,10 @@ final class PipelineControllerTest extends TestCase
             ->assertInertia(fn (Assert $page): Assert => $page
                 ->where('selected.rows.0.time', '07:00')
                 ->where('selected.rows.1.time', '07:00')
-                ->where('selected.rows.2.time', '03:00')
+                // Narration is where the story stands, but no worker picked it up,
+                // so it reports no clock instead of counting the idle wait.
+                ->where('selected.rows.2.state', 'en espera')
+                ->where('selected.rows.2.time', '—')
                 ->where('selected.rows.3.time', '—')
                 ->where('selected.elapsed', '10:00')
             );

@@ -17,6 +17,7 @@ Route::redirect('/', '/queue');
 Route::get('/queue', [QueueController::class, 'index'])->name('queue');
 Route::get('/stories/create', [StoryController::class, 'create'])->name('stories.create');
 Route::post('/stories', [StoryController::class, 'store'])->name('stories.store');
+Route::get('/pipeline/state', [PipelineController::class, 'state'])->name('pipeline.state');
 Route::get('/pipeline', [PipelineController::class, 'index'])->name('pipeline');
 Route::get('/stories/{story:id}/pipeline', [PipelineController::class, 'show'])->name('pipeline.show');
 Route::get('/stories/{story:id}/progress', [StoryController::class, 'progress'])->name('stories.progress');

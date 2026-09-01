@@ -24,11 +24,11 @@ enum StoryStatus: string
      */
     private const TRANSITIONS = [
         'borrador' => [self::ScriptReady, self::Failed, self::Discarded],
-        'guion listo' => [self::Narrated, self::Failed, self::Discarded],
-        'narrada' => [self::ImagesReady, self::Failed, self::Discarded],
-        'imagenes listas' => [self::Mixed, self::Failed, self::Discarded],
-        'mezclada' => [self::Rendered, self::Failed, self::Discarded],
-        'renderizada' => [self::PendingReview, self::Failed, self::Discarded],
+        'guion listo' => [self::Narrated, self::Failed, self::Discarded, self::Draft],
+        'narrada' => [self::ImagesReady, self::Failed, self::Discarded, self::Draft, self::ScriptReady],
+        'imagenes listas' => [self::Mixed, self::Failed, self::Discarded, self::Draft, self::ScriptReady, self::Narrated],
+        'mezclada' => [self::Rendered, self::Failed, self::Discarded, self::Draft, self::ScriptReady, self::Narrated, self::ImagesReady],
+        'renderizada' => [self::PendingReview, self::Failed, self::Discarded, self::Draft, self::ScriptReady, self::Narrated, self::ImagesReady, self::Mixed],
         'pendiente de revision' => [self::ReadyToPublish, self::Discarded, self::ScriptReady],
         'lista para publicar' => [self::Downloaded, self::Discarded],
         'descargada' => [self::Published, self::Discarded],

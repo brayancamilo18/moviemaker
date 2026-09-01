@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import ActiveStrip from '../Components/ActiveStrip.vue';
 
@@ -9,6 +9,7 @@ const RED = '#D24A3C';
 const S1 = '#131316';
 const MUT = '#8E8D8A';
 const DIM = '#605F5D';
+const POLL_MS = 2000;
 
 const props = defineProps({
     active: { type: Array, default: () => [] },
@@ -16,24 +17,31 @@ const props = defineProps({
     queue: { type: Object, default: null },
 });
 
-const isEmpty = computed(() => props.active.length === 0);
-const showStrip = computed(() => props.active.length > 1);
-const selectedId = computed(() => props.selected?.story?.id ?? null);
+const active = ref(props.active);
+const selected = ref(props.selected);
+const queue = ref(props.queue);
+const traceOpen = ref(false);
 
-const backupOn = computed(() => Boolean(props.selected?.story?.used_fallback));
-const backupCost = computed(() => props.selected?.backupCost ?? '');
-const backupTokens = computed(() => props.selected?.backupTokens ?? '');
+let timer = 0;
 
-const pipeTitle = computed(() => props.selected?.story?.title ?? '');
+const isEmpty = computed(() => active.value.length === 0);
+const showStrip = computed(() => active.value.length > 1);
+const selectedId = computed(() => selected.value?.story?.id ?? null);
+
+const backupOn = computed(() => Boolean(selected.value?.story?.used_fallback));
+const backupCost = computed(() => selected.value?.backupCost ?? '');
+const backupTokens = computed(() => selected.value?.backupTokens ?? '');
+
+const pipeTitle = computed(() => selected.value?.story?.title ?? '');
 
 const pipeSub = computed(() => {
-    if (!props.selected) {
+    if (!selected.value) {
         return '';
     }
 
-    const current = currentStepNum(props.selected.rows ?? []);
-    const failed = (props.selected.rows ?? []).some((row) => row.state === 'fallido');
-    const elapsed = props.selected.elapsed ?? '00:00';
+    const current = currentStepNum(selected.value.rows ?? []);
+    const failed = (selected.value.rows ?? []).some((row) => row.state === 'fallido');
+    const elapsed = selected.value.elapsed ?? '00:00';
 
     if (failed) {
         return 'Detenido en el paso ' + current + ' · ' + elapsed + ' transcurridos';
@@ -42,7 +50,17 @@ const pipeSub = computed(() => {
     return 'Paso ' + current + ' de 7 · ' + elapsed + ' transcurridos';
 });
 
-const rows = computed(() => (props.selected?.rows ?? []).map((row) => styleRow(row)));
+const rows = computed(() => (selected.value?.rows ?? []).map((row) => styleRow(row)));
+
+watch(
+    () => [props.active, props.selected, props.queue],
+    () => {
+        active.value = props.active;
+        selected.value = props.selected;
+        queue.value = props.queue;
+        syncPoll();
+    },
+);
 
 function currentStepNum(list) {
     const failed = list.find((row) => row.state === 'fallido');
@@ -51,7 +69,7 @@ function currentStepNum(list) {
         return Number(failed.num);
     }
 
-    const running = list.find((row) => row.state === 'en curso');
+    const running = list.find((row) => row.state === 'en curso' || row.state === 'en cola');
 
     if (running) {
         return Number(running.num);
@@ -64,22 +82,24 @@ function styleRow(row) {
     const state = row.state;
     const running = state === 'en curso';
     const failed = state === 'fallido';
+    const idle = state === 'en espera' || state === 'en cola';
     const color = state === 'hecho' ? GREEN : failed ? RED : running ? AMBER : '#4E4D4B';
     const prog = Number(row.progress ?? 0);
 
     return {
         num: row.num,
         name: row.name,
+        job: row.job,
         unit: row.unit,
         time: row.time,
         state,
         wrap: 'padding:13px 15px;background:' + (failed ? '#160F0E' : S1),
         dot: 'width:8px;height:8px;flex:none;background:' + color + (running ? ';animation:hs-pulse 1.4s infinite' : ''),
-        unitStyle: 'width:150px;text-align:right;font-size:11.5px;color:' + (state === 'en espera' ? '#4E4D4B' : MUT),
+        unitStyle: 'width:150px;text-align:right;font-size:11.5px;color:' + (idle ? '#4E4D4B' : MUT),
         stateStyle: 'width:76px;text-align:right;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:800;color:' + color,
-        resume: () => resume(failed),
+        resume: () => resumeRow(row),
         resumeLabel: failed ? 'Reanudar' : 'Reejecutar',
-        resumeStyle: state === 'en espera'
+        resumeStyle: idle
             ? 'visibility:hidden;width:88px;border:0'
             : 'width:88px;background:transparent;border:1px solid ' + (failed ? '#5A2E28' : '#26272B') + ';color:' + (failed ? '#E58C7F' : DIM) + ';padding:5px 0;font-size:11px;cursor:pointer;margin-left:10px',
         barWrap: prog > 0 || running ? 'height:4px;background:#1B1C1F;margin-top:10px;margin-left:38px' : 'display:none',
@@ -89,25 +109,142 @@ function styleRow(row) {
     };
 }
 
-function resume(failed) {
-    const id = props.selected?.story?.id;
+function jobForRow(row) {
+    if (row.job) {
+        return row.job;
+    }
 
-    if (!failed || !id) {
+    const number = Number(row.num);
+
+    if (number <= 2) {
+        return 'script';
+    }
+
+    if (number === 3) {
+        return 'narration';
+    }
+
+    if (number <= 5) {
+        return 'images';
+    }
+
+    if (number === 6) {
+        return 'sound';
+    }
+
+    return 'render';
+}
+
+function destroyMessage(row) {
+    const later = (selected.value?.rows ?? [])
+        .filter((item) => Number(item.num) > Number(row.num))
+        .map((item) => item.name);
+    const obsolete = later.length > 0 ? later.join(', ') : 'ninguno';
+
+    return 'Se va a rehacer «' + row.name + '». Los pasos posteriores quedarán obsoletos: ' + obsolete + '.';
+}
+
+function resumeRow(row) {
+    const id = selected.value?.story?.id;
+
+    if (!id || row.state === 'en espera' || row.state === 'en cola' || row.state === 'en curso') {
         return;
     }
 
-    router.post(`/stories/${id}/retry`);
+    if (row.state === 'hecho' && !window.confirm(destroyMessage(row))) {
+        return;
+    }
+
+    router.post(`/stories/${id}/retry`, { step: jobForRow(row) });
 }
 
 function goQueue() {
-    const id = props.selected?.story?.id;
+    const id = selected.value?.story?.id;
+    const title = selected.value?.story?.title || 'esta historia';
 
     if (!id) {
         return;
     }
 
+    if (!window.confirm('¿Descartar «' + title + '»?')) {
+        return;
+    }
+
     router.post(`/stories/${id}/discard`);
 }
+
+function shouldPoll(stories) {
+    return stories.some((story) => !story.failed);
+}
+
+function stateUrl() {
+    const fromQuery = new URLSearchParams(window.location.search).get('story');
+    const id = fromQuery || selected.value?.story?.id;
+
+    return id ? '/pipeline/state?story=' + id : '/pipeline/state';
+}
+
+function applyState(data) {
+    active.value = data.active ?? [];
+    selected.value = data.selected ?? null;
+    queue.value = data.queue ?? null;
+}
+
+async function tick() {
+    try {
+        const response = await fetch(stateUrl(), {
+            headers: { Accept: 'application/json' },
+            credentials: 'same-origin',
+        });
+
+        if (!response.ok) {
+            return;
+        }
+
+        applyState(await response.json());
+
+        if (!shouldPoll(active.value)) {
+            stopPoll();
+        }
+    } catch {
+        // El siguiente intervalo lo reintenta; un fallo de red no tumba la pantalla.
+    }
+}
+
+function startPoll() {
+    if (timer) {
+        return;
+    }
+
+    timer = window.setInterval(tick, POLL_MS);
+}
+
+function stopPoll() {
+    if (!timer) {
+        return;
+    }
+
+    window.clearInterval(timer);
+    timer = 0;
+}
+
+function syncPoll() {
+    if (shouldPoll(active.value)) {
+        startPoll();
+
+        return;
+    }
+
+    stopPoll();
+}
+
+onMounted(() => {
+    syncPoll();
+});
+
+onUnmounted(() => {
+    stopPoll();
+});
 </script>
 
 <template>
@@ -171,9 +308,13 @@ function goQueue() {
                     <div style="font-size:11.5px;color:#E58C7F;line-height:1.6;font-family:ui-monospace,Menlo,monospace">{{ s.error }}</div>
                     <div style="display:flex;gap:8px;margin-top:11px">
                         <button type="button" class="hs-resume-step" @click="s.resume" style="background:#E2A044;color:#151006;border:0;padding:8px 14px;font-weight:800;cursor:pointer;font-size:12px">Reanudar desde este paso</button>
-                        <button type="button" class="hs-trace" style="background:transparent;border:1px solid #3A2622;color:#E58C7F;padding:8px 14px;cursor:pointer;font-size:12px">Ver traza completa</button>
+                        <button type="button" class="hs-trace" @click="traceOpen = !traceOpen" style="background:transparent;border:1px solid #3A2622;color:#E58C7F;padding:8px 14px;cursor:pointer;font-size:12px">Ver traza completa</button>
                         <button type="button" class="hs-discard" @click="goQueue" style="background:transparent;border:1px solid #2A2B2F;color:#8E8D8A;padding:8px 14px;cursor:pointer;font-size:12px">Descartar historia</button>
                     </div>
+                    <div
+                        v-if="traceOpen"
+                        style="margin-top:11px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#E58C7F;line-height:1.6"
+                    >{{ selected?.story?.failed_message || s.error }}</div>
                 </div>
             </div>
         </div>

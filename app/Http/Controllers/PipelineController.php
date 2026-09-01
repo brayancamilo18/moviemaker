@@ -11,6 +11,7 @@ use App\Services\Llm\SpendReport;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
 use Carbon\CarbonInterface;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Inertia\Response;
@@ -65,6 +66,16 @@ final class PipelineController extends Controller
         $story->loadMissing('events');
 
         return $this->inertia->render('Pipeline', $this->page($active, $story));
+    }
+
+    public function state(Request $request): JsonResponse
+    {
+        $active = $this->activeStories();
+
+        return response()->json($this->page(
+            $active,
+            $this->pickSelected($active, $request->query('story')),
+        ));
     }
 
     /**
@@ -123,6 +134,7 @@ final class PipelineController extends Controller
     {
         $progress = $this->progress->get($story->id);
         $running = $this->runningRow($progress);
+        $queued = $this->queuedRow($progress);
         $failedRow = $this->failedRow($story, $progress);
         $jobsDone = $this->jobsDone($story);
 
@@ -137,7 +149,7 @@ final class PipelineController extends Controller
             ],
             'mode' => $story->mode->label(),
             'lore_name' => $story->lore_name,
-            'currentRow' => $this->currentRow($jobsDone, $running, $failedRow),
+            'currentRow' => $this->currentRow($jobsDone, $running ?? $queued, $failedRow),
             'failed' => $story->status === StoryStatus::Failed,
             'tone' => crc32($story->slug) % 256,
         ];
@@ -150,6 +162,7 @@ final class PipelineController extends Controller
     {
         $progress = $this->progress->get($story->id);
         $running = $this->runningRow($progress);
+        $queued = $this->queuedRow($progress);
         $failedRow = $this->failedRow($story, $progress);
         $jobsDone = $this->jobsDone($story);
         $windows = $this->statusWindows($story);
@@ -158,14 +171,20 @@ final class PipelineController extends Controller
 
         foreach (self::ROWS as $index => $row) {
             $number = $index + 1;
-            $state = $this->rowState($number, $row, $jobsDone, $running, $failedRow);
+            $state = $this->rowState($number, $row, $jobsDone, $running, $queued, $failedRow);
             $rows[] = [
                 'num' => sprintf('%02d', $number),
                 'name' => $row['name'],
+                'job' => $row['job'],
                 'state' => $state,
                 'progress' => $this->rowProgress($state, $progress, $running === $number),
                 'unit' => $this->rowUnit($number, $state, $story, $progress, $row['noun'], $running === $number),
-                'time' => $this->rowTime($row, $state, $windows),
+                'time' => $this->rowTime(
+                    $row,
+                    $state,
+                    $windows,
+                    $running === $number ? $progress['started_at'] ?? null : null,
+                ),
                 'error' => $failedRow === $number ? $story->failed_message : null,
             ];
         }
@@ -210,14 +229,37 @@ final class PipelineController extends Controller
     }
 
     /**
-     * @param  array{step: string, label: string, done: int, total: int, stage: string|null}|null  $progress
+     * The row a worker is actually executing right now. A job that is merely waiting
+     * in the queue is not running, however far along the story's status is.
+     *
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
      */
     private function runningRow(?array $progress): ?int
     {
-        if ($progress === null) {
+        if ($progress === null || $progress['queued']) {
             return null;
         }
 
+        return $this->progressRow($progress);
+    }
+
+    /**
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
+     */
+    private function queuedRow(?array $progress): ?int
+    {
+        if ($progress === null || ! $progress['queued']) {
+            return null;
+        }
+
+        return $this->progressRow($progress);
+    }
+
+    /**
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}  $progress
+     */
+    private function progressRow(array $progress): ?int
+    {
         foreach (self::ROWS as $index => $row) {
             if ($row['job'] !== $progress['step']) {
                 continue;
@@ -240,7 +282,7 @@ final class PipelineController extends Controller
     }
 
     /**
-     * @param  array{step: string, label: string, done: int, total: int, stage: string|null}|null  $progress
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
      */
     private function failedRow(Story $story, ?array $progress): ?int
     {
@@ -248,8 +290,8 @@ final class PipelineController extends Controller
             return null;
         }
 
-        if ($progress !== null) {
-            return $this->runningRow($progress);
+        if ($progress !== null && ($row = $this->progressRow($progress)) !== null) {
+            return $row;
         }
 
         return match ($story->failed_step) {
@@ -278,8 +320,8 @@ final class PipelineController extends Controller
             StoryStatus::Draft => 0,
             StoryStatus::ScriptReady => 1,
             StoryStatus::Narrated => 2,
-            StoryStatus::ImagesReady => 3,
-            StoryStatus::Mixed => 4,
+            StoryStatus::ImagesReady,
+            StoryStatus::Mixed => 3,
             StoryStatus::Rendered,
             StoryStatus::PendingReview,
             StoryStatus::ReadyToPublish,
@@ -292,7 +334,7 @@ final class PipelineController extends Controller
     /**
      * @param  array{job: string, stage: string|null, name: string, noun: string}  $row
      */
-    private function rowState(int $number, array $row, int $jobsDone, ?int $running, ?int $failedRow): string
+    private function rowState(int $number, array $row, int $jobsDone, ?int $running, ?int $queued, ?int $failedRow): string
     {
         if ($failedRow === $number) {
             return 'fallido';
@@ -302,13 +344,13 @@ final class PipelineController extends Controller
             return 'en curso';
         }
 
-        if ($this->rowComplete($row, $jobsDone, $running)) {
-            return 'hecho';
+        // A queued re-run beats "hecho": the step is about to be redone.
+        if ($queued === $number) {
+            return 'en cola';
         }
 
-        if ($running === null && $failedRow === null && $jobsDone < 5
-            && $this->currentRow($jobsDone, null, null) === $number) {
-            return 'en curso';
+        if ($this->rowComplete($row, $jobsDone, $running)) {
+            return 'hecho';
         }
 
         return 'en espera';
@@ -364,7 +406,7 @@ final class PipelineController extends Controller
     }
 
     /**
-     * @param  array{step: string, label: string, done: int, total: int, stage: string|null}|null  $progress
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
      */
     private function rowProgress(string $state, ?array $progress, bool $isRunning): float
     {
@@ -384,7 +426,7 @@ final class PipelineController extends Controller
     }
 
     /**
-     * @param  array{step: string, label: string, done: int, total: int, stage: string|null}|null  $progress
+     * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
      */
     private function rowUnit(
         int $number,
@@ -394,7 +436,7 @@ final class PipelineController extends Controller
         string $noun,
         bool $isRunning,
     ): string {
-        if ($state === 'en espera' || $state === 'fallido') {
+        if ($state === 'en espera' || $state === 'en cola' || $state === 'fallido') {
             return '—';
         }
 
@@ -430,10 +472,18 @@ final class PipelineController extends Controller
      * @param  array{job: string, stage: string|null, name: string, noun: string}  $row
      * @param  array<string, array{start: CarbonInterface, end: CarbonInterface|null}>  $windows
      */
-    private function rowTime(array $row, string $state, array $windows): string
+    private function rowTime(array $row, string $state, array $windows, ?int $startedAt): string
     {
-        if ($state === 'en espera') {
+        // A step that has not begun has no clock of its own; showing the status
+        // window would report the whole wait as if the step were working.
+        if ($state === 'en espera' || $state === 'en cola') {
             return '—';
+        }
+
+        // The running step times the work, not the queue it waited in: those two
+        // only agree while a worker is alive to pick the job up straight away.
+        if ($startedAt !== null) {
+            return $this->formatClock(now()->getTimestamp() - $startedAt);
         }
 
         $status = match ($row['job']) {
@@ -540,7 +590,12 @@ final class PipelineController extends Controller
     private function formatClock(float|int $seconds): string
     {
         $total = (int) floor(abs((float) $seconds));
+        $minutes = intdiv($total, 60);
 
-        return sprintf('%02d:%02d', intdiv($total, 60), $total % 60);
+        if ($minutes < 60) {
+            return sprintf('%02d:%02d', $minutes, $total % 60);
+        }
+
+        return sprintf('%d:%02d:%02d', intdiv($minutes, 60), $minutes % 60, $total % 60);
     }
 }
