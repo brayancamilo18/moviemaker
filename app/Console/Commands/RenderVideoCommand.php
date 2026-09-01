@@ -22,6 +22,7 @@ final class RenderVideoCommand extends Command
         {file : JSON del guion}
         {--from= : Reinicia desde clips, scenes, assemble o encode}
         {--keep-intermediates : Conserva clips, escenas y vídeo mudo}
+        {--keep-audio : No borra la narración ni la mezcla al terminar}
         {--no-grade : Codifica sin corrección de color, para comparar}
         {--dry-run : Imprime el plan y lo compara con el audio, sin renderizar}';
 
@@ -57,6 +58,7 @@ final class RenderVideoCommand extends Command
             $result = $this->render->run($story, $this->progressCallback(), [
                 'from' => $from,
                 'keep_intermediates' => (bool) $this->option('keep-intermediates'),
+                'keep_audio' => (bool) $this->option('keep-audio'),
                 'no_grade' => (bool) $this->option('no-grade'),
                 'dry_run' => (bool) $this->option('dry-run'),
             ]);
@@ -118,6 +120,8 @@ final class RenderVideoCommand extends Command
         if (! (bool) ($result['kept_intermediates'] ?? false)) {
             $this->comment('Intermedios borrados.');
         }
+
+        $this->renderPurge(is_array($result['purged'] ?? null) ? $result['purged'] : null);
 
         $this->printSummary(
             (float) $result['video_seconds'],
@@ -216,6 +220,22 @@ final class RenderVideoCommand extends Command
             'Barrido: %d intermedios huérfanos borrados, %.1f MiB liberados.',
             $swept['entries'],
             ($swept['bytes'] ?? 0) / 1048576,
+        ));
+    }
+
+    /**
+     * @param  array{files?: int, bytes?: int}|null  $purged
+     */
+    private function renderPurge(?array $purged): void
+    {
+        if ($purged === null || ($purged['files'] ?? 0) === 0) {
+            return;
+        }
+
+        $this->comment(sprintf(
+            'Depurado: %d artefacto(s) que el MP4 ya no necesita, %.1f MiB liberados.',
+            $purged['files'],
+            ($purged['bytes'] ?? 0) / 1048576,
         ));
     }
 

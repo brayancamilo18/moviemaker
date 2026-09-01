@@ -7,6 +7,7 @@ namespace App\Services\Pipeline;
 use App\DataObjects\Shot;
 use App\Models\Story;
 use App\Services\Ffmpeg\MediaProbe;
+use App\Services\Storage\RenderedStoryPurger;
 use App\Services\Storage\TempSweeper;
 use App\Services\Story\StoryValidator;
 use App\Services\Video\FinalEncoder;
@@ -44,6 +45,7 @@ final class RenderStep
         private SubtitleGenerator $subtitles,
         private StoryValidator $validator,
         private TempSweeper $sweeper,
+        private RenderedStoryPurger $purger,
         private Filesystem $files,
         private MediaProbe $probe,
         Repository $config,
@@ -57,7 +59,7 @@ final class RenderStep
 
     /**
      * @param  (callable(string, int, int): void)|null  $onProgress
-     * @param  array{from?: string|null, keep_intermediates?: bool, no_grade?: bool, dry_run?: bool}  $options
+     * @param  array{from?: string|null, keep_intermediates?: bool, no_grade?: bool, dry_run?: bool, keep_audio?: bool}  $options
      * @return array<string, mixed>
      */
     public function run(Story $story, ?callable $onProgress = null, array $options = []): array
@@ -198,6 +200,7 @@ final class RenderStep
         ]);
 
         return $base + [
+            'purged' => $this->purgeArtifacts($slug, $graded, $bytes, (bool) ($options['keep_audio'] ?? false)),
             'video_seconds' => $videoDuration,
             'bytes' => $bytes,
             'elapsed' => $elapsed,
@@ -211,6 +214,24 @@ final class RenderStep
             'kept_intermediates' => $keepIntermediates,
             'expected_duration' => $expected,
         ];
+    }
+
+    /**
+     * Con el MP4 escrito, la narración y la mezcla dejan de hacer falta y son casi 180 MB. Se salta
+     * cuando no hay vídeo que enseñar y cuando se pidió --no-grade, porque ese modo existe para
+     * comparar dos codificaciones y la segunda necesitaría el audio otra vez.
+     *
+     * @return array{files: int, bytes: int}
+     */
+    private function purgeArtifacts(string $slug, bool $graded, int $bytes, bool $keepAudio): array
+    {
+        $nothing = ['files' => 0, 'bytes' => 0];
+
+        if ($keepAudio || ! $graded || $bytes < 1 || ! $this->purger->enabled()) {
+            return $nothing;
+        }
+
+        return $this->purger->purge($slug);
     }
 
     private function bodyDuration(float $audioDuration): float

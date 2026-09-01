@@ -129,6 +129,7 @@ final class GenerateStoryCommand extends Command
                 $mode,
                 $lore['name'] ?? null,
             );
+            $this->renderDiscarded(is_array($result['discarded'] ?? null) ? $result['discarded'] : []);
             $bar->display();
             $bar->advance();
         }
@@ -231,6 +232,27 @@ final class GenerateStoryCommand extends Command
                 $review instanceof StoryReview ? $this->colorVerdict($review->verdict) : '—',
             ]],
         );
+    }
+
+    /**
+     * @param  list<array{title: string, score: ?int, verdict: ?string}>  $discarded
+     */
+    private function renderDiscarded(array $discarded): void
+    {
+        if ($discarded === []) {
+            return;
+        }
+
+        $this->line('Descartados (no se han escrito en disco):');
+
+        foreach ($discarded as $candidate) {
+            $this->line(sprintf(
+                '  <fg=gray>%s</> — score %s, %s',
+                $candidate['title'],
+                $candidate['score'] === null ? '—' : (string) $candidate['score'],
+                $candidate['verdict'] ?? 'sin revisión',
+            ));
+        }
     }
 
     private function colorVerdict(string $verdict): string

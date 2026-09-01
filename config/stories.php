@@ -74,6 +74,10 @@ return [
         'language' => env('STORY_LANGUAGE', 'en'),
         'default_mode' => 'folklore',
         'accent' => 'neutral_american',
+        // Guiones que se generan por historia para quedarse con el de mejor puntuación. Cada
+        // candidato es una generación y una revisión, así que el gasto de LLM va con este número.
+        // Sin revisión no hay puntuación con la que elegir y se genera uno solo.
+        'candidates' => 3,
         'outro' => [
             'enabled' => env('STORY_OUTRO_ENABLED', true),
             'scene_order' => 9000,
@@ -229,6 +233,25 @@ return [
     'image_style_suffix' => 'cinematic horror still, desaturated earth tones, heavy fog, 35mm film grain, low key lighting, rural Iberian or Latin American setting',
 
     'output_path' => 'stories',
+
+    // Lo que deja de hacer falta dentro de storage/app/stories/{slug}/ cuando el MP4 ya existe.
+    // Se borra al terminar bien el render, salvo --keep-audio. Son ~178 MB por historia, casi todo
+    // en los dos WAV. Los JSON, el SRT y los créditos no entran: pesan nada y son el diagnóstico.
+    // Rehacerlos cuesta: los MP3 y la mezcla salen de narration.wav, pero narration.wav exige
+    // volver a sintetizar con el sidecar.
+    'purge' => [
+        'enabled' => true,
+        // Nombres sueltos, nunca rutas: el purgador rechaza cualquier cosa con separador o «..».
+        'artifacts' => [
+            'narration.wav',
+            'narration.mp3',
+            'narration_mix.wav',
+            'narration_mix.mp3',
+        ],
+        'patterns' => [
+            'contact-sheet-*.jpg',
+        ],
+    ],
 
     // Intermedios que un Ctrl-C, un OOM o un SIGKILL dejan huérfanos. Los buckets son una lista
     // explícita relativa a storage/app: nunca un glob sobre todo tmp, y nunca fuera de storage/app.
