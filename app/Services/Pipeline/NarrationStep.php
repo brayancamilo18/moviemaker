@@ -64,7 +64,7 @@ final class NarrationStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array{voice?: string, speed?: float, skip_cache?: bool, skip_timings?: bool, timings_only?: bool}  $options
      * @return array<string, mixed>
      */
@@ -252,7 +252,7 @@ final class NarrationStep
     /**
      * @param  list<NarrationSentence>  $sentences
      * @param  array{voice: string, speed: float, skip_cache: bool}  $options
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @return list<array{path: string, pauseAfter: float}>
      */
     private function synthesizeSentences(
@@ -379,12 +379,12 @@ final class NarrationStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
     private function progress(?callable $onProgress, string $label, int $done, int $total): void
     {
         if ($onProgress !== null) {
-            $onProgress($label, $done, $total);
+            $onProgress($label, $done, $total, null);
         }
     }
 }

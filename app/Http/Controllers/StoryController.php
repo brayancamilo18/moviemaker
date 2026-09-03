@@ -108,16 +108,6 @@ final class StoryController extends Controller
         return redirect()->route('pipeline.show', $story);
     }
 
-    public function pipeline(Story $story): Response
-    {
-        return $this->inertia->render('Pipeline', [
-            'story' => $story,
-            'progress' => $this->progress->get($story->id),
-            'snapshot' => $this->snapshot($story),
-            'queue' => $this->queue->status(),
-        ]);
-    }
-
     public function review(Story $story): Response
     {
         return $this->inertia->render('Review', [
@@ -150,19 +140,32 @@ final class StoryController extends Controller
         return response()->json($this->snapshot($story->fresh() ?? $story));
     }
 
-    public function retry(Story $story): RedirectResponse
+    public function retry(Request $request, Story $story): RedirectResponse
     {
-        if ($story->status !== StoryStatus::Failed) {
-            abort(422, 'La historia no está fallida.');
-        }
-
-        $step = (string) $story->failed_step;
+        $step = (string) $request->input('step', $story->failed_step ?? '');
 
         if (! in_array($step, PipelineDispatcher::STEPS, true)) {
-            abort(422, 'No hay un paso fallido que reintentar.');
+            abort(422, 'No hay un paso que reintentar.');
         }
 
-        $this->dispatcher->runFrom($story, $step, chain: false);
+        $start = $this->startStatusFor($step);
+
+        if ($story->status !== $start) {
+            if (! $story->status->canTransitionTo($start)) {
+                abort(422, 'Esta historia no se puede reanudar desde ese paso.');
+            }
+
+            $story->transitionTo($start, 'Reejecución: '.$step);
+        }
+
+        if ($story->failed_step !== null || $story->failed_message !== null) {
+            $story->update([
+                'failed_step' => null,
+                'failed_message' => null,
+            ]);
+        }
+
+        $this->dispatcher->runFrom($story->fresh() ?? $story, $step, chain: false);
 
         return redirect()->route('pipeline.show', $story);
     }
@@ -289,6 +292,18 @@ final class StoryController extends Controller
         ];
     }
 
+    private function startStatusFor(string $step): StoryStatus
+    {
+        return match ($step) {
+            'script' => StoryStatus::Draft,
+            'narration' => StoryStatus::ScriptReady,
+            'images' => StoryStatus::Narrated,
+            'sound' => StoryStatus::ImagesReady,
+            'render' => StoryStatus::Mixed,
+            default => throw new InvalidArgumentException("Paso de pipeline desconocido: {$step}."),
+        };
+    }
+
     private function loreName(string $slug): string
     {
         foreach ($this->prompts->loreEntries() as $entry) {
@@ -301,7 +316,7 @@ final class StoryController extends Controller
     }
 
     /**
-     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}, preflight: array{step: string|null, checks: list<array{name: string, ok: bool, detail: string, fix: string}>}}
+     * @return array{status: string, status_label: string, status_color: string, progress: array{step: string, label: string, done: int, total: int, stage: string|null}|null, failed_step: string|null, failed_message: string|null, title: string, verdict: string|null, score: float|null, scene_count: int|null, used_fallback: bool, created_at: string|null, stale_draft_seconds: int, queue: array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}, preflight: array{step: string|null, checks: list<array{name: string, ok: bool, detail: string, fix: string}>}}
      */
     private function snapshot(Story $story): array
     {

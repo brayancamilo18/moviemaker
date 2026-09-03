@@ -58,7 +58,7 @@ final class RenderStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @param  array{from?: string|null, keep_intermediates?: bool, no_grade?: bool, dry_run?: bool, keep_audio?: bool}  $options
      * @return array<string, mixed>
      */
@@ -283,7 +283,7 @@ final class RenderStep
 
     /**
      * @param  list<Shot>  $shots
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @return array{paths: array<string, string>, skipped: int}
      */
     private function renderClips(array $shots, string $workDir, ?callable $onProgress): array
@@ -322,7 +322,7 @@ final class RenderStep
     /**
      * @param  array<int, list<Shot>>  $grouped
      * @param  array<string, string>  $clipPaths
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      * @return array{paths: list<string>, skipped: int}
      */
     private function composeScenes(array $grouped, array $clipPaths, string $workDir, ?callable $onProgress): array
@@ -367,7 +367,7 @@ final class RenderStep
 
     /**
      * @param  list<string>  $scenePaths
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
     private function assembleVideo(
         array $scenePaths,
@@ -397,7 +397,7 @@ final class RenderStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
     private function encodeVideo(
         string $silentPath,
@@ -720,12 +720,12 @@ final class RenderStep
     }
 
     /**
-     * @param  (callable(string, int, int): void)|null  $onProgress
+     * @param  (callable(string, int, int, ?string): void)|null  $onProgress
      */
     private function progress(?callable $onProgress, string $label, int $done, int $total): void
     {
         if ($onProgress !== null) {
-            $onProgress($label, $done, $total);
+            $onProgress($label, $done, $total, null);
         }
     }
 }

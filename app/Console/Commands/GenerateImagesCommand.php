@@ -128,13 +128,13 @@ final class GenerateImagesCommand extends Command
     }
 
     /**
-     * @return (callable(string, int, int): void)
+     * @return (callable(string, int, int, ?string): void)
      */
     private function progressCallback(): callable
     {
         $bar = null;
 
-        return function (string $label, int $done, int $total) use (&$bar): void {
+        return function (string $label, int $done, int $total, ?string $stage = null) use (&$bar): void {
             if ($bar === null) {
                 $bar = $this->output->createProgressBar(max(1, $total));
                 $bar->setFormat('%current%/%max% [%bar%] %percent:3s%% restante %remaining%  %message%');
