@@ -64,6 +64,57 @@ final class CoverageAuditorTest extends TestCase
         $this->assertTrue($this->contains($report->blocking, '0.300'));
     }
 
+    public function test_a_gap_between_the_cold_open_and_the_story_is_blocking(): void
+    {
+        $ambience = $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind'], 3.0);
+        $coldOpen = (int) config('stories.story.cold_open.scene_order');
+        $this->writeNarrationAndTimings(16.0, [
+            ['order' => $coldOpen, 'start' => 0.0, 'end' => 3.7, 'duration' => 3.7],
+            ['order' => 1, 'start' => 4.0, 'end' => 8.0, 'duration' => 4.0],
+            ['order' => 2, 'start' => 8.0, 'end' => 16.0, 'duration' => 8.0],
+        ]);
+
+        $report = $this->app->make(CoverageAuditor::class)->audit(
+            $this->story(),
+            [
+                $this->cue('ambience.'.$coldOpen, 'ambience', $ambience, $coldOpen),
+                $this->cue('ambience.1', 'ambience', $ambience, 1),
+                $this->cue('ambience.2', 'ambience', $ambience, 2),
+            ],
+            $this->narrationPath(),
+        );
+
+        $this->assertFalse($report->passed);
+        $this->assertTrue($this->contains($report->blocking, 'Hueco'));
+        $this->assertTrue($this->contains($report->blocking, (string) $coldOpen));
+    }
+
+    public function test_an_opening_without_holes_passes(): void
+    {
+        $ambience = $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind'], 3.0);
+        $coldOpen = (int) config('stories.story.cold_open.scene_order');
+        $intro = (int) config('stories.story.intro.scene_order');
+        $this->writeNarrationAndTimings(16.0, [
+            ['order' => $coldOpen, 'start' => 0.0, 'end' => 3.0, 'duration' => 3.0],
+            ['order' => $intro, 'start' => 3.0, 'end' => 6.0, 'duration' => 3.0],
+            ['order' => 1, 'start' => 6.0, 'end' => 10.0, 'duration' => 4.0],
+            ['order' => 2, 'start' => 10.0, 'end' => 16.0, 'duration' => 6.0],
+        ]);
+
+        $report = $this->app->make(CoverageAuditor::class)->audit(
+            $this->story(),
+            [
+                $this->cue('ambience.'.$coldOpen, 'ambience', $ambience, $coldOpen),
+                $this->cue('ambience.1', 'ambience', $ambience, 1),
+                $this->cue('ambience.2', 'ambience', $ambience, 2),
+            ],
+            $this->narrationPath(),
+        );
+
+        $this->assertSame([], $report->blocking);
+        $this->assertTrue($report->passed);
+    }
+
     public function test_resolved_file_deleted_before_audit_is_blocking(): void
     {
         $first = $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind'], 3.0);

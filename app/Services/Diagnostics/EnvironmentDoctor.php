@@ -49,6 +49,8 @@ final class EnvironmentDoctor
 
     private readonly string $anthropicProbe;
 
+    private readonly string $ttsDriver;
+
     public function __construct(
         private Filesystem $files,
         private TextToSpeech $tts,
@@ -75,6 +77,7 @@ final class EnvironmentDoctor
         $this->workerCommand = (string) $config->get('stories.doctor.worker_command');
         $this->geminiProbe = (string) $config->get('stories.doctor.gemini_probe');
         $this->anthropicProbe = (string) $config->get('stories.doctor.anthropic_probe');
+        $this->ttsDriver = (string) $config->get('stories.tts.driver');
     }
 
     /**
@@ -179,7 +182,21 @@ final class EnvironmentDoctor
     private function queue(): array
     {
         $connection = (string) $this->config->get('queue.default');
-        $status = $this->queue->status();
+
+        // Sin database.sqlite en disco esto lanzaba una QueryException que se llevaba por delante
+        // el comando entero, y con él las comprobaciones de binarios, whisper y voz que sí se
+        // podían hacer. Un diagnóstico que no arranca porque algo está roto no sirve de nada.
+        try {
+            $status = $this->queue->status();
+        } catch (Throwable $exception) {
+            return $this->check(
+                'cola',
+                false,
+                false,
+                'No se puede consultar la cola: '.$exception->getMessage(),
+                'php artisan migrate',
+            );
+        }
 
         if ($connection !== 'database') {
             return $this->check(
@@ -387,6 +404,10 @@ final class EnvironmentDoctor
      */
     private function sidecar(): array
     {
+        if ($this->ttsDriver === 'inworld') {
+            return $this->inworldVoice();
+        }
+
         try {
             $available = $this->tts->isAvailable();
         } catch (Throwable $exception) {
@@ -410,6 +431,33 @@ final class EnvironmentDoctor
         }
 
         return $this->check('sidecar de Kokoro', true, true, 'Responde /health con el modelo cargado.');
+    }
+
+    /**
+     * Con Inworld no hay proceso que levantar: lo único que puede faltar es la credencial. No se
+     * sintetiza nada para comprobarlo porque el tramo gratuito se mide en caracteres.
+     *
+     * @return array{name: string, ok: bool, blocking: bool, status: string, detail: string, fix: string}
+     */
+    private function inworldVoice(): array
+    {
+        $fix = 'Añade INWORLD_API_KEY al .env y ejecuta php artisan config:clear.';
+
+        try {
+            $available = $this->tts->isAvailable();
+        } catch (Throwable $exception) {
+            return $this->check('API de Inworld', false, true, 'No se pudo comprobar: '.$exception->getMessage(), $fix);
+        }
+
+        if (! $available) {
+            return $this->check('API de Inworld', false, true, 'INWORLD_API_KEY está vacía.', $fix);
+        }
+
+        return $this->check('API de Inworld', true, true, sprintf(
+            'Credencial definida. Voz %s con %s.',
+            (string) $this->config->get('stories.tts.voice'),
+            (string) $this->config->get('stories.tts.inworld.model'),
+        ));
     }
 
     /**

@@ -356,7 +356,13 @@ final class CoverageAuditor
                 continue;
             }
 
-            $order = (int) ($row['order'] ?? 0);
+            // El cold open va en un orden negativo, así que aquí no se puede exigir que sea
+            // positivo: una escena sin orden declarado es lo único que sobra.
+            if (! isset($row['order'])) {
+                continue;
+            }
+
+            $order = (int) $row['order'];
             $start = (float) ($row['start'] ?? 0);
             $end = (float) ($row['end'] ?? 0);
             $duration = (float) ($row['duration'] ?? 0);
@@ -365,7 +371,7 @@ final class CoverageAuditor
                 $end = $start + $duration;
             }
 
-            if ($order < 1 || $end <= $start) {
+            if ($end <= $start) {
                 continue;
             }
 

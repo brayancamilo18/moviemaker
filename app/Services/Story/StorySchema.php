@@ -22,6 +22,25 @@ final class StorySchema
                     'type' => 'STRING',
                     'description' => 'Opening hook for the first 15 seconds, in English. Start on the most unsettling image. Never introductions or context.',
                 ],
+                'coldOpen' => [
+                    'type' => 'OBJECT',
+                    'description' => 'The teaser spoken before anything else, in English. Newly written text, never a sentence copied from the scenes.',
+                    'properties' => [
+                        'narration' => [
+                            'type' => 'STRING',
+                            'description' => 'Two to four spoken sentences in English, 25 to 55 words, that put the listener inside the worst moment of the story without resolving it. First person, past tense, same voice as the narration. Never copy a sentence from any scene word for word.',
+                        ],
+                        'visualSummary' => [
+                            'type' => 'STRING',
+                            'description' => 'What the cold open looks like, in English, 10 to 15 words. Context for the shot director. Not an image prompt.',
+                        ],
+                    ],
+                    'required' => ['narration', 'visualSummary'],
+                ],
+                'hookLine' => [
+                    'type' => 'STRING',
+                    'description' => 'One or two sentences in English, spoken to the listener in second person after the channel intro, that ask what they would have done in this story. Under 35 words. No spoilers, no answer, no title drop.',
+                ],
                 'description' => [
                     'type' => 'STRING',
                     'description' => 'YouTube description in English. Atmosphere only. No ending spoilers.',
@@ -104,7 +123,7 @@ final class StorySchema
                     ],
                 ],
             ],
-            'required' => ['title', 'hook', 'description', 'tags', 'thumbnailPrompt', 'pronunciations', 'scenes'],
+            'required' => ['title', 'hook', 'coldOpen', 'hookLine', 'description', 'tags', 'thumbnailPrompt', 'pronunciations', 'scenes'],
         ];
     }
 }

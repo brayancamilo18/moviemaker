@@ -24,7 +24,8 @@ final class StoryValidator
 
     private const SHOT_SUM_TOLERANCE = 0.01;
 
-    private const OUTRO_WORD_COVERAGE = 0.6;
+    /** Palabras del texto fijo del canal que tienen que oírse para dar el bloque por sintetizado. */
+    private const CHANNEL_WORD_COVERAGE = 0.6;
 
     private const OUTRO_END_SLACK = 0.5;
 
@@ -42,6 +43,12 @@ final class StoryValidator
 
     private readonly string $outroText;
 
+    private readonly bool $introEnabled;
+
+    private readonly int $introSceneOrder;
+
+    private readonly string $introText;
+
     public function __construct(
         private NarrationClock $clock,
         private TranscriptTimer $timer,
@@ -57,6 +64,9 @@ final class StoryValidator
         $this->outroEnabled = (bool) $config->get('stories.story.outro.enabled');
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
         $this->outroText = trim((string) $config->get('stories.story.outro.text'));
+        $this->introEnabled = (bool) $config->get('stories.story.intro.enabled');
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->introText = trim((string) $config->get('stories.story.intro.text'));
     }
 
     /**
@@ -81,6 +91,7 @@ final class StoryValidator
             $this->checkRevealTiming($context),
             $this->checkEffectsInShots($context),
             $this->checkEffectAnchors($context),
+            $this->checkIntroPresent($context),
             $this->checkOutroPresent($context),
         ];
 
@@ -106,6 +117,16 @@ final class StoryValidator
     public function outroCheck(string $slug): array
     {
         return $this->checkOutroPresent($this->context($slug));
+    }
+
+    /**
+     * La misma comprobación de la careta que hace validate(), para las previas del render.
+     *
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    public function introCheck(string $slug): array
+    {
+        return $this->checkIntroPresent($this->context($slug));
     }
 
     /**
@@ -657,7 +678,7 @@ final class StoryValidator
             );
         }
 
-        $sentences = $this->outroSentences($context);
+        $sentences = $this->sceneSentences($context, $this->outroSceneOrder);
 
         if ($sentences === []) {
             return $this->fail(
@@ -672,12 +693,12 @@ final class StoryValidator
         }
 
         $expected = $this->tokens($this->outroText);
-        $heard = $this->outroHeardTokens($sentences);
+        $heard = $this->heardTokens($sentences);
         $covered = $this->coveredWordCount($expected, $heard);
         $expectedCount = count($expected);
         $ratio = $expectedCount === 0 ? 1.0 : $covered / $expectedCount;
 
-        if ($ratio < self::OUTRO_WORD_COVERAGE) {
+        if ($ratio < self::CHANNEL_WORD_COVERAGE) {
             return $this->fail(
                 'outro_present',
                 $label,
@@ -781,15 +802,135 @@ final class StoryValidator
     }
 
     /**
+     * La careta es texto fijo del canal: o está en el audio y en un solo plano, o el vídeo arranca
+     * de golpe con la historia. Desactivarla sigue siendo posible, pero deja un aviso.
+     *
+     * El gancho que el LLM escribe para cada historia va detrás de la presentación y no se cuenta
+     * aquí: lo que se verifica es que el bloque fijo se sintetizó, no lo que dijo esta historia.
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{id: string, label: string, status: 'ok'|'fail'|'warn', detail: string, blocking: bool}
+     */
+    private function checkIntroPresent(array $context): array
+    {
+        $label = 'La careta del canal está en el audio y en un solo plano';
+
+        if (! $this->introEnabled) {
+            return $this->warn(
+                'intro_present',
+                $label,
+                'La careta está desactivada. El vídeo empezará de golpe con la narración.',
+            );
+        }
+
+        if (is_string($context['timingsError'] ?? null)) {
+            return $this->fail('intro_present', $label, 'La careta no llegó al audio. '.(string) $context['timingsError'], true);
+        }
+
+        $sentences = $this->sceneSentences($context, $this->introSceneOrder);
+
+        if ($sentences === []) {
+            return $this->fail(
+                'intro_present',
+                $label,
+                sprintf(
+                    'La careta no llegó al audio: timings.json no tiene frases de la escena %d.',
+                    $this->introSceneOrder,
+                ),
+                true,
+            );
+        }
+
+        $expected = $this->tokens($this->introText);
+        $covered = $this->coveredWordCount($expected, $this->heardTokens($sentences));
+        $expectedCount = count($expected);
+        $ratio = $expectedCount === 0 ? 1.0 : $covered / $expectedCount;
+
+        if ($ratio < self::CHANNEL_WORD_COVERAGE) {
+            return $this->fail(
+                'intro_present',
+                $label,
+                sprintf(
+                    'La careta se sintetizó a medias: %d/%d palabras (%.0f%%).',
+                    $covered,
+                    $expectedCount,
+                    $ratio * 100,
+                ),
+                true,
+            );
+        }
+
+        if (is_string($context['shotsError'] ?? null)) {
+            return $this->fail('intro_present', $label, (string) $context['shotsError'], true);
+        }
+
+        $introShots = [];
+
+        foreach ($this->shots($context) as $shot) {
+            if ($shot->isIntro) {
+                $introShots[] = $shot;
+            }
+        }
+
+        if (count($introShots) !== 1) {
+            return $this->fail(
+                'intro_present',
+                $label,
+                sprintf('Debe haber exactamente un plano de careta; hay %d.', count($introShots)),
+                true,
+            );
+        }
+
+        $firstStart = $sentences[0]['start'];
+        $lastEnd = 0.0;
+
+        foreach ($sentences as $sentence) {
+            $firstStart = min($firstStart, $sentence['start']);
+            $lastEnd = max($lastEnd, $sentence['end']);
+        }
+
+        $shot = $introShots[0];
+
+        if ($shot->start > $firstStart + 0.0005 || $shot->end + 0.0005 < $lastEnd) {
+            return $this->fail(
+                'intro_present',
+                $label,
+                sprintf(
+                    'El plano de careta #%d (%.3f–%.3f) no cubre la presentación (%.3f–%.3f).',
+                    $shot->order,
+                    $shot->start,
+                    $shot->end,
+                    $firstStart,
+                    $lastEnd,
+                ),
+                true,
+            );
+        }
+
+        return $this->ok(
+            'intro_present',
+            $label,
+            sprintf(
+                'Escena %d: %d frases, %d/%d palabras, plano #%d.',
+                $this->introSceneOrder,
+                count($sentences),
+                $covered,
+                $expectedCount,
+                $shot->order,
+            ),
+        );
+    }
+
+    /**
      * @param  array<string, mixed>  $context
      * @return list<array{start: float, end: float, alignment: string, sceneOrder: int, text: string, words: list<NarrationWord>}>
      */
-    private function outroSentences(array $context): array
+    private function sceneSentences(array $context, int $sceneOrder): array
     {
         $found = [];
 
         foreach ($this->timingSentences($context) as $sentence) {
-            if ($sentence['sceneOrder'] === $this->outroSceneOrder) {
+            if ($sentence['sceneOrder'] === $sceneOrder) {
                 $found[] = $sentence;
             }
         }
@@ -801,7 +942,7 @@ final class StoryValidator
      * @param  list<array{words: list<NarrationWord>}>  $sentences
      * @return list<string>
      */
-    private function outroHeardTokens(array $sentences): array
+    private function heardTokens(array $sentences): array
     {
         $tokens = [];
 
@@ -1086,7 +1227,7 @@ final class StoryValidator
     }
 
     /**
-     * Planos de la historia, sin el cierre fijo del canal.
+     * Planos de la historia, sin la careta ni el cierre fijos del canal.
      *
      * @param  array<string, mixed>  $context
      * @return list<Shot>
@@ -1095,7 +1236,7 @@ final class StoryValidator
     {
         return array_values(array_filter(
             $this->shots($context),
-            static fn (Shot $shot): bool => ! $shot->isOutro,
+            static fn (Shot $shot): bool => ! $shot->isOutro && ! $shot->isIntro,
         ));
     }
 

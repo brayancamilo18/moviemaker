@@ -74,6 +74,7 @@ final readonly class PlannedShot
                 characterSlugs: $shot->characterSlugs,
                 imagePath: $imagePath,
                 isOutro: $shot->isOutro,
+                isIntro: $shot->isIntro,
             ),
             prompt: $prompt,
             seed: $seed,

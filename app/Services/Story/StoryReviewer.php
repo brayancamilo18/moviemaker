@@ -42,6 +42,7 @@ Your job is a cold critical pass:
 - Flag phrases a native English speaker would not say that way.
 - Flag horror clichés that have been worn thin.
 - Flag scenes where tension sags.
+- Judge the opening as hard as the story: coldOpen must land in its first sentence and must not repeat a line from the scenes, and hookLine must be a real question to the listener, not a summary. Report a weak one under clichedElements.
 - Flag words and constructions a TTS engine will mispronounce.
 
 Rules:

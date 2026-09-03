@@ -29,6 +29,13 @@ final class MusicPlacer
 
     private readonly float $climaxFadeOut;
 
+    /**
+     * Escenas que no son historia: cold open, careta y cierre. El gancho musical no las cubre.
+     *
+     * @var list<int>
+     */
+    private readonly array $nonStoryScenes;
+
     private readonly string $ffmpeg;
 
     private readonly int $nice;
@@ -49,6 +56,11 @@ final class MusicPlacer
         $this->climaxTail = (float) $config->get('stories.audio.music.climax_tail_seconds', 8.0);
         $this->climaxFadeIn = (float) $config->get('stories.audio.music.climax_fade_in', 6.0);
         $this->climaxFadeOut = (float) $config->get('stories.audio.music.climax_fade_out', 5.0);
+        $this->nonStoryScenes = [
+            (int) $config->get('stories.story.cold_open.scene_order'),
+            (int) $config->get('stories.story.intro.scene_order'),
+            (int) $config->get('stories.story.outro.scene_order'),
+        ];
         $this->ffmpeg = (string) $config->get('stories.ffmpeg.binary');
         $this->nice = (int) $config->get('stories.ffmpeg.nice');
         $this->timeout = (float) $config->get('stories.ffmpeg.timeout');
@@ -69,19 +81,19 @@ final class MusicPlacer
         }
 
         $total = $this->totalDuration($timings);
-        $firstEnd = $this->firstSceneEnd($timings);
+        $first = $this->firstStoryWindow($timings);
         $tags = $this->musicTags($story);
         $query = $tags !== [] ? implode(' ', $tags) : 'dark ambient drone';
         $tracks = [];
         $used = [];
 
-        if ($firstEnd !== null && $firstEnd > 0.0) {
+        if ($first !== null && $first['end'] > $first['start']) {
             $hook = $this->track(
                 $tags,
                 $query,
                 $used,
-                startAt: 0.0,
-                endAt: $firstEnd,
+                startAt: $first['start'],
+                endAt: $first['end'],
                 fadeIn: 0.0,
                 fadeOut: $this->hookFadeOut,
                 label: 'gancho',
@@ -195,17 +207,23 @@ final class MusicPlacer
     }
 
     /**
+     * Primera escena de la historia. El gancho entra ahí y no antes: el cold open y la careta se
+     * quedan en seco a propósito, que es lo que hace que la entrada de la historia se note.
+     *
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
+     * @return array{start: float, end: float}|null
      */
-    private function firstSceneEnd(array $timings): ?float
+    private function firstStoryWindow(array $timings): ?array
     {
-        $windows = $this->sceneWindows($timings);
+        foreach ($this->sceneWindows($timings) as $window) {
+            if (in_array($window['order'], $this->nonStoryScenes, true)) {
+                continue;
+            }
 
-        if ($windows === []) {
-            return null;
+            return ['start' => $window['start'], 'end' => $window['end']];
         }
 
-        return $windows[0]['end'];
+        return null;
     }
 
     /**

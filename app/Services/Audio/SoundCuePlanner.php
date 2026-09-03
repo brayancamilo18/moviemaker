@@ -21,6 +21,7 @@ final class SoundCuePlanner
             SceneAmbience::INTENSITY_HEAVY => (float) $config->get('stories.audio.ambience.intensity_lufs.heavy', -27.0),
         ];
         $this->musicLufs = (float) $config->get('stories.audio.mix.music_lufs', -30.0);
+        $this->coldOpenSceneOrder = (int) $config->get('stories.story.cold_open.scene_order');
     }
 
     /**
@@ -29,6 +30,8 @@ final class SoundCuePlanner
     private readonly array $intensityLufs;
 
     private readonly float $musicLufs;
+
+    private readonly int $coldOpenSceneOrder;
 
     /**
      * @param  array{scenes?: list<array<string, mixed>>}  $timings
@@ -39,7 +42,7 @@ final class SoundCuePlanner
         $cues = [];
         $durations = $this->sceneDurations($timings);
 
-        foreach ($story->scenes as $scene) {
+        foreach ($story->narrativeScenes($this->coldOpenSceneOrder) as $scene) {
             $spec = $this->ambienceSpec($story, $scene);
             $duration = $durations[$scene->order] ?? 0.0;
             $cues[] = [

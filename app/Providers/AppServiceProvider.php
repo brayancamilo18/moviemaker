@@ -19,6 +19,7 @@ use App\Services\Llm\GeminiClient;
 use App\Services\Llm\LlmUsageMeter;
 use App\Services\Llm\ProviderHealth;
 use App\Services\Llm\ProviderHealthStore;
+use App\Services\Tts\InworldTts;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
@@ -66,18 +67,15 @@ class AppServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(TextToSpeech::class, function (Application $app): TextToSpeech {
-            /** @var array{base_url: string, voice: string, speed: float, timeout: int, cache_path: string} $tts */
-            $tts = $app->make('config')->get('stories.tts');
+            $driver = (string) $app->make('config')->get('stories.tts.driver');
 
-            return new KokoroTts(
-                http: $app->make(Factory::class),
-                files: $app->make(Filesystem::class),
-                baseUrl: rtrim($tts['base_url'], '/'),
-                voice: $tts['voice'],
-                speed: (float) $tts['speed'],
-                timeout: (int) $tts['timeout'],
-                cacheDirectory: storage_path('app/'.$tts['cache_path']),
-            );
+            return match ($driver) {
+                'kokoro' => $this->kokoro($app),
+                'inworld' => $this->inworld($app),
+                default => throw new InvalidArgumentException(
+                    "Motor de voz desconocido: {$driver}.",
+                ),
+            };
         });
 
         $this->app->singleton(FreesoundClient::class, function (Application $app): FreesoundClient {
@@ -120,6 +118,64 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         //
+    }
+
+    private function kokoro(Application $app): KokoroTts
+    {
+        /** @var array{base_url: string, voice: string, speed: float, timeout: int, cache_path: string} $tts */
+        $tts = $app->make('config')->get('stories.tts');
+
+        return new KokoroTts(
+            http: $app->make(Factory::class),
+            files: $app->make(Filesystem::class),
+            baseUrl: rtrim($tts['base_url'], '/'),
+            voice: $tts['voice'],
+            speed: (float) $tts['speed'],
+            timeout: (int) $tts['timeout'],
+            cacheDirectory: storage_path('app/'.$tts['cache_path']),
+        );
+    }
+
+    private function inworld(Application $app): InworldTts
+    {
+        /** @var array{voice: string, speed: float} $tts */
+        $tts = $app->make('config')->get('stories.tts');
+
+        /** @var array{api_key: ?string, base_url: string, model: string, language: string, delivery_mode: string, instruction: string, sample_rate: int, enhance_generation: bool, timeout: int, cache_path: string, max_characters: int, min_speed: float, max_speed: float, retry: array{times: int, sleep_ms: int, statuses: list<int>}, trim: array{enabled: bool, threshold_db: float, guard_seconds: float, cache_path: string}} $inworld */
+        $inworld = $app->make('config')->get('stories.tts.inworld');
+
+        /** @var array{binary: string, timeout: int} $ffmpeg */
+        $ffmpeg = $app->make('config')->get('stories.ffmpeg');
+
+        return new InworldTts(
+            http: $app->make(Factory::class),
+            files: $app->make(Filesystem::class),
+            logger: $app->make(LoggerInterface::class),
+            apiKey: (string) $inworld['api_key'],
+            baseUrl: rtrim($inworld['base_url'], '/'),
+            model: $inworld['model'],
+            voice: $tts['voice'],
+            speed: (float) $tts['speed'],
+            language: $inworld['language'],
+            deliveryMode: $inworld['delivery_mode'],
+            instruction: $inworld['instruction'],
+            sampleRate: (int) $inworld['sample_rate'],
+            enhanceGeneration: (bool) $inworld['enhance_generation'],
+            timeout: (int) $inworld['timeout'],
+            cacheDirectory: storage_path('app/'.$inworld['cache_path']),
+            maxCharacters: (int) $inworld['max_characters'],
+            minSpeed: (float) $inworld['min_speed'],
+            maxSpeed: (float) $inworld['max_speed'],
+            retryTimes: (int) $inworld['retry']['times'],
+            retrySleepMs: (int) $inworld['retry']['sleep_ms'],
+            retryStatuses: array_values(array_map('intval', $inworld['retry']['statuses'])),
+            ffmpegBinary: $ffmpeg['binary'],
+            ffmpegTimeout: (int) $ffmpeg['timeout'],
+            trimSilence: (bool) $inworld['trim']['enabled'],
+            trimThresholdDb: (float) $inworld['trim']['threshold_db'],
+            trimGuardSeconds: (float) $inworld['trim']['guard_seconds'],
+            trimmedDirectory: storage_path('app/'.$inworld['trim']['cache_path']),
+        );
     }
 
     private function llmClient(Application $app, string $provider): JsonLlm

@@ -1,18 +1,29 @@
 {
-    "title": "La casa dejó de respirar",
-    "hook": "Bajé las escaleras y la casa dejó de respirar.",
-    "description": "Una casa en silencio absoluto esconde algo que todavía me espera al final del pasillo.",
+    "title": "The House Stopped Breathing",
+    "hook": "I went down the stairs and the house stopped breathing.",
+    "coldOpen": {
+        "narration": "Something crossed the hallway while I stood on the stairs. I did not look down.",
+        "visualSummary": "A dark hallway seen from halfway down a staircase"
+    },
+    "hookLine": "How long would you have stayed on those stairs, listening?",
+    "description": "A house in absolute silence keeps something that is still waiting for me at the end of the hallway.",
     "tags": [
-        "terror psicológico",
-        "casa encantada",
-        "narración",
-        "historia de terror"
+        "psychological horror",
+        "haunted house",
+        "narration",
+        "horror story"
     ],
     "thumbnailPrompt": "A decaying house hallway in heavy fog, empty armchair facing a window, cinematic horror, desaturated color, heavy fog, 35mm film grain, low key lighting, no text, no people facing camera",
+    "pronunciations": [
+        {
+            "term": "Peñaranda",
+            "phonetic": "peh-nyah-RAHN-dah"
+        }
+    ],
     "scenes": [
         {
             "order": 1,
-            "narration": "Empecé a bajar las escaleras cuando la casa dejó de respirar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
+            "narration": "I started down the stairs the night the house stopped breathing. The air in the hallway had gone still. Every board I stepped on answered me half a second late. I told myself it was the cold settling into the frame. I told myself a great many things that winter, and none of them survived the spring. My grandmother had left me the house and the orchard behind it. The neighbours warned me gently, the way people warn you about weather. They said the place kept its own hours. They said the last family to live there had left in the middle of a harvest. They never came back for their tools. I laughed at that, because I was thirty-one years old. I did not believe a house could want anything from me. I unpacked in the front room and slept with the window open. For eleven nights nothing happened at all. On the twelfth night I woke at four in the morning. I understood, without knowing how, that something in the house was listening to me sleep. I did not move until the light came. Then I went down and checked every lock, and every lock was closed.",
             "visualSummary": "A dim decaying hallway vanishing into fog and silence",
             "ambience": {
                 "query": "empty room tone",
@@ -25,34 +36,34 @@
         },
         {
             "order": 2,
-            "narration": "En la sala el sillón miraba la ventana sin nadie sentado. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "An empty armchair facing a fogged window in a dead room",
+            "narration": "The sound started on a Tuesday, and it was not a sound a house makes. It came from the end of the hallway, past the pantry, where the wall turns and there is nothing behind it but earth. It was the sound of something settling its weight, the way a person does when they have been standing a long time and decide to keep standing. I stood in the kitchen with a glass of water in my hand and I did not move. It came again. Once, then twice, then a long patience that was worse than either. I want to be precise about this, because precision is all I have left. It was not a knock. A knock asks to come in. This was already inside, and it was waiting for me to admit that I could hear it. I counted to sixty. I put the glass down without a sound. Then I walked to the end of the hallway and put my hand flat against the wall, and the wall was warm. Not warm like a radiator. Warm like the inside of a coat somebody had just taken off.",
+            "visualSummary": "A hallway ending in a blank wall, faint handprint at chest height",
             "ambience": {
-                "query": "empty room tone",
+                "query": "low drone ominous",
                 "tags": [
-                    "room",
-                    "night"
+                    "drone",
+                    "dread"
                 ],
-                "intensity": "subtle"
+                "intensity": "medium"
             }
         },
         {
             "order": 3,
-            "narration": "El vaho del cristal escribió mi nombre al revés. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "Name written backward in breath on a dark windowpane",
+            "narration": "The next morning I drove into Peñaranda and asked about the house without saying why. The woman at the shop was polite for about a minute, and then she stopped pretending. She said her mother had cleaned that house for eleven years. She said her mother had never once cleaned the end of the hallway. I asked her why not. She said because there was nothing there to clean, and then she looked at me the way you look at somebody who has already made a decision they do not know about yet. She told me the wall had been put in during the war. She told me nobody in the village agreed on which war. On the way out an old man held the door for me and asked, quite kindly, whether the house had started keeping time yet. I said I did not understand the question. He said I would. He said the house counts, and when it gets to the end of the counting it stops breathing, and whoever is inside stops with it. Then he wished me a good afternoon and walked off toward the church as if we had been discussing the weather.",
+            "visualSummary": "A shuttered village shop front under flat grey afternoon light",
             "ambience": {
-                "query": "empty room tone",
+                "query": "wind howling night",
                 "tags": [
-                    "room",
-                    "night"
+                    "wind",
+                    "exterior"
                 ],
                 "intensity": "subtle"
             }
         },
         {
             "order": 4,
-            "narration": "La cocina olía a humedad antigua fuera de estación. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "A damp kitchen smelling of old rain out of season",
+            "narration": "The orchard behind the house had gone feral, and in the middle of it there was a well nobody had mentioned. It was capped with a stone lid and the lid had been moved. Not broken. Moved, and set back down a hand's width out of true, so that a thin dark crescent showed along one edge. I knelt beside it and listened for a long time. There was no water in it. I could tell by the way the air came up, dry and mineral, like the inside of a jar. Then I heard my own breathing come back to me a beat too late, and I understood that the well was not empty of everything. I stood up too fast. I went back to the house and locked the kitchen door, and then I stood in the kitchen and felt ridiculous, because a locked door only makes sense if the thing you are afraid of is outside. That was the first night I slept with the light on. It did not help. The light only meant that when the sound came I had nothing to blame it on.",
+            "visualSummary": "An overgrown orchard with a stone well, lid pushed slightly aside",
             "ambience": {
                 "query": "empty room tone",
                 "tags": [
@@ -64,54 +75,54 @@
         },
         {
             "order": 5,
-            "narration": "Subí otra vez y la cama conservaba una marca ajena. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "An unmade bed holding a hollow in someone else's shape",
+            "narration": "I went upstairs on the ninth day and the bed held a shape that was not mine. The sheets had been pressed down along the length of the mattress, deep, the way a body leaves a bed after hours of lying still. The pillow held the round dent of a head. I had made that bed myself at seven in the morning. It was two in the afternoon. There was nobody in the house and there had been nobody in the house, and I had been in the orchard the entire time with the door in my sight. I put my hand into the dent in the pillow. It was warm. I stripped the bed and carried the sheets down to the yard and burned them, and while they burned I kept my eyes on the upstairs window, and the upstairs window kept its eyes on me. That was when I stopped telling myself things. It is a particular kind of quiet, the moment you stop arguing with what is happening. Everything got very simple after that. I was not imagining it, and I was not leaving, and I did not know why the second part was true.",
+            "visualSummary": "An empty bed holding the deep impression of a body",
             "ambience": {
-                "query": "empty room tone",
+                "query": "low drone ominous",
                 "tags": [
-                    "room",
-                    "night"
+                    "drone",
+                    "dread"
                 ],
-                "intensity": "subtle"
+                "intensity": "medium"
             }
         },
         {
             "order": 6,
-            "narration": "El desván crujió tres veces y después guardó silencio. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "An attic that creaks three times then holds its breath",
+            "narration": "It came inside on the night of the storm, and I think the storm was only the excuse. The power went at half past ten. I lit a candle in the front room and sat with my back to the wall so that nothing could be behind me. The rain went on for hours. Somewhere in the middle of it the house stopped breathing again, and this time I felt it in my chest, the way you feel a lift begin to drop. Every small noise a house keeps as its own went out at once. The clock. The pipes. The wind against the shutters. All of it, gone, as if a hand had closed over the whole building. In that silence I heard bare feet come down the hallway. Slow. Unhurried. The steps of somebody who lives there. They stopped on the far side of the door and stayed. I did not look. I sat with the candle and I listened to it not leave, and I understood that it was doing to me exactly what I had done to it. It was waiting for me to admit that I was there.",
+            "visualSummary": "Candlelight on a closed door, water running down dark windows",
             "ambience": {
-                "query": "empty room tone",
+                "query": "wind howling night",
                 "tags": [
-                    "room",
-                    "night"
+                    "wind",
+                    "storm"
                 ],
-                "intensity": "subtle"
+                "intensity": "intense"
             }
         },
         {
             "order": 7,
-            "narration": "En el patio la niebla tenía la forma de un cuerpo. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "Yard fog shaped like a body standing still in the grass",
+            "narration": "In the morning I packed the car, and the car would not take me past the end of the lane. I want to be careful here, because this is the part people stop believing. The engine ran. The wheels turned. I drove the length of the lane, out through the gate, down the slope toward the road, and then I was coming back up the slope toward the house with the gate behind me and no memory of turning around. I did it four times. On the fourth I stopped in the middle of the lane and got out and stood in the road, and the road was a road, going both ways. I walked fifty metres down it without any trouble. Then I looked back at the house and saw that the front door was open, and I had locked it, and I found myself walking toward it. Not dragged. Walking. Deciding, with my own mind, one foot after the other, to go back inside. That is the thing I have never been able to explain to anybody. It did not take me. It let me choose, and I chose wrong, and I knew it while I did it.",
+            "visualSummary": "A dirt lane curving back toward a house, front door standing open",
             "ambience": {
-                "query": "wind howling night",
+                "query": "empty room tone",
                 "tags": [
-                    "wind",
-                    "night"
+                    "room",
+                    "exterior"
                 ],
-                "intensity": "moderate"
+                "intensity": "medium"
             }
         },
         {
             "order": 8,
-            "narration": "Cerré la puerta y entendí que yo había sido el intruso. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar. Avancé por el pasillo oscuro y sentí que algo me seguía muy de cerca sin atreverme a mirar hacia atrás ni siquiera a gritar.",
-            "visualSummary": "A closed door and the knowledge I was the intruder",
+            "narration": "I live here now, and the house breathes when I am asleep. I have measured it. It draws in when I go under and it lets go when I surface, and on the nights I do not sleep at all it holds, and by morning the walls are warm to the touch along the hallway. I have stopped moving the lid on the well. I have stopped going past the pantry. The village leaves me alone, which I understand. Sometimes a car slows at the gate and somebody looks up at the windows, and I stand well back from the glass so that they see nothing, because I remember what it was to be the one looking. The old man was right about the counting. I hear it most clearly in the hour before dawn, patient and even, coming up through the floor from somewhere under the hallway, and it is closer to the end than it was when I arrived. I do not know what happens when it finishes. I only know that the house has been waiting a very long time to stop breathing for good, and that it will not be doing it alone.",
+            "visualSummary": "A figure standing well back from a lit upstairs window at dawn",
             "ambience": {
-                "query": "wind howling night",
+                "query": "low drone ominous",
                 "tags": [
-                    "wind",
-                    "night"
+                    "drone",
+                    "dread"
                 ],
-                "intensity": "moderate"
+                "intensity": "intense"
             }
         }
     ]

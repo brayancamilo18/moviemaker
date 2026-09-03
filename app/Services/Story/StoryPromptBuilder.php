@@ -17,6 +17,10 @@ final class StoryPromptBuilder
 
     private readonly int $targetWords;
 
+    private readonly int $minWords;
+
+    private readonly int $maxWords;
+
     private readonly string $imageStyleSuffix;
 
     private readonly string $accent;
@@ -28,6 +32,12 @@ final class StoryPromptBuilder
         $this->minScenes = (int) $config->get('stories.story.min_scenes');
         $this->maxScenes = (int) $config->get('stories.story.max_scenes');
         $this->targetWords = (int) $config->get('stories.story.target_words');
+        $this->minWords = (int) round(
+            $this->targetWords * (float) $config->get('stories.story.word_tolerance.min_ratio'),
+        );
+        $this->maxWords = (int) round(
+            $this->targetWords * (float) $config->get('stories.story.word_tolerance.max_ratio'),
+        );
         $this->imageStyleSuffix = (string) $config->get('stories.image_style_suffix');
         $this->accent = (string) $config->get('stories.story.accent');
         $this->lorePath = resource_path('lore/folklore.json');
@@ -36,21 +46,26 @@ final class StoryPromptBuilder
     public function systemInstruction(): string
     {
         $accent = $this->accentLabel();
-        $minWords = (int) round($this->targetWords * 0.6);
-        $maxWords = (int) round($this->targetWords * 1.4);
-        $minSceneWords = (int) ceil($minWords / $this->minScenes);
+        $minWords = $this->minWords;
+        $maxWords = $this->maxWords;
+        // Las dos puntas salen del objetivo repartido entre el número de escenas, cada una por el
+        // extremo que le toca: el objetivo en el máximo de escenas da la escena más corta y en el
+        // mínimo la más larga. Derivarlas así es lo que impide que el rango salga al revés, como
+        // pasó cuando el mínimo se sacaba de minWords y el máximo estaba puesto a mano en 150.
+        $minSceneWords = (int) ceil($this->targetWords / $this->maxScenes);
+        $maxSceneWords = (int) floor($this->targetWords / $this->minScenes);
 
         return <<<INSTRUCTION
 You are a horror scriptwriter for spoken audio narration, specialized in psychological and atmospheric horror.
 
-OUTPUT LANGUAGE: English. Every field you write is in English: title, hook, description, tags, and every scene narration. Neutral American English ({$accent}). Spanish appears only as proper names of folklore beings, people, or places that belong in the story. Those names stay in Spanish in the narration and must be listed in pronunciations. Do not write the script, the hook, the title, or the tags in Spanish.
+OUTPUT LANGUAGE: English. Every field you write is in English: title, hook, coldOpen, hookLine, description, tags, and every scene narration. Neutral American English ({$accent}). Spanish appears only as proper names of folklore beings, people, or places that belong in the story. Those names stay in Spanish in the narration and must be listed in pronunciations. Do not write the script, the hook, the title, or the tags in Spanish.
 
 The user prompt will declare a mode: folklore or original. Follow the matching mode rules.
 
 Common writing rules:
 - First person, past tense.
 - Neutral American English, consistent spelling and vocabulary ({$accent}). No regional eye dialect. No unusual contractions. Do not write speech in phonetic spelling.
-- The first fifteen seconds are the hook: open on the most unsettling image. Never open with introductions, backstory, or scene-setting preamble.
+- Scene one starts the story cold: open on the most unsettling image you have. Never open a scene with introductions, backstory, or scene-setting preamble. This holds even though the video opens with coldOpen and the channel intro before it: those are not part of the story and scene one may not lean on them.
 - Suggested terror only. No gore. No graphic violence.
 - Short sentences. This text will be read aloud by a TTS engine. No long parenthetical asides. No stacked subordinate clauses.
 - Avoid ambiguous homographs that a TTS engine often mispronounces unless the surrounding wording makes the intended reading unmistakable. Do not rely on these words without a clear recast: read, live, lead, tear, wind, bow, close, wound.
@@ -71,8 +86,15 @@ Original mode:
 
 Structure:
 - Between {$this->minScenes} and {$this->maxScenes} scenes. Prefer twelve to sixteen so the length lands on target.
-- Each scene is {$minSceneWords} to 150 words. Do not write short scenes.
+- Each scene is {$minSceneWords} to {$maxSceneWords} words. Do not write short scenes.
 - The full narration MUST be between {$minWords} and {$maxWords} words. Aim for {$this->targetWords}. Scripts under {$minWords} words are rejected.
+
+Opening of the video (coldOpen and hookLine, in this order, both spoken before scene one):
+- coldOpen.narration is the teaser: two to four sentences, 25 to 55 words, that drop the listener into the worst moment of the story and leave it unresolved. Same voice as the narration: first person, past tense.
+- Write it as new text. Never copy a sentence from a scene word for word, and never near enough that the two read as the same line: the audio aligner matches spoken text against the script, and two identical lines make it lose the second one.
+- It does not explain, introduce, or name anything. No "this is the story of". No answer.
+- coldOpen.visualSummary is what that moment looks like, in English, 10 to 15 words, like a scene visualSummary.
+- hookLine is what the channel host asks the listener straight after the fixed channel intro: one or two sentences in second person, under 35 words, putting them where the story happens and asking what they would have done. No spoilers, no answer, no title.
 
 visualSummary:
 - Each scene must include visualSummary: what the scene looks like overall, in English, 10 to 15 words.

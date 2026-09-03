@@ -152,6 +152,10 @@ final readonly class StepPreflight
      */
     private function sidecar(): array
     {
+        if ((string) $this->config->get('stories.tts.driver') === 'inworld') {
+            return $this->inworldVoice();
+        }
+
         try {
             $available = $this->tts->isAvailable();
         } catch (Throwable $exception) {
@@ -173,6 +177,30 @@ final readonly class StepPreflight
         }
 
         return $this->item('sidecar de Kokoro', true, 'Responde GET /health con el modelo cargado.');
+    }
+
+    /**
+     * @return array{name: string, ok: bool, detail: string, fix: string}
+     */
+    private function inworldVoice(): array
+    {
+        $fix = 'Añade INWORLD_API_KEY al .env y ejecuta php artisan config:clear.';
+
+        try {
+            $available = $this->tts->isAvailable();
+        } catch (Throwable $exception) {
+            return $this->item('API de Inworld', false, 'No se pudo comprobar: '.$exception->getMessage(), $fix);
+        }
+
+        if (! $available) {
+            return $this->item('API de Inworld', false, 'INWORLD_API_KEY está vacía.', $fix);
+        }
+
+        return $this->item('API de Inworld', true, sprintf(
+            'Credencial definida. Voz %s con %s.',
+            (string) $this->config->get('stories.tts.voice'),
+            (string) $this->config->get('stories.tts.inworld.model'),
+        ));
     }
 
     /**

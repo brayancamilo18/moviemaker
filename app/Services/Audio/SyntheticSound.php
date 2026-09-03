@@ -29,7 +29,7 @@ final class SyntheticSound
     private const MIN_BED_DURATION = 6.0;
 
     // Sube con cada receta: el caché de generate() no debe devolver camas mudas viejas.
-    private const RECIPE_VERSION = 3;
+    private const RECIPE_VERSION = 4;
 
     private readonly string $ffmpeg;
 
@@ -160,7 +160,11 @@ final class SyntheticSound
 
     private function renderWind(string $path, float $duration, int $seed): void
     {
-        $source = sprintf('anoisesrc=color=brown:sample_rate=48000:duration=%.3f', $duration);
+        $source = sprintf(
+            'anoisesrc=color=brown:seed=%d:sample_rate=48000:duration=%.3f',
+            $this->noiseSeed($seed, 1),
+            $duration,
+        );
         $lowpass = $this->vary($seed, 2, 500.0, 80.0, 350.0);
         $tremolo = $this->vary($seed, 3, 0.12, 0.04, 0.1);
         $body = sprintf(
@@ -174,7 +178,11 @@ final class SyntheticSound
 
     private function renderRoom(string $path, float $duration, int $seed): void
     {
-        $source = sprintf('anoisesrc=color=brown:sample_rate=48000:duration=%.3f', $duration);
+        $source = sprintf(
+            'anoisesrc=color=brown:seed=%d:sample_rate=48000:duration=%.3f',
+            $this->noiseSeed($seed, 1),
+            $duration,
+        );
         $lowpass = $this->vary($seed, 2, 200.0, 40.0, 140.0);
         $body = sprintf(
             'highpass=f=80,lowpass=f=%.1f,volume=-14dB',
@@ -216,11 +224,17 @@ final class SyntheticSound
 
     private function renderImpact(string $path, float $duration, int $seed): void
     {
-        $source = sprintf('anoisesrc=color=brown:sample_rate=48000:duration=%.3f', $duration);
+        $source = sprintf(
+            'anoisesrc=color=brown:seed=%d:sample_rate=48000:duration=%.3f',
+            $this->noiseSeed($seed, 1),
+            $duration,
+        );
         $lowpass = $this->vary($seed, 2, 400.0, 50.0, 320.0);
         $fadeIn = min(0.02, $duration * 0.08);
         $body = sprintf(
-            'lowpass=f=%.1f,afade=t=in:st=0:d=%.3f,afade=t=out:st=0:d=%.3f:curve=exp,volume=-8dB,aformat=sample_rates=48000:channel_layouts=stereo',
+            // Como en friction, el lowpass deja poca energía y cuánta deja depende de la semilla:
+            // con -8 dB había semillas que caían a -28,2 dBFS y no se oían en un portátil.
+            'lowpass=f=%.1f,afade=t=in:st=0:d=%.3f,afade=t=out:st=0:d=%.3f:curve=exp,volume=-2dB,aformat=sample_rates=48000:channel_layouts=stereo',
             $lowpass,
             $fadeIn,
             $duration,
@@ -231,7 +245,11 @@ final class SyntheticSound
 
     private function renderFriction(string $path, float $duration, int $seed): void
     {
-        $source = sprintf('anoisesrc=color=pink:sample_rate=48000:duration=%.3f', $duration);
+        $source = sprintf(
+            'anoisesrc=color=pink:seed=%d:sample_rate=48000:duration=%.3f',
+            $this->noiseSeed($seed, 1),
+            $duration,
+        );
         $center = $this->vary($seed, 2, 1400.0, 350.0, 900.0);
         $width = $this->vary($seed, 3, 280.0, 80.0, 160.0);
         $fast = $this->vary($seed, 4, 12.0, 4.0, 8.0);
@@ -239,7 +257,10 @@ final class SyntheticSound
         $fade = min(0.06, max(0.02, $duration * 0.12));
         $fadeOutStart = max(0.0, $duration - $fade);
         $body = sprintf(
-            'tremolo=f=%.2f:d=0.75,tremolo=f=%.2f:d=0.45,bandpass=f=%.1f:width_type=h:w=%.1f,afade=t=in:st=0:d=%.3f,afade=t=out:st=%.3f:d=%.3f,volume=-4dB,aformat=sample_rates=48000:channel_layouts=stereo',
+            // El bandpass estrecho se lleva casi toda la energía del ruido rosa, así que este
+            // perfil necesita bastante más ganancia que los demás para oírse: con -4 dB el pico
+            // se quedaba en -28,6 dBFS, por debajo del suelo de audibilidad que exige el test.
+            'tremolo=f=%.2f:d=0.75,tremolo=f=%.2f:d=0.45,bandpass=f=%.1f:width_type=h:w=%.1f,afade=t=in:st=0:d=%.3f,afade=t=out:st=%.3f:d=%.3f,volume=+6dB,aformat=sample_rates=48000:channel_layouts=stereo',
             $fast,
             $wobble,
             $center,
@@ -289,6 +310,17 @@ final class SyntheticSound
         $unsigned = (int) sprintf('%u', crc32($seed.':'.$lane.':v3'));
 
         return (($unsigned % 2001) / 1000.0) - 1.0;
+    }
+
+    /**
+     * anoisesrc sin seed coge una al azar en cada render, así que el mismo $seed no devolvía el
+     * mismo audio: medido sobre el impact, el pico bailaba entre -20,8 y -26,9 dBFS de una pasada
+     * a otra. Eso dejaba la caché de generate() indexando por hash un contenido que cambiaba, y
+     * hacía que la comprobación de audibilidad fallara una vez de cada tantas.
+     */
+    private function noiseSeed(int $seed, int $lane): int
+    {
+        return (int) sprintf('%u', crc32($seed.':'.$lane.':noise-v1'));
     }
 
     /**

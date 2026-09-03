@@ -110,6 +110,30 @@ final class SyntheticSoundTest extends TestCase
         $this->assertGreaterThan(0.3, $this->probe($friction)['duration']);
     }
 
+    /**
+     * anoisesrc sin seed coge una al azar en cada render, así que la misma receta devolvía audio
+     * distinto: el pico del impact bailaba entre -20,8 y -26,9 dBFS. Eso dejaba la caché de
+     * generate() indexando por hash un contenido que cambiaba, y hacía que la comprobación de
+     * audibilidad de aquí abajo fallara una vez de cada tantas.
+     */
+    public function test_the_same_seed_renders_byte_identical_audio(): void
+    {
+        $synth = $this->app->make(SyntheticSound::class);
+        $files = new Filesystem;
+
+        foreach (['impact' => 0.55, 'friction' => 0.95, 'wind' => 6.0, 'room' => 6.0] as $profile => $duration) {
+            $first = $files->get($synth->generate($profile, $duration, 5));
+            $files->delete($synth->generate($profile, $duration, 5));
+            $second = $files->get($synth->generate($profile, $duration, 5));
+
+            $this->assertSame(
+                sha1($first),
+                sha1($second),
+                "El perfil {$profile} no es reproducible con la misma semilla.",
+            );
+        }
+    }
+
     public function test_generated_beds_and_effects_are_audible_on_laptop_speakers(): void
     {
         $synth = $this->app->make(SyntheticSound::class);

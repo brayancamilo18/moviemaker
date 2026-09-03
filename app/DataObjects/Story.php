@@ -19,11 +19,16 @@ final readonly class Story
         public string $thumbnailPrompt,
         public array $scenes,
         public array $pronunciations,
+        public ?StoryScene $coldOpen = null,
+        public string $hookLine = '',
         public ?VisualBible $visualBible = null,
     ) {}
 
     /**
-     * @param  array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt?: string, visualSummary?: string, ambience?: array<string, mixed>|null}>, pronunciations?: list<array{term: string, phonetic: string}>, visualBible?: array<string, mixed>}  $data
+     * coldOpen y hookLine llegan vacíos en los guiones escritos antes de que existieran: son
+     * opcionales a propósito, porque el arranque no puede invalidar una historia ya generada.
+     *
+     * @param  array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt?: string, visualSummary?: string, ambience?: array<string, mixed>|null}>, pronunciations?: list<array{term: string, phonetic: string}>, coldOpen?: array{narration?: string, visualSummary?: string}|null, hookLine?: string, visualBible?: array<string, mixed>}  $data
      */
     public static function fromArray(array $data): self
     {
@@ -41,6 +46,8 @@ final readonly class Story
                 static fn (array $pronunciation): Pronunciation => Pronunciation::fromArray($pronunciation),
                 $data['pronunciations'] ?? [],
             ),
+            coldOpen: self::coldOpenFromArray($data['coldOpen'] ?? null),
+            hookLine: trim((string) ($data['hookLine'] ?? '')),
             visualBible: isset($data['visualBible']) && is_array($data['visualBible'])
                 ? VisualBible::fromArray($data['visualBible'])
                 : null,
@@ -48,7 +55,31 @@ final readonly class Story
     }
 
     /**
-     * @return array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt: string, visualSummary: string, ambience: ?array{query: string, tags: list<string>, intensity: string}}>, pronunciations: list<array{term: string, phonetic: string}>, visualBible?: array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, journey: list<array{slug: string, descriptor: string}>, light: list<array{slug: string, descriptor: string}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}}
+     * El cold open llega sin orden de escena: el suyo lo pone la configuración, y quien lo pide
+     * lo sella con `coldOpenScene()`. Guardarlo aquí obligaría a leer config desde un DataObject.
+     */
+    private static function coldOpenFromArray(mixed $data): ?StoryScene
+    {
+        if (! is_array($data)) {
+            return null;
+        }
+
+        $narration = trim((string) ($data['narration'] ?? ''));
+
+        if ($narration === '') {
+            return null;
+        }
+
+        return new StoryScene(
+            order: 0,
+            narration: $narration,
+            imagePrompt: '',
+            visualSummary: trim((string) ($data['visualSummary'] ?? '')),
+        );
+    }
+
+    /**
+     * @return array{title: string, hook: string, description: string, tags: list<string>, thumbnailPrompt: string, scenes: list<array{order: int, narration: string, imagePrompt: string, visualSummary: string, ambience: ?array{query: string, tags: list<string>, intensity: string}}>, pronunciations: list<array{term: string, phonetic: string}>, coldOpen?: array{narration: string, visualSummary: string}, hookLine?: string, visualBible?: array{setting: string, era: string, timeOfDay: string, weather: string, palette: list<string>, journey: list<array{slug: string, descriptor: string}>, light: list<array{slug: string, descriptor: string}>, recurringObjects: list<array{slug: string, descriptor: string}>, avoid: list<string>, threat: array{nature: string, stages: list<array{stage: string, descriptor: string}>}}}
      */
     public function toArray(): array
     {
@@ -68,6 +99,17 @@ final readonly class Story
             ),
         ];
 
+        if ($this->coldOpen instanceof StoryScene) {
+            $payload['coldOpen'] = [
+                'narration' => $this->coldOpen->narration,
+                'visualSummary' => $this->coldOpen->visualSummary,
+            ];
+        }
+
+        if ($this->hookLine !== '') {
+            $payload['hookLine'] = $this->hookLine;
+        }
+
         if ($this->visualBible instanceof VisualBible) {
             $payload['visualBible'] = $this->visualBible->toArray();
         }
@@ -85,8 +127,54 @@ final readonly class Story
             thumbnailPrompt: $this->thumbnailPrompt,
             scenes: $this->scenes,
             pronunciations: $this->pronunciations,
+            coldOpen: $this->coldOpen,
+            hookLine: $this->hookLine,
             visualBible: $visualBible,
         );
+    }
+
+    /**
+     * El cold open como escena de pleno derecho, sellado con el orden que le da la configuración.
+     */
+    public function coldOpenScene(int $order): ?StoryScene
+    {
+        if (! $this->coldOpen instanceof StoryScene) {
+            return null;
+        }
+
+        return new StoryScene(
+            order: $order,
+            narration: $this->coldOpen->narration,
+            imagePrompt: $this->coldOpen->imagePrompt,
+            visualSummary: $this->coldOpen->visualSummary,
+            ambience: $this->coldOpen->ambience,
+        );
+    }
+
+    /**
+     * Escenas que cuentan historia: el cold open y las del guion. La careta y el cierre no están
+     * aquí porque son texto fijo del canal, no narración de esta historia.
+     *
+     * @return list<StoryScene>
+     */
+    public function narrativeScenes(int $coldOpenOrder): array
+    {
+        $coldOpen = $this->coldOpenScene($coldOpenOrder);
+
+        return $coldOpen instanceof StoryScene
+            ? [$coldOpen, ...$this->scenes]
+            : $this->scenes;
+    }
+
+    public function sceneByOrder(int $order, int $coldOpenOrder): ?StoryScene
+    {
+        foreach ($this->narrativeScenes($coldOpenOrder) as $scene) {
+            if ($scene->order === $order) {
+                return $scene;
+            }
+        }
+
+        return null;
     }
 
     public function wordCount(): int
@@ -137,13 +225,63 @@ final readonly class Story
      */
     public function scenesForNarrationWithOutro(string $outroText, int $outroOrder): array
     {
-        $scenes = $this->scenesForNarration();
+        return $this->scenesForNarrationWithBookends(null, '', 0, $outroText, $outroOrder);
+    }
+
+    /**
+     * La narración entera en orden de vídeo: cold open, careta, historia y cierre.
+     *
+     * Un bloque con el texto vacío no se narra, y ese es el único interruptor: quien apaga el
+     * arranque desde la configuración pasa el texto vacío o el orden nulo, y aquí no hay ninguna
+     * otra rama que mantener.
+     *
+     * @param  int|null  $coldOpenOrder  Orden del cold open, o null para no narrarlo
+     * @return list<array{order: int, text: string}>
+     */
+    public function scenesForNarrationWithBookends(
+        ?int $coldOpenOrder,
+        string $introTemplate,
+        int $introOrder,
+        string $outroText,
+        int $outroOrder,
+    ): array {
+        $scenes = [];
+        $coldOpen = $coldOpenOrder === null ? null : $this->coldOpenScene($coldOpenOrder);
+
+        if ($coldOpen instanceof StoryScene) {
+            $scenes[] = ['order' => $coldOpen->order, 'text' => $coldOpen->narration];
+        }
+
+        $intro = $this->introNarration($introTemplate);
+
+        if ($intro !== '') {
+            $scenes[] = ['order' => $introOrder, 'text' => $intro];
+        }
+
+        foreach ($this->scenesForNarration() as $scene) {
+            $scenes[] = $scene;
+        }
 
         if (trim($outroText) !== '') {
             $scenes[] = ['order' => $outroOrder, 'text' => trim($outroText)];
         }
 
         return $scenes;
+    }
+
+    /**
+     * La careta: presentación fija del canal más la frase gancho que el LLM escribió para esta
+     * historia. Sin plantilla no hay careta, aunque haya gancho: el gancho solo no se sostiene.
+     */
+    public function introNarration(string $template): string
+    {
+        $template = trim($template);
+
+        if ($template === '') {
+            return '';
+        }
+
+        return trim($template.' '.$this->hookLine);
     }
 
     /**

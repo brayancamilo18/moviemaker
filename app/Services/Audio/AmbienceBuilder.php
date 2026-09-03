@@ -30,6 +30,10 @@ final class AmbienceBuilder
 
     private readonly int $outroSceneOrder;
 
+    private readonly int $introSceneOrder;
+
+    private readonly int $coldOpenSceneOrder;
+
     /**
      * @var array<string, float>
      */
@@ -50,6 +54,8 @@ final class AmbienceBuilder
         $this->acrossfade = (float) $config->get('stories.audio.ambience.acrossfade_seconds', 2.0);
         $this->tailSeconds = (float) $config->get('stories.audio.tail_seconds', 10.0);
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->coldOpenSceneOrder = (int) $config->get('stories.story.cold_open.scene_order');
         $this->intensityLufs = [
             SceneAmbience::INTENSITY_SUBTLE => (float) $config->get('stories.audio.ambience.intensity_lufs.subtle', -34.0),
             SceneAmbience::INTENSITY_MODERATE => (float) $config->get('stories.audio.ambience.intensity_lufs.moderate', -30.0),
@@ -75,7 +81,7 @@ final class AmbienceBuilder
 
         $expected = $this->expectedDuration($narrationWavPath);
         $outroFade = $this->outroFade($windows);
-        $windows = $this->withoutOutro($windows);
+        $windows = $this->withoutIntro($this->withoutOutro($windows));
 
         if ($windows === []) {
             throw new InvalidArgumentException('timings.json no tiene escenas de historia con duración.');
@@ -265,6 +271,53 @@ final class AmbienceBuilder
     }
 
     /**
+     * La careta tampoco resuelve cama propia, pero está en medio de la línea de tiempo y no al
+     * final: su hueco no se puede quitar sin más, o todo lo que viene detrás se adelantaría lo que
+     * dure. Se lo come la escena siguiente, que arranca ya debajo de ella; y si no hubiera
+     * siguiente, la anterior.
+     *
+     * @param  list<array{order: int, start: float, end: float, duration: float}>  $windows
+     * @return list<array{order: int, start: float, end: float, duration: float}>
+     */
+    private function withoutIntro(array $windows): array
+    {
+        $index = null;
+
+        foreach ($windows as $position => $window) {
+            if ($window['order'] === $this->introSceneOrder) {
+                $index = $position;
+
+                break;
+            }
+        }
+
+        if ($index === null) {
+            return $windows;
+        }
+
+        $intro = $windows[$index];
+        unset($windows[$index]);
+        $windows = array_values($windows);
+
+        if ($windows === []) {
+            return $windows;
+        }
+
+        if (isset($windows[$index])) {
+            $windows[$index]['start'] = $intro['start'];
+            $windows[$index]['duration'] = round($windows[$index]['end'] - $intro['start'], 3);
+
+            return $windows;
+        }
+
+        $previous = $index - 1;
+        $windows[$previous]['end'] = $intro['end'];
+        $windows[$previous]['duration'] = round($intro['end'] - $windows[$previous]['start'], 3);
+
+        return $windows;
+    }
+
+    /**
      * Inicio absoluto del fade del cierre, o null si no hay escena de outro.
      *
      * @param  list<array{order: int, start: float, end: float, duration: float}>  $windows
@@ -318,13 +371,7 @@ final class AmbienceBuilder
 
     private function sceneByOrder(Story $story, int $order): ?StoryScene
     {
-        foreach ($story->scenes as $scene) {
-            if ($scene->order === $order) {
-                return $scene;
-            }
-        }
-
-        return null;
+        return $story->sceneByOrder($order, $this->coldOpenSceneOrder);
     }
 
     private function specFor(Story $story, ?StoryScene $scene): SceneAmbience

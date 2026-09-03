@@ -204,10 +204,147 @@ final class ValidateStoryTest extends TestCase
             ->assertFailed();
     }
 
+    public function test_a_disabled_intro_warns_and_does_not_block(): void
+    {
+        config(['stories.story.intro.enabled' => false]);
+        $this->app->forgetInstance(StoryValidator::class);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('La careta está desactivada')
+            ->expectsOutputToContain('sin bloqueantes')
+            ->assertSuccessful();
+    }
+
+    public function test_an_enabled_intro_without_its_scene_is_blocking(): void
+    {
+        $this->enableIntro();
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('La careta no llegó al audio')
+            ->assertFailed();
+    }
+
+    public function test_an_intro_with_half_the_words_is_blocking(): void
+    {
+        $this->enableIntro();
+        $tokens = $this->channelTokens((string) config('stories.story.intro.text'));
+        $half = array_slice($tokens, 0, (int) floor(count($tokens) / 2));
+
+        $this->writeIntroArtifacts($half, introShots: 1);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('La careta se sintetizó a medias')
+            ->assertFailed();
+    }
+
+    public function test_two_intro_shots_are_blocking(): void
+    {
+        $this->enableIntro();
+        $this->writeIntroArtifacts($this->channelTokens((string) config('stories.story.intro.text')), introShots: 2);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('hay bloqueantes')
+            ->expectsOutputToContain('exactamente un plano de careta')
+            ->assertFailed();
+    }
+
+    public function test_a_whole_intro_in_a_single_shot_passes(): void
+    {
+        $this->enableIntro();
+        $this->writeIntroArtifacts($this->channelTokens((string) config('stories.story.intro.text')), introShots: 1);
+
+        $this->artisan('story:validate', ['file' => $this->storyFile()])
+            ->expectsOutputToContain('La careta del canal está en el audio y en un solo plano')
+            ->expectsOutputToContain('sin bloqueantes')
+            ->assertSuccessful();
+    }
+
     private function enableOutro(): void
     {
         config(['stories.story.outro.enabled' => true]);
         $this->app->forgetInstance(StoryValidator::class);
+    }
+
+    private function enableIntro(): void
+    {
+        config(['stories.story.intro.enabled' => true]);
+        $this->app->forgetInstance(StoryValidator::class);
+    }
+
+    /**
+     * La careta va delante de la historia, así que sus artefactos reescriben el arranque entero:
+     * primero la escena de la careta y detrás la única escena del guion.
+     *
+     * @param  list<string>  $heard
+     */
+    private function writeIntroArtifacts(array $heard, int $introShots): void
+    {
+        $dir = $this->storyDirectory();
+        $words = [];
+
+        foreach ($heard as $index => $token) {
+            $words[] = [
+                'token' => $token,
+                'start' => $index * 0.05,
+                'end' => ($index + 1) * 0.05,
+            ];
+        }
+
+        $this->writeTimings([
+            [
+                'start' => 0.0,
+                'end' => 4.0,
+                'alignment' => 'text',
+                'sceneOrder' => (int) config('stories.story.intro.scene_order'),
+                'text' => (string) config('stories.story.intro.text'),
+                'words' => $words,
+            ],
+            [
+                'start' => 4.0,
+                'end' => 8.0,
+                'alignment' => 'text',
+                'sceneOrder' => 1,
+                'text' => 'The door closed behind me.',
+            ],
+        ]);
+
+        $shots = [];
+
+        for ($index = 0; $index < $introShots; $index++) {
+            $shots[] = $this->shot(
+                1 + $index,
+                0.0,
+                4.0,
+                $dir.DIRECTORY_SEPARATOR.'shot-1.jpg',
+                'a dirt road in fog',
+                isIntro: true,
+            );
+        }
+
+        $shots[] = $this->shot(
+            1 + $introShots,
+            4.0,
+            8.0,
+            $dir.DIRECTORY_SEPARATOR.'shot-2.jpg',
+            'Fog over the road',
+        );
+
+        $this->writeShots($shots);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function channelTokens(string $text): array
+    {
+        $normalized = mb_strtolower($text);
+        $normalized = str_replace(["'", '’', '‘'], '', $normalized);
+        $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized) ?? $normalized;
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $normalized));
+
+        return $normalized === '' ? [] : explode(' ', $normalized);
     }
 
     /**
@@ -215,12 +352,7 @@ final class ValidateStoryTest extends TestCase
      */
     private function outroTokens(): array
     {
-        $normalized = mb_strtolower((string) config('stories.story.outro.text'));
-        $normalized = str_replace(["'", '’', '‘'], '', $normalized);
-        $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized) ?? $normalized;
-        $normalized = trim((string) preg_replace('/\s+/u', ' ', $normalized));
-
-        return $normalized === '' ? [] : explode(' ', $normalized);
+        return $this->channelTokens((string) config('stories.story.outro.text'));
     }
 
     /**
@@ -375,10 +507,15 @@ final class ValidateStoryTest extends TestCase
         string $image,
         string $description,
         bool $isOutro = false,
+        bool $isIntro = false,
     ): array {
         return [
             'order' => $order,
-            'sceneOrder' => $isOutro ? 9000 : 1,
+            'sceneOrder' => match (true) {
+                $isOutro => 9000,
+                $isIntro => (int) config('stories.story.intro.scene_order'),
+                default => 1,
+            },
             'start' => $start,
             'end' => $end,
             'sourceText' => 'Fixture shot '.$order,
@@ -391,6 +528,7 @@ final class ValidateStoryTest extends TestCase
             'imagePath' => $image,
             'placeholder' => false,
             'isOutro' => $isOutro,
+            'isIntro' => $isIntro,
         ];
     }
 

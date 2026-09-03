@@ -316,6 +316,52 @@ final class NarrationTest extends TestCase
         $this->assertSame('text', $aligned[0]['alignment']);
     }
 
+    /**
+     * El caso de verdad: whisper no transcribe la fonética que se sintetizó, transcribe la palabra
+     * que ha oído. Los tokens de «koo-leh-BROHN» no aparecen por ninguna parte y el emparejador
+     * tiene que anclar la frase igualmente por lo que hay alrededor.
+     */
+    public function test_a_phonetic_name_anchors_when_whisper_writes_the_real_word(): void
+    {
+        $aligned = $this->timer()->alignToSentences(
+            $this->whisperWords(['the', 'culebron', 'waited', 'by', 'the', 'well']),
+            [new NarrationSentence(
+                order: 1,
+                sceneOrder: 1,
+                text: 'The Culebrón waited by the well.',
+                pauseAfter: 0.32,
+                ttsText: 'The koo-leh-BROHN waited by the well.',
+            )],
+            4.0,
+        );
+
+        $this->assertSame('text', $aligned[0]['alignment']);
+        $this->assertNotSame([], $aligned[0]['words']);
+    }
+
+    /**
+     * Y el que no lleva fonética porque el modelo se la saltó: «Tomás» sale «Thomas», que no casa
+     * ni por prefijo ni por distancia. Antes ese token dejaba clavado al emparejador y se perdía
+     * la frase entera aunque las otras cinco palabras encajaran.
+     */
+    public function test_a_spanish_name_that_whisper_anglicizes_does_not_lose_the_sentence(): void
+    {
+        $aligned = $this->timer()->alignToSentences(
+            $this->whisperWords(['this', 'time', 'thomas', 'offered', 'a', 'choice']),
+            [new NarrationSentence(
+                order: 1,
+                sceneOrder: 1,
+                text: 'This time Tomás offered a choice.',
+                pauseAfter: 0.32,
+                ttsText: 'This time Tomás offered a choice.',
+            )],
+            4.0,
+        );
+
+        $this->assertSame('text', $aligned[0]['alignment']);
+        $this->assertNotSame([], $aligned[0]['words']);
+    }
+
     public function test_an_anchored_sentence_publishes_its_words_with_their_own_window(): void
     {
         $aligned = $this->timer()->alignToSentences(

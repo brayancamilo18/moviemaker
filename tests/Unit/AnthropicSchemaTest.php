@@ -155,7 +155,7 @@ final class AnthropicSchemaTest extends TestCase
         $translated = AnthropicSchema::translate(StorySchema::get());
 
         $this->assertSame(
-            ['title', 'hook', 'description', 'tags', 'thumbnailPrompt', 'pronunciations', 'scenes'],
+            ['title', 'hook', 'coldOpen', 'hookLine', 'description', 'tags', 'thumbnailPrompt', 'pronunciations', 'scenes'],
             $translated['required'],
         );
         $this->assertSame('string', $translated['properties']['tags']['items']['type']);

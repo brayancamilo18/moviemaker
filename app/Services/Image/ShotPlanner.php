@@ -30,7 +30,7 @@ final class ShotPlanner
     ];
 
     /** Versión del algoritmo de planificación persistida en shots.json. */
-    public const VERSION = 4;
+    public const VERSION = 5;
 
     private const ACTION_VERBS = [
         'burst', 'chase', 'crack', 'crash', 'dash', 'flee', 'grab', 'hit', 'jump',
@@ -53,6 +53,10 @@ final class ShotPlanner
 
     private readonly int $outroSceneOrder;
 
+    private readonly int $introSceneOrder;
+
+    private readonly int $coldOpenSceneOrder;
+
     public function __construct(Repository $config)
     {
         $this->minDuration = (float) $config->get('stories.shots.min_duration');
@@ -62,6 +66,17 @@ final class ShotPlanner
         $this->atmosphereDuration = (float) $config->get('stories.shots.atmosphere_duration');
         $this->maxHoldSlack = (float) $config->get('stories.shots.max_hold_slack');
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->coldOpenSceneOrder = (int) $config->get('stories.story.cold_open.scene_order');
+    }
+
+    /**
+     * Escenas de canal: careta y cierre. Son texto fijo, así que van en un plano único con imagen
+     * fija y quedan fuera de todo recuento que hable de la historia.
+     */
+    private function isChannelScene(int $sceneOrder): bool
+    {
+        return $sceneOrder === $this->introSceneOrder || $sceneOrder === $this->outroSceneOrder;
     }
 
     /**
@@ -72,16 +87,19 @@ final class ShotPlanner
     {
         $sentences = $this->sentences($timings);
         $sceneEnds = $this->sceneEnds($timings, $sentences);
-        $knownScenes = array_map(static fn ($scene): int => $scene->order, $story->scenes);
+        $knownScenes = array_map(
+            static fn (StoryScene $scene): int => $scene->order,
+            $story->narrativeScenes($this->coldOpenSceneOrder),
+        );
 
         $units = [];
 
         foreach ($this->groupByScene($sentences, $knownScenes) as $sceneOrder => $sceneSentences) {
             $windows = $this->sentenceWindows($sceneSentences, $sceneEnds[$sceneOrder] ?? null);
 
-            if ($sceneOrder === $this->outroSceneOrder) {
+            if ($this->isChannelScene($sceneOrder)) {
                 if ($windows !== []) {
-                    $units[] = $this->outroUnit($windows);
+                    $units[] = $this->channelUnit($sceneOrder, $windows);
                 }
 
                 continue;
@@ -124,7 +142,7 @@ final class ShotPlanner
         $durations = [];
 
         foreach ($shots as $shot) {
-            if ($shot->isOutro) {
+            if ($shot->isOutro || $shot->isIntro) {
                 continue;
             }
 
@@ -440,13 +458,15 @@ final class ShotPlanner
             }
 
             $isOutro = $unit['sceneOrder'] === $this->outroSceneOrder;
-            $subject = $isOutro ? 'environment' : $this->subjectForRun($unit['subject'], $run);
-            $threatStage = $isOutro || ! in_array($subject, ['threat', 'both'], true)
+            $isIntro = $unit['sceneOrder'] === $this->introSceneOrder;
+            $isChannel = $isOutro || $isIntro;
+            $subject = $isChannel ? 'environment' : $this->subjectForRun($unit['subject'], $run);
+            $threatStage = $isChannel || ! in_array($subject, ['threat', 'both'], true)
                 ? null
                 : $unit['threatStage'];
 
             $sceneChanged = $previousScene !== $unit['sceneOrder'];
-            $framing = $isOutro
+            $framing = $isChannel
                 ? 'wide establishing'
                 : $this->nextFraming(
                     $framingIndex,
@@ -456,7 +476,7 @@ final class ShotPlanner
                     $threatStage,
                 );
             $duration = $unit['end'] - $unit['start'];
-            $motion = $isOutro
+            $motion = $isChannel
                 ? 'static'
                 : $this->nextMotion($motionIndex, $previousMotion, $unit['text'], $duration);
 
@@ -474,6 +494,7 @@ final class ShotPlanner
                 characterSlugs: [],
                 imagePath: null,
                 isOutro: $isOutro,
+                isIntro: $isIntro,
             );
 
             $previousFraming = $framing;
@@ -520,7 +541,7 @@ final class ShotPlanner
 
             $end = max($start, $end);
 
-            if ($shot->isOutro) {
+            if ($shot->isOutro || $shot->isIntro) {
                 $windows[] = [
                     'shot' => $shot,
                     'start' => $start,
@@ -612,6 +633,7 @@ final class ShotPlanner
                 characterSlugs: $source->characterSlugs,
                 imagePath: $source->imagePath,
                 isOutro: $source->isOutro,
+                isIntro: $source->isIntro,
             );
 
             $previousFraming = $framing;
@@ -786,7 +808,7 @@ final class ShotPlanner
             if (
                 $knownScenes !== []
                 && ! in_array($sceneOrder, $knownScenes, true)
-                && $sceneOrder !== $this->outroSceneOrder
+                && ! $this->isChannelScene($sceneOrder)
             ) {
                 continue;
             }
@@ -898,18 +920,18 @@ final class ShotPlanner
     }
 
     /**
-     * Un único plano que cubre toda la escena de cierre, sin trocear ni asignar beats narrativos.
+     * Un único plano que cubre toda una escena de canal, sin trocear ni asignar beats narrativos.
      *
      * @param  list<array{sceneOrder: int, start: float, end: float, text: string}>  $windows
      * @return array{sceneOrder: int, start: float, end: float, text: string, beatIndex: int, subject: string, threatStage: ?string}
      */
-    private function outroUnit(array $windows): array
+    private function channelUnit(int $sceneOrder, array $windows): array
     {
         $first = $windows[0];
         $last = $windows[array_key_last($windows)];
 
         return [
-            'sceneOrder' => $this->outroSceneOrder,
+            'sceneOrder' => $sceneOrder,
             'start' => $first['start'],
             'end' => $last['end'],
             'text' => implode(' ', array_map(
@@ -982,13 +1004,7 @@ final class ShotPlanner
 
     private function scene(Story $story, int $order): ?StoryScene
     {
-        foreach ($story->scenes as $scene) {
-            if ($scene->order === $order) {
-                return $scene;
-            }
-        }
-
-        return null;
+        return $story->sceneByOrder($order, $this->coldOpenSceneOrder);
     }
 
     /**

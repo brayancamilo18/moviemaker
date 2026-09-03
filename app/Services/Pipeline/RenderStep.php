@@ -272,10 +272,10 @@ final class RenderStep
             ];
         }
 
-        $outro = $this->validator->outroCheck($slug);
-
-        if ($outro['blocking'] && $outro['status'] === 'fail') {
-            return ['ok' => false, 'error' => $outro['detail']];
+        foreach ([$this->validator->introCheck($slug), $this->validator->outroCheck($slug)] as $check) {
+            if ($check['blocking'] && $check['status'] === 'fail') {
+                return ['ok' => false, 'error' => $check['detail']];
+            }
         }
 
         return null;

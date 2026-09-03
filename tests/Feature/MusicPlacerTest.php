@@ -99,6 +99,26 @@ final class MusicPlacerTest extends TestCase
         $this->assertEqualsWithDelta(8.0, $tracks[0]->endAt, 0.001);
     }
 
+    public function test_the_hook_starts_at_the_first_story_scene_and_leaves_the_opening_dry(): void
+    {
+        $this->indexClip('music/drone-1.wav', ['dark', 'drone'], 3.0, -20.0);
+        $this->indexClip('music/drone-2.wav', ['dark', 'drone'], 3.0, -18.0);
+
+        $timings = $this->timings(8.0, 40.0);
+        array_unshift(
+            $timings['scenes'],
+            ['order' => (int) config('stories.story.cold_open.scene_order'), 'start' => 0.0, 'end' => 3.0, 'duration' => 3.0],
+            ['order' => (int) config('stories.story.intro.scene_order'), 'start' => 3.0, 'end' => 6.0, 'duration' => 3.0],
+        );
+        $timings['scenes'][2]['start'] = 6.0;
+        $timings['scenes'][2]['duration'] = 2.0;
+
+        $hook = $this->placer()->place($this->story(), $timings)[0];
+
+        $this->assertEqualsWithDelta(6.0, $hook->startAt, 0.001);
+        $this->assertEqualsWithDelta(8.0, $hook->endAt, 0.001);
+    }
+
     private function placer(): MusicPlacer
     {
         return $this->app->make(MusicPlacer::class);

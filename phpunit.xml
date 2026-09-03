@@ -29,10 +29,13 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
+        <env name="TTS_DRIVER" value="kokoro"/>
         <env name="TTS_BASE_URL" value="http://127.0.0.1:8020"/>
         <env name="TTS_VOICE" value="af_heart"/>
         <env name="TTS_SPEED" value="1.0"/>
         <env name="STORY_OUTRO_ENABLED" value="false"/>
+        <env name="STORY_INTRO_ENABLED" value="false"/>
+        <env name="STORY_COLD_OPEN_ENABLED" value="false"/>
         <env name="FREESOUND_TOKEN" value="test-freesound-token"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>

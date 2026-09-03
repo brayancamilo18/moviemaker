@@ -113,6 +113,12 @@ final class ShotDirector
 
     private readonly string $outroImagePrompt;
 
+    private readonly int $introSceneOrder;
+
+    private readonly string $introImagePrompt;
+
+    private readonly int $coldOpenSceneOrder;
+
     public function __construct(
         private JsonLlm $llm,
         Repository $config,
@@ -122,6 +128,9 @@ final class ShotDirector
         $this->detailRatioMax = $this->percent($config->get('stories.images.direction.detail_ratio_max'));
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
         $this->outroImagePrompt = trim((string) $config->get('stories.story.outro.image_prompt'));
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->introImagePrompt = trim((string) $config->get('stories.story.intro.image_prompt'));
+        $this->coldOpenSceneOrder = (int) $config->get('stories.story.cold_open.scene_order');
     }
 
     private function percent(mixed $ratio): int
@@ -139,7 +148,7 @@ final class ShotDirector
             return [];
         }
 
-        $sceneCount = max(count($story->scenes), 1);
+        $sceneCount = max(count($story->narrativeScenes($this->coldOpenSceneOrder)), 1);
         $directedByOrder = [];
 
         // Suelo del recorrido y de la luz: el índice más avanzado que ya se ha usado. Las escenas
@@ -148,9 +157,15 @@ final class ShotDirector
         $floors = ['journey' => 0, 'light' => 0];
 
         foreach ($this->groupByScene($shots) as $sceneOrder => $sceneShots) {
-            if ($sceneOrder === $this->outroSceneOrder) {
+            $channelPrompt = $this->channelImagePrompt($sceneOrder);
+
+            if ($channelPrompt !== null) {
                 foreach ($sceneShots as $shot) {
-                    $directedByOrder[$shot->order] = $this->directOutro($shot);
+                    $directedByOrder[$shot->order] = $this->directChannelShot(
+                        $shot,
+                        $channelPrompt,
+                        $sceneOrder === $this->introSceneOrder,
+                    );
                 }
 
                 continue;
@@ -177,9 +192,23 @@ final class ShotDirector
     }
 
     /**
-     * El cierre del canal no se dirige: prompt fijo, plano único, fuera de Gemini.
+     * El prompt fijo de esa escena de canal, o null si la escena es de la historia.
      */
-    private function directOutro(Shot $shot): Shot
+    private function channelImagePrompt(int $sceneOrder): ?string
+    {
+        return match ($sceneOrder) {
+            $this->introSceneOrder => $this->introImagePrompt,
+            $this->outroSceneOrder => $this->outroImagePrompt,
+            default => null,
+        };
+    }
+
+    /**
+     * La careta y el cierre del canal no se dirigen: prompt fijo, plano único, fuera de Gemini.
+     * Por eso su imagen se cachea entre historias, que es lo que las hace gratis a partir de la
+     * segunda.
+     */
+    private function directChannelShot(Shot $shot, string $imagePrompt, bool $isIntro): Shot
     {
         return new Shot(
             order: $shot->order,
@@ -193,10 +222,11 @@ final class ShotDirector
             threatStage: $shot->threatStage,
             journeyLeg: $shot->journeyLeg,
             lightStage: $shot->lightStage,
-            description: $this->outroImagePrompt,
+            description: $imagePrompt,
             characterSlugs: [],
             imagePath: $shot->imagePath,
-            isOutro: true,
+            isOutro: ! $isIntro,
+            isIntro: $isIntro,
         );
     }
 
@@ -231,7 +261,9 @@ final class ShotDirector
         array &$floors,
     ): array {
         $expected = array_map(static fn (Shot $shot): int => $shot->order, $sceneShots);
-        $progress = $sceneOrder / $sceneCount;
+        // El cold open va delante de la historia y su orden es negativo: sin acotar, el avance
+        // saldría negativo y el modelo recibiría un storyProgress que no significa nada.
+        $progress = max(0.0, min(1.0, $sceneOrder / $sceneCount));
         $ceilings = [
             'journey' => $this->ceiling($bible->journeySlugs(), $progress),
             'light' => $this->ceiling($bible->lightSlugs(), $progress),
@@ -453,6 +485,7 @@ final class ShotDirector
             characterSlugs: $shot->characterSlugs,
             imagePath: $shot->imagePath,
             isOutro: $shot->isOutro,
+            isIntro: $shot->isIntro,
         );
     }
 
@@ -661,13 +694,7 @@ final class ShotDirector
 
     private function scene(Story $story, int $order): ?StoryScene
     {
-        foreach ($story->scenes as $scene) {
-            if ($scene->order === $order) {
-                return $scene;
-            }
-        }
-
-        return null;
+        return $story->sceneByOrder($order, $this->coldOpenSceneOrder);
     }
 
     private function systemInstruction(): string

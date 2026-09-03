@@ -42,6 +42,38 @@ final class StoryGeneratorTest extends TestCase
         $this->assertSame($fixture['scenes'][2]['visualSummary'], $story->scenes[2]->visualSummary);
     }
 
+    public function test_the_cold_open_and_the_hook_line_survive_the_round_trip(): void
+    {
+        $fixture = $this->fixture();
+        $this->fakeGemini($this->geminiEnvelope($fixture));
+
+        $story = $this->generator()->generate();
+        $coldOpenOrder = (int) config('stories.story.cold_open.scene_order');
+        $reread = Story::fromArray($story->toArray());
+
+        $this->assertSame($fixture['coldOpen']['narration'], $story->coldOpenScene($coldOpenOrder)?->narration);
+        $this->assertSame($fixture['coldOpen']['visualSummary'], $story->coldOpenScene($coldOpenOrder)?->visualSummary);
+        $this->assertSame($coldOpenOrder, $story->coldOpenScene($coldOpenOrder)?->order);
+        $this->assertSame($fixture['hookLine'], $story->hookLine);
+        $this->assertSame($story->toArray(), $reread->toArray());
+    }
+
+    public function test_a_script_without_a_cold_open_still_generates(): void
+    {
+        $fixture = $this->fixture();
+        unset($fixture['coldOpen'], $fixture['hookLine']);
+        $this->fakeGemini($this->geminiEnvelope($fixture));
+
+        $story = $this->generator()->generate();
+
+        $this->assertNull($story->coldOpen);
+        $this->assertSame('', $story->hookLine);
+        $this->assertSame(
+            trim((string) config('stories.story.intro.text')),
+            $story->introNarration((string) config('stories.story.intro.text')),
+        );
+    }
+
     public function test_unordered_scenes_are_sorted_by_order(): void
     {
         $fixture = $this->fixture();
@@ -117,7 +149,7 @@ final class StoryGeneratorTest extends TestCase
         $this->generator()->generate();
     }
 
-    public function test_word_count_outside_forty_percent_throws_invalid_story_exception(): void
+    public function test_word_count_outside_the_tolerance_throws_invalid_story_exception(): void
     {
         $fixture = $this->fixture();
         $narration = implode(' ', array_fill(0, 40, 'word'));
@@ -129,9 +161,39 @@ final class StoryGeneratorTest extends TestCase
         $this->fakeGemini($this->geminiEnvelope($fixture));
 
         $this->expectException(InvalidStoryException::class);
-        $this->expectExceptionMessage('El guion tiene 320 palabras; el objetivo es 1600 (±40%: mínimo 960, máximo 2240).');
+        $this->expectExceptionMessage('El guion tiene 320 palabras; el objetivo es 1600 (mínimo 1360, máximo 1840).');
 
         $this->generator()->generate();
+    }
+
+    /**
+     * El prompt y el schema ya piden fonética para todo término español, pero el modelo se salta
+     * alguno. El que se salta lo lee un TTS inglés a su manera y encima deja la frase sin
+     * alineación por texto, así que el guion se rechaza y se reintenta.
+     */
+    public function test_a_spanish_name_without_phonetics_throws_invalid_story_exception(): void
+    {
+        $fixture = $this->fixture();
+        $fixture['pronunciations'] = [];
+        $this->fakeGemini($this->geminiEnvelope($fixture));
+
+        $this->expectException(InvalidStoryException::class);
+        $this->expectExceptionMessage('Estos nombres en español no están en pronunciations: Peñaranda.');
+
+        $this->generator()->generate();
+    }
+
+    public function test_a_spanish_name_with_its_phonetics_is_accepted(): void
+    {
+        $this->fakeGemini($this->geminiEnvelope($this->fixture()));
+
+        $story = $this->generator()->generate();
+
+        // La sustitución es lo que se manda al TTS, así que el nombre no llega nunca en español.
+        $this->assertStringContainsString(
+            'peh-nyah-RAHN-dah',
+            $story->textForTts($story->scenes[2]->narration),
+        );
     }
 
     public function test_title_over_seventy_characters_throws_invalid_story_exception(): void

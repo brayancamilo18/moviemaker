@@ -74,7 +74,7 @@ final class ImageGenerationTest extends TestCase
 
         $decoded = $this->plan($file);
         $this->assertSame(ShotPlanner::VERSION, $decoded['plannerVersion'] ?? null);
-        $this->assertSame(4, $decoded['plannerVersion']);
+        $this->assertSame(5, $decoded['plannerVersion']);
         $this->assertSame(
             'Directed hallway fog at dusk 1',
             $decoded['shots'][0]['description'] ?? null,

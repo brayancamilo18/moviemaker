@@ -19,6 +19,10 @@ final class SfxDirector
 {
     private readonly int $outroSceneOrder;
 
+    private readonly int $introSceneOrder;
+
+    private readonly int $coldOpenSceneOrder;
+
     public function __construct(
         private JsonLlm $llm,
         private SfxAnchor $anchor,
@@ -26,6 +30,8 @@ final class SfxDirector
         Repository $config,
     ) {
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->coldOpenSceneOrder = (int) $config->get('stories.story.cold_open.scene_order');
     }
 
     /**
@@ -41,7 +47,8 @@ final class SfxDirector
         $effects = [];
 
         foreach ($this->groupByScene($shots) as $sceneOrder => $sceneShots) {
-            if ($sceneOrder === $this->outroSceneOrder) {
+            // La careta y el cierre son texto fijo del canal: no hay nada diegético que sonar.
+            if ($sceneOrder === $this->outroSceneOrder || $sceneOrder === $this->introSceneOrder) {
                 continue;
             }
 
@@ -154,13 +161,7 @@ final class SfxDirector
 
     private function scene(Story $story, int $order): ?StoryScene
     {
-        foreach ($story->scenes as $scene) {
-            if ($scene->order === $order) {
-                return $scene;
-            }
-        }
-
-        return null;
+        return $story->sceneByOrder($order, $this->coldOpenSceneOrder);
     }
 
     private function systemInstruction(): string

@@ -28,6 +28,8 @@ final readonly class Shot
         public array $characterSlugs = [],
         public ?string $imagePath = null,
         public bool $isOutro = false,
+        /** Plano de la careta del canal: imagen fija, ni la dirige el LLM ni cuenta en los ratios. */
+        public bool $isIntro = false,
     ) {}
 
     /**
@@ -46,7 +48,8 @@ final readonly class Shot
      *     description?: string,
      *     characterSlugs?: list<string>,
      *     imagePath?: string|null,
-     *     isOutro?: bool
+     *     isOutro?: bool,
+     *     isIntro?: bool
      * }  $data
      */
     public static function fromArray(array $data): self
@@ -80,6 +83,7 @@ final readonly class Shot
             characterSlugs: $slugs,
             imagePath: is_string($imagePath) && $imagePath !== '' ? $imagePath : null,
             isOutro: (bool) ($data['isOutro'] ?? false),
+            isIntro: (bool) ($data['isIntro'] ?? false),
         );
     }
 
@@ -99,7 +103,8 @@ final readonly class Shot
      *     description: string,
      *     characterSlugs: list<string>,
      *     imagePath: ?string,
-     *     isOutro: bool
+     *     isOutro: bool,
+     *     isIntro: bool
      * }
      */
     public function toArray(): array
@@ -120,6 +125,7 @@ final readonly class Shot
             'characterSlugs' => $this->characterSlugs,
             'imagePath' => $this->imagePath,
             'isOutro' => $this->isOutro,
+            'isIntro' => $this->isIntro,
         ];
     }
 

@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// El motor de voz decide los valores por defecto de voz y velocidad. Los IDs de Kokoro
+// (af_heart) y los de Inworld (Blake) no son intercambiables, y NarrationStep lee
+// stories.tts.voice sin saber qué driver hay detrás: si el defecto no dependiera del
+// driver, Inworld recibiría una voz de Kokoro y respondería 400.
+$ttsDriver = env('TTS_DRIVER', 'kokoro');
+
 return [
 
     'llm' => [
@@ -69,6 +75,19 @@ return [
 
     'story' => [
         'target_words' => 1600,
+
+        // Margen admitido alrededor de target_words. Estaba a fuego dos veces, en StoryGenerator
+        // y en StoryPromptBuilder; ahora los dos leen de aquí para que el validador y lo que se
+        // le pide al modelo no puedan discrepar.
+        //
+        // A ±15% el techo son 1840 palabras, unos dieciséis minutos de vídeo. El ±40% de antes
+        // dejaba pasar 2240, que son veinte, y por ahí se colaron las 2105 palabras que hicieron
+        // el máster de 19:34. No se aprieta más porque el modelo tiene tres intentos y cada uno
+        // cuesta una generación y una revisión: un margen demasiado estrecho se los come.
+        'word_tolerance' => [
+            'min_ratio' => 0.85,
+            'max_ratio' => 1.15,
+        ],
         'min_scenes' => 8,
         'max_scenes' => 20,
         'language' => env('STORY_LANGUAGE', 'en'),
@@ -78,10 +97,31 @@ return [
         // candidato es una generación y una revisión, así que el gasto de LLM va con este número.
         // Sin revisión no hay puntuación con la que elegir y se genera uno solo.
         'candidates' => 3,
+        // Arranque del vídeo, en este orden: cold open, careta y ya la historia. El cold open lo
+        // escribe el LLM (campo coldOpen del guion) y es texto nuevo, nunca una copia literal de
+        // una frase de la historia: whisper alinea con un cursor que avanza y el texto repetido
+        // deja la segunda aparición sin anclar, y una frase sin anclar se queda sin `words`.
+        'cold_open' => [
+            'enabled' => env('STORY_COLD_OPEN_ENABLED', true),
+            // Negativo y por debajo de la careta: ShotPlanner y TranscriptTimer ordenan las
+            // escenas con ksort, así que el orden numérico es el orden del vídeo.
+            'scene_order' => -2000,
+            // Silencio entre el cold open y la careta. Es el corte, así que pesa más que la
+            // pausa normal entre escenas, pero por el mismo motivo que tts.pauses ya no hace
+            // falta que pese el doble: los clips vienen sin silencio propio.
+            'trail_pause' => 1.3,
+        ],
+        'intro' => [
+            'enabled' => env('STORY_INTRO_ENABLED', true),
+            'scene_order' => -1000,
+            'trail_pause' => 1.1,
+            'text' => 'You are listening to a story someone swore was true. Turn the lights down, put your headphones on, and stay with me all the way to the end.',
+            'image_prompt' => 'narrow dirt road at night swallowed by thick fog, one distant light, nobody there',
+        ],
         'outro' => [
             'enabled' => env('STORY_OUTRO_ENABLED', true),
             'scene_order' => 9000,
-            'lead_pause' => 3.0,
+            'lead_pause' => 1.5,
             'text' => 'That was the story for tonight. If you stayed with me all the way to the end of it, thank you. Subscribe, and turn on the bell, and I will have another one for you soon. Sleep well, if you can.',
             'image_prompt' => 'empty dark room at night, one dim lamp still burning, thick fog, nobody there',
         ],
@@ -110,17 +150,114 @@ return [
     ],
 
     'tts' => [
+        // Motor de voz: 'kokoro' (sidecar local) o 'inworld' (API de pago con tramo gratuito).
+        'driver' => $ttsDriver,
+
+        // Voz y velocidad efectivas del driver activo. Cada motor tiene su propia variable de
+        // entorno para que un .env con las dos configuradas no mezcle IDs entre proveedores.
+        'voice' => $ttsDriver === 'inworld'
+            ? env('INWORLD_VOICE', 'Blake')
+            : env('TTS_VOICE', 'af_heart'),
+        'speed' => (float) ($ttsDriver === 'inworld'
+            ? env('INWORLD_SPEED', 1.10)
+            : env('TTS_SPEED', 1.0)),
+
         'base_url' => env('TTS_BASE_URL', 'http://127.0.0.1:8020'),
-        'voice' => env('TTS_VOICE', 'af_heart'),
-        'speed' => (float) env('TTS_SPEED', 1.0),
         'timeout' => 120,
         'cache_path' => 'tts-cache',
+
+        'inworld' => [
+            'api_key' => env('INWORLD_API_KEY'),
+            'base_url' => 'https://api.inworld.ai',
+
+            // inworld-tts-2 es el único que respeta instruction y delivery_mode; el Flash los
+            // ignora en silencio, y son justamente el motivo de usar este proveedor.
+            'model' => env('INWORLD_MODEL', 'inworld-tts-2'),
+
+            // BCP-47. Inworld rechaza 'en' a secas, que es lo que vale stories.story.language.
+            'language' => env('INWORLD_LANGUAGE', 'en-US'),
+
+            // STABLE, BALANCED o CREATIVE. CREATIVE da más rango emocional a cambio de más
+            // variación, y la variación desvía al modelo del texto: whisper deja de alinear y
+            // los efectos con anchorWord no se colocan.
+            'delivery_mode' => env('INWORLD_DELIVERY_MODE', 'BALANCED'),
+
+            // Dirección de interpretación. No se factura y es lo que más cambia el resultado:
+            // medido sobre una historia real, quitarle el cierre "Do not drag" alarga la
+            // narración de 11,7 a 16,3 minutos.
+            'instruction' => 'Narrate with quiet, restrained dread at a steady, measured pace. '
+                .'Intimate and controlled, never theatrical. Do not drag.',
+
+            // 48 kHz es el ritmo natural de las voces y el que ya usa ffmpeg.mp3_sample_rate,
+            // así que el máster no se remuestrea en ningún punto.
+            'sample_rate' => 48000,
+
+            // Denoising del audio sintetizado.
+            'enhance_generation' => true,
+
+            'timeout' => 120,
+
+            // Una historia son cientos de peticiones seguidas, así que un fallo transitorio a
+            // mitad no puede tirar la narración entera: ya pasó en la frase 146 de 252.
+            'retry' => [
+                'times' => 4,
+                'sleep_ms' => 500,
+                // 429 es el límite por minuto, no la cuota agotada, y los 5xx son del proveedor.
+                // Un 400 o un 401 no se reintentan: reintentar una petición mal formada o una
+                // credencial mala solo retrasa el error y gasta cuota si acaba entrando.
+                'statuses' => [429, 500, 502, 503, 504],
+            ],
+
+            // Caché aparte de la de Kokoro para poder vaciar una sin tocar la otra y para
+            // llevar la cuenta de lo que se ha facturado.
+            'cache_path' => 'inworld-cache',
+
+            // Inworld entrega cada frase con silencio propio delante de la primera sílaba y
+            // detrás de la última: 1,685 s de media, el 36% del clip. Ese silencio se suma al
+            // pauseAfter que ya calcula SentenceSplitter, así que una historia de 252 frases se
+            // alargaba 2:09 sin que nadie lo hubiera pedido.
+            //
+            // Se recortan solo los bordes. Las pausas interiores, las de las comas, también son
+            // largas (casi 5 minutos en la misma historia), pero ésas son la interpretación de la
+            // voz: acotarlas es una decisión de dirección, no un arreglo.
+            'trim' => [
+                'enabled' => true,
+
+                // Umbral de silencio. Medido sobre los clips reales: el ruido de fondo de Inworld
+                // se queda por debajo de -60 dB y la primera sílaba entra muy por encima de -30.
+                'threshold_db' => -50.0,
+
+                // Silencio que se deja en cada borde para no comerse el ataque de la primera
+                // sílaba ni la caída de la última.
+                'guard_seconds' => 0.04,
+
+                // Los recortados cuelgan de su propia carpeta y la respuesta cruda de la API se
+                // conserva con su clave de siempre. Así cambiar el umbral se resuelve con ffmpeg
+                // en local y no cuesta ni una petición, que es lo que se factura.
+                'cache_path' => 'inworld-cache/trimmed',
+            ],
+
+            // Techo de texto por petición que impone la API.
+            'max_characters' => 2000,
+
+            // Fuera de este rango la API responde 400. Se valida al construir el driver para
+            // no descubrirlo en la primera frase de cien.
+            'min_speed' => 0.5,
+            'max_speed' => 1.5,
+        ],
+
         // Pausas en segundos. Son el 80% del efecto de terror: ajústalas a menudo.
+        //
+        // Bajaron cuando se empezó a recortar el silencio de los clips de Inworld. Antes cada
+        // frase traía 1,685 s de silencio propio y estos valores se sumaban a él, así que el
+        // hueco real era casi el doble del pedido; con los clips limpios el hueco es exactamente
+        // este número más las dos guardas de 0,04 s, y los 1,8 s entre escenas se oían como dos
+        // segundos secos, quince veces por historia.
         'pauses' => [
-            'sentence' => 0.45,
-            'question_or_exclamation' => 0.7,
-            'ellipsis' => 1.1,
-            'between_scenes' => 1.8,
+            'sentence' => 0.32,
+            'question_or_exclamation' => 0.5,
+            'ellipsis' => 0.8,
+            'between_scenes' => 0.95,
         ],
     ],
 

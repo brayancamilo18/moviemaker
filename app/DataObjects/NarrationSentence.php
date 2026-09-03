@@ -17,6 +17,7 @@ final readonly class NarrationSentence
         public float $pauseAfter,
         public string $ttsText = '',
         public bool $isOutro = false,
+        public bool $isIntro = false,
     ) {}
 
     /**

@@ -42,6 +42,15 @@ final class TranscriptTimer
      */
     private const MAX_LEADING_SKIP = 3;
 
+    /**
+     * Tokens esperados que se pueden saltar de golpe cuando whisper no escribe ninguno de ellos.
+     * La fonética reescribe un nombre en hasta cuatro tokens («PEH-nyahs BLAHN-kahs») donde
+     * whisper oye dos palabras, y un nombre español sin fonética se le angliza («Tomás» sale
+     * «Thomas»): sin poder saltar el token que no aparece, el emparejador se queda clavado en él
+     * y pierde la frase entera aunque el resto encaje palabra por palabra.
+     */
+    private const MAX_EXPECTED_SKIP = 4;
+
     /** Longitud mínima del prefijo común para aceptar dos tokens como el mismo. */
     private const FUZZY_PREFIX_LENGTH = 4;
 
@@ -183,6 +192,22 @@ final class TranscriptTimer
             $fields = $this->sentenceFields($index, $sentence);
             $expected = $this->tokens($fields['ttsText']);
             $match = $this->matchExpected($words, $cursor, $expected, $pending);
+
+            // La fonética reescribe un nombre en varios tokens que whisper no escribe nunca
+            // («sahn-tee-YAH-nah» donde oye «Santillana»), y bestAnchor no sabe saltarse un token
+            // esperado que no aparece: cuenta el fallo sin avanzar la posición, se atasca en él y
+            // pierde la frase entera. Medido sobre una historia real, fallaban las 16 frases con
+            // fonética y ninguna sin ella. El texto del guion sí se parece a lo que whisper oye,
+            // así que cuando la fonética no ancla se reintenta con la ortografía original.
+            if ($match === null && $fields['ttsText'] !== $fields['text']) {
+                $fromScript = $this->tokens($fields['text']);
+                $match = $this->matchExpected($words, $cursor, $fromScript, $pending);
+
+                if ($match !== null) {
+                    $expected = $fromScript;
+                }
+            }
+
             $row = [
                 'order' => $fields['order'],
                 'sceneOrder' => $fields['sceneOrder'],
@@ -742,9 +767,11 @@ final class TranscriptTimer
             $misses = 0;
 
             for ($index = $start + 1; $index < $wordCount && $position < $expectedCount; $index++) {
-                if ($this->tokensMatch($words[$index]['token'], $expected[$position])) {
+                $landed = $this->nextExpected($words[$index]['token'], $expected, $position, $expectedCount);
+
+                if ($landed !== null) {
                     $matched++;
-                    $position++;
+                    $position = $landed + 1;
                     $end = $index;
                     $misses = 0;
 
@@ -779,6 +806,27 @@ final class TranscriptTimer
         }
 
         return ['from' => $best['from'], 'to' => $best['to']];
+    }
+
+    /**
+     * Posición del token esperado con el que casa esta palabra: la de $position si casa con ella,
+     * o la del primer token dentro de los MAX_EXPECTED_SKIP siguientes. Los saltados no cuentan
+     * como acertados, así que la fracción de MIN_MATCH_RATIO sigue midiéndose sobre la frase
+     * entera y saltar no sirve para colar un ancla mala.
+     *
+     * @param  list<string>  $expected
+     */
+    private function nextExpected(string $token, array $expected, int $position, int $expectedCount): ?int
+    {
+        $limit = min($expectedCount, $position + self::MAX_EXPECTED_SKIP + 1);
+
+        for ($candidate = $position; $candidate < $limit; $candidate++) {
+            if ($this->tokensMatch($token, $expected[$candidate])) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**

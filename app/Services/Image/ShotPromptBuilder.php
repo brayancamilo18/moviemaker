@@ -77,7 +77,7 @@ final class ShotPromptBuilder
             throw new InvalidArgumentException("El plano {$shot->order} no tiene description.");
         }
 
-        if ($shot->isOutro) {
+        if ($shot->isOutro || $shot->isIntro) {
             return implode(', ', array_values(array_filter(
                 [
                     $description,
@@ -264,8 +264,8 @@ final class ShotPromptBuilder
     }
 
     /**
-     * Negativos fijos del canal. El outro no suma los de la biblia: si no, el prompt
-     * cambiaría con cada historia y la imagen de cierre no reutilizaría caché.
+     * Negativos fijos del canal. La careta y el outro no suman los de la biblia: si no, el prompt
+     * cambiaría con cada historia y sus imágenes no reutilizarían caché.
      */
     private function channelNegatives(): string
     {

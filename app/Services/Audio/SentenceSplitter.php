@@ -23,6 +23,16 @@ final class SentenceSplitter
 
     private readonly float $outroLeadPause;
 
+    private readonly int $introSceneOrder;
+
+    /**
+     * Silencio detrás de cada bloque del arranque, por orden de escena. El cold open y la careta
+     * son cortes, no cambios de escena: la pausa normal entre escenas se les queda corta.
+     *
+     * @var array<int, float>
+     */
+    private readonly array $trailPauses;
+
     public function __construct(Repository $config)
     {
         $pauses = $config->get('stories.tts.pauses');
@@ -33,6 +43,11 @@ final class SentenceSplitter
         $this->pauseBetweenScenes = (float) $pauses['between_scenes'];
         $this->outroSceneOrder = (int) $config->get('stories.story.outro.scene_order');
         $this->outroLeadPause = (float) $config->get('stories.story.outro.lead_pause');
+        $this->introSceneOrder = (int) $config->get('stories.story.intro.scene_order');
+        $this->trailPauses = [
+            (int) $config->get('stories.story.cold_open.scene_order') => (float) $config->get('stories.story.cold_open.trail_pause'),
+            $this->introSceneOrder => (float) $config->get('stories.story.intro.trail_pause'),
+        ];
     }
 
     /**
@@ -72,16 +87,21 @@ final class SentenceSplitter
             $enteringOutro = $nextOrder === $this->outroSceneOrder;
 
             foreach ($parts as $partIndex => $part) {
-                $betweenScenes = ! $isLastScene && $partIndex === $lastPart;
-                $outroLead = $enteringOutro && $partIndex === $lastPart;
+                $lastOfScene = $partIndex === $lastPart;
+                $betweenScenes = ! $isLastScene && $lastOfScene;
+                $outroLead = $enteringOutro && $lastOfScene;
+                $trailPause = $lastOfScene && ! $isLastScene
+                    ? ($this->trailPauses[$sceneOrder] ?? null)
+                    : null;
 
                 $sentences[] = new NarrationSentence(
                     order: $order,
                     sceneOrder: $sceneOrder,
                     text: $part,
-                    pauseAfter: $this->pauseAfter($part, $betweenScenes, $outroLead),
+                    pauseAfter: $this->pauseAfter($part, $betweenScenes, $outroLead, $trailPause),
                     ttsText: $ttsText === null ? $part : $ttsText($part),
                     isOutro: $sceneOrder === $this->outroSceneOrder,
+                    isIntro: $sceneOrder === $this->introSceneOrder,
                 );
                 $order++;
             }
@@ -276,10 +296,19 @@ final class SentenceSplitter
         return $matches[1];
     }
 
-    private function pauseAfter(string $sentence, bool $betweenScenes, bool $outroLead): float
-    {
+    private function pauseAfter(
+        string $sentence,
+        bool $betweenScenes,
+        bool $outroLead,
+        ?float $trailPause = null,
+    ): float {
         if ($outroLead) {
             return $this->outroLeadPause;
+        }
+
+        // La salida de un bloque del arranque manda sobre el corte entre escenas.
+        if ($trailPause !== null) {
+            return $trailPause;
         }
 
         // El corte entre escenas manda sobre ? ! y puntos suspensivos.

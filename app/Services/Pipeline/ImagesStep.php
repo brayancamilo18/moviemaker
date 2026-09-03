@@ -241,6 +241,7 @@ final class ImagesStep
                 characterSlugs: $row->shot->characterSlugs,
                 imagePath: $shot->imagePath,
                 isOutro: $shot->isOutro,
+                isIntro: $shot->isIntro,
             );
         }
 
@@ -484,7 +485,7 @@ final class ImagesStep
         $counted = [];
 
         foreach ($shots as $shot) {
-            if ($shot->isOutro) {
+            if ($shot->isOutro || $shot->isIntro) {
                 continue;
             }
 

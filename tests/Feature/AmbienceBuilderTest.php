@@ -157,6 +157,49 @@ final class AmbienceBuilderTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_the_careta_does_not_resolve_a_bed_and_the_next_scene_absorbs_its_hueco(): void
+    {
+        $this->app->make('config')->set('stories.audio.tail_seconds', 0.0);
+        $this->app->forgetInstance(AmbienceBuilder::class);
+        $this->indexClip('ambience/wind-night-1.wav', ['wind', 'night'], 3.0, -20.0);
+
+        $coldOpenOrder = (int) config('stories.story.cold_open.scene_order');
+        $introOrder = (int) config('stories.story.intro.scene_order');
+
+        $story = $this->story([
+            [
+                'query' => 'wind howling night',
+                'tags' => ['wind', 'night'],
+                'intensity' => 'subtle',
+            ],
+            [
+                'query' => 'wind howling night',
+                'tags' => ['wind', 'night'],
+                'intensity' => 'heavy',
+            ],
+        ]);
+
+        $track = $this->app->make(AmbienceBuilder::class)->build($story, [
+            'scenes' => [
+                ['order' => $coldOpenOrder, 'start' => 0.0, 'end' => 4.0, 'duration' => 4.0],
+                ['order' => $introOrder, 'start' => 4.0, 'end' => 8.0, 'duration' => 4.0],
+                ['order' => 1, 'start' => 8.0, 'end' => 12.0, 'duration' => 4.0],
+                ['order' => 2, 'start' => 12.0, 'end' => 16.0, 'duration' => 4.0],
+            ],
+        ], $this->makeNarrationWav(16.0));
+
+        $this->assertSame(
+            ['ambience.'.$coldOpenOrder, 'ambience.1', 'ambience.2'],
+            array_map(
+                static fn (object $credit): string => $credit->cueId,
+                $track->credits,
+            ),
+        );
+        $this->assertSame(0.0, $track->startAt);
+        $this->assertEqualsWithDelta(16.0, $this->app->make(LibraryClipProcessor::class)->duration($track->path), 0.05);
+        Http::assertNothingSent();
+    }
+
     public function test_falls_back_to_story_tags_when_scene_has_no_ambience(): void
     {
         $this->indexClip('ambience/wind-night-1.wav', ['wind', 'night', 'fog'], 3.0, -20.0);
@@ -209,6 +252,11 @@ final class AmbienceBuilderTest extends TestCase
             'description' => 'Wind.',
             'tags' => ['wind', 'night'],
             'thumbnailPrompt' => 'wind',
+            'coldOpen' => [
+                'narration' => 'The wind stopped all at once and something kept walking.',
+                'visualSummary' => 'Still trees on an empty road at night',
+            ],
+            'hookLine' => 'What would you have done when the wind stopped?',
             'scenes' => $scenes,
             'pronunciations' => [],
         ]);

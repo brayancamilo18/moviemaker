@@ -215,6 +215,26 @@ final class MixTest extends TestCase
         $this->assertSame(1, substr_count($document, 'music/drone-attr.wav'));
     }
 
+    public function test_the_cold_open_bed_survives_its_negative_scene_order(): void
+    {
+        $this->indexClip('ambience/wind-1.wav', 'ambience', ['wind', 'night'], 3.0);
+        $coldOpen = (int) config('stories.story.cold_open.scene_order');
+
+        $beds = $this->app->make(StorySoundManifest::class)->ambienceByScene([
+            $this->ambienceCue($coldOpen, 'ambience/wind-1.wav'),
+            $this->ambienceCue(1, 'ambience/wind-1.wav'),
+            $this->ambienceCue(null, 'ambience/wind-1.wav'),
+        ]);
+
+        $this->assertLessThan(0, $coldOpen);
+        $this->assertSame([$coldOpen, 1], array_keys($beds));
+        $this->assertSame(
+            $this->libraryDir.DIRECTORY_SEPARATOR.'ambience'.DIRECTORY_SEPARATOR.'wind-1.wav',
+            $beds[$coldOpen]['path'],
+        );
+        $this->assertSame(-3.5, $beds[$coldOpen]['gainDb']);
+    }
+
     public function test_credits_deduplicate_a_clip_that_arrives_relative_and_absolute(): void
     {
         $absolute = $this->libraryDir.DIRECTORY_SEPARATOR.'ambience'.DIRECTORY_SEPARATOR.'room-tone.wav';
@@ -486,6 +506,24 @@ final class MixTest extends TestCase
                 'importance' => 'key',
             ]],
         ], JSON_PRETTY_PRINT)."\n");
+    }
+
+    /**
+     * Señal de cama tal como la escribe story:sounds. Con `$sceneOrder` nulo no dice de qué escena
+     * es, que es lo único que la deja fuera de la cama.
+     *
+     * @return array<string, mixed>
+     */
+    private function ambienceCue(?int $sceneOrder, string $file): array
+    {
+        return [
+            'id' => 'ambience.'.($sceneOrder ?? 'x'),
+            'type' => 'ambience',
+            'role' => 'bed',
+            'sceneOrder' => $sceneOrder,
+            'file' => $file,
+            'gainDb' => -3.5,
+        ];
     }
 
     /**

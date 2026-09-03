@@ -32,6 +32,16 @@ final class NarrationStep
 
     private readonly int $outroOrder;
 
+    private readonly bool $coldOpenEnabled;
+
+    private readonly int $coldOpenOrder;
+
+    private readonly bool $introEnabled;
+
+    private readonly string $introText;
+
+    private readonly int $introOrder;
+
     public function __construct(
         private TextToSpeech $tts,
         private SentenceSplitter $splitter,
@@ -46,6 +56,11 @@ final class NarrationStep
         $this->outroEnabled = (bool) $config->get('stories.story.outro.enabled');
         $this->outroText = (string) $config->get('stories.story.outro.text');
         $this->outroOrder = (int) $config->get('stories.story.outro.scene_order');
+        $this->coldOpenEnabled = (bool) $config->get('stories.story.cold_open.enabled');
+        $this->coldOpenOrder = (int) $config->get('stories.story.cold_open.scene_order');
+        $this->introEnabled = (bool) $config->get('stories.story.intro.enabled');
+        $this->introText = (string) $config->get('stories.story.intro.text');
+        $this->introOrder = (int) $config->get('stories.story.intro.scene_order');
     }
 
     /**
@@ -220,9 +235,13 @@ final class NarrationStep
      */
     private function splitSentences(StoryScript $story): array
     {
-        $scenes = $this->outroEnabled
-            ? $story->scenesForNarrationWithOutro($this->outroText, $this->outroOrder)
-            : $story->scenesForNarration();
+        $scenes = $story->scenesForNarrationWithBookends(
+            $this->coldOpenEnabled ? $this->coldOpenOrder : null,
+            $this->introEnabled ? $this->introText : '',
+            $this->introOrder,
+            $this->outroEnabled ? $this->outroText : '',
+            $this->outroOrder,
+        );
 
         return $this->splitter->splitScenes(
             $scenes,

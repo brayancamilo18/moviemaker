@@ -225,10 +225,16 @@ final class StorySoundManifest
                 continue;
             }
 
-            $order = (int) ($cue['sceneOrder'] ?? 0);
+            // El orden puede ser negativo: el cold open va en -2000 para quedar delante de todo.
+            // Lo único que descalifica una señal de ambiente es no decir de qué escena es.
+            if (! isset($cue['sceneOrder'])) {
+                continue;
+            }
+
+            $order = (int) $cue['sceneOrder'];
             $path = $this->absoluteFile((string) ($cue['file'] ?? ''));
 
-            if ($order < 1 || $path === '' || ! $this->files->isFile($path)) {
+            if ($path === '' || ! $this->files->isFile($path)) {
                 continue;
             }
 
