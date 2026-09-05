@@ -11,18 +11,34 @@ use Tests\TestCase;
 
 final class ShotPromptBuilderTest extends TestCase
 {
-    public function test_a_realistic_bible_keeps_the_negatives_and_the_style_suffix(): void
+    public function test_the_positive_prompt_carries_the_style_suffix_and_no_negations(): void
     {
         $prompt = $this->app->make(ShotPromptBuilder::class)->build(
             $this->shot(subject: 'threat', threatStage: 'reveal'),
             $this->richBible(),
         );
 
-        $this->assertStringContainsString('no clear facial features', $prompt);
-        $this->assertStringContainsString('no direct eye contact', $prompt);
-        $this->assertStringContainsString('no crowds of people', $prompt);
         $this->assertStringContainsString($this->styleSuffixTail(), $prompt);
         $this->assertStringContainsString($this->styleSuffix(), $prompt);
+
+        // Un "no X" dentro del prompt positivo no es una negación para el codificador
+        // de texto: es la palabra X pidiendo salir en la imagen.
+        $this->assertStringNotContainsString('no clear facial features', $prompt);
+        $this->assertStringNotContainsString('no crowds of people', $prompt);
+        $this->assertStringNotContainsString('crowds of people', $prompt);
+    }
+
+    public function test_the_negative_branch_lists_the_concepts_without_the_no_prefix(): void
+    {
+        $negatives = $this->app->make(ShotPromptBuilder::class)->negativePrompt($this->richBible());
+
+        $this->assertStringContainsString('resolved facial features', $negatives);
+        $this->assertStringContainsString('direct eye contact', $negatives);
+        $this->assertStringContainsString('crowds of people', $negatives);
+        $this->assertStringContainsString('watermark', $negatives);
+
+        // Nada de "no ..." aquí: lo que se lista en la rama negativa ya se evita por serlo.
+        $this->assertDoesNotMatchRegularExpression('/(^|,\s*)no\s/i', $negatives);
     }
 
     public function test_the_descriptive_part_stays_within_the_configured_word_cap(): void
@@ -43,9 +59,8 @@ final class ShotPromptBuilderTest extends TestCase
                 count(preg_split('/\s+/u', $this->descriptivePart($prompt), -1, PREG_SPLIT_NO_EMPTY) ?: []),
                 "La parte descriptiva del plano {$shots[$index]->order} pasa del tope de palabras.",
             );
-            // El tope no gobierna a estos dos: por apretado que vaya el plano, siguen enteros.
+            // El tope no gobierna al sufijo: por apretado que vaya el plano, sigue entero.
             $this->assertStringContainsString($this->styleSuffix(), $prompt);
-            $this->assertStringContainsString('no crowds of people', $prompt);
         }
     }
 

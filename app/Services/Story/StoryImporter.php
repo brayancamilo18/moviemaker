@@ -8,6 +8,7 @@ use App\Enums\ReviewVerdict;
 use App\Enums\StoryMode;
 use App\Enums\StoryStatus;
 use App\Models\Story;
+use App\Services\Image\ShotImageCount;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Filesystem\Filesystem;
 use JsonException;
@@ -18,6 +19,7 @@ final class StoryImporter
 
     public function __construct(
         private Filesystem $files,
+        private ShotImageCount $shotImages,
         Repository $config,
     ) {
         $this->storiesDirectory = storage_path('app/'.$config->get('stories.output_path'));
@@ -88,6 +90,14 @@ final class StoryImporter
         if (! $dryRun) {
             if ($existing instanceof Story) {
                 $existing->fill($attributes);
+
+                // Una historia que avanzó por fuera —un comando suelto, un script encadenado—
+                // deja los artefactos en disco y la fila donde estaba. Sin esto, el panel
+                // nunca se entera de que terminó: enseña "narrada" con el MP4 ya escrito.
+                if ($this->advances($existing->status, $status)) {
+                    $existing->status = $status;
+                }
+
                 $existing->save();
             } else {
                 Story::query()->create([
@@ -205,6 +215,19 @@ final class StoryImporter
         ];
     }
 
+    /**
+     * Solo se adelanta, y solo entre estados que gana el pipeline por su cuenta. Retroceder
+     * sería borrar trabajo hecho, y adelantar sobre una decisión humana —aprobada, publicada,
+     * descartada, fallida— sería tomarla en su nombre.
+     */
+    private function advances(StoryStatus $current, StoryStatus $inferred): bool
+    {
+        $from = $current->pipelineRank();
+        $to = $inferred->pipelineRank();
+
+        return $from !== null && $to !== null && $to > $from;
+    }
+
     private function inferStatus(string $slug): StoryStatus
     {
         $directory = $this->storiesDirectory.DIRECTORY_SEPARATOR.$slug;
@@ -212,10 +235,26 @@ final class StoryImporter
         return match (true) {
             $this->files->isFile($directory.DIRECTORY_SEPARATOR.'video.mp4') => StoryStatus::PendingReview,
             $this->files->isFile($directory.DIRECTORY_SEPARATOR.'narration_mix.wav') => StoryStatus::Mixed,
-            $this->files->isFile($directory.DIRECTORY_SEPARATOR.'shots.json') => StoryStatus::ImagesReady,
+            $this->imagesComplete($slug) => StoryStatus::ImagesReady,
             $this->files->isFile($directory.DIRECTORY_SEPARATOR.'narration.wav') => StoryStatus::Narrated,
             default => StoryStatus::ScriptReady,
         };
+    }
+
+    /**
+     * Que exista shots.json no quiere decir que las imágenes estén: el fichero se escribe con
+     * el plan y se va rellenando plano a plano durante media hora larga. Importar una historia
+     * a medias como "imágenes listas" la deja a un clic de saltar a sonido con la mitad de los
+     * planos sin pintar, y esa mitad ya no se recupera sola.
+     *
+     * Una historia ya depurada no pasa por aquí: story:prune solo suelta las imágenes cuando
+     * hay vídeo, y el vídeo se comprueba antes.
+     */
+    private function imagesComplete(string $slug): bool
+    {
+        $images = $this->shotImages->get($slug);
+
+        return $images !== null && $images['done'] >= $images['total'];
     }
 
     /**

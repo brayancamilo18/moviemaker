@@ -244,8 +244,11 @@ final class ShotPlannerTest extends TestCase
                 $prompt,
                 "El prompt del plano {$shots[$index]->order} contiene 'no faces'.",
             );
-            $this->assertStringContainsString('no clear facial features', $prompt);
         }
+
+        // La cara sigue prohibida, pero por la rama negativa: dentro del prompt positivo
+        // «no clear facial features» no impedía una cara, la pedía.
+        $this->assertStringContainsString('resolved facial features', $builder->negativePrompt($bible));
     }
 
     public function test_prompt_build_throws_when_description_is_empty(): void

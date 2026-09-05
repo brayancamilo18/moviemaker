@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Services\Pipeline\QueueHealth;
+use App\Services\Pipeline\WorkerHeartbeat;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -93,6 +94,7 @@ final class QueueHealthTest extends TestCase
     public function test_a_fresh_waiting_job_is_within_the_margin(): void
     {
         $this->useDatabaseQueue();
+        $this->workerIsAlive();
 
         DB::table('jobs')->insert([
             'queue' => 'default',
@@ -111,9 +113,10 @@ final class QueueHealthTest extends TestCase
         $this->assertFalse($status['workerBusy']);
     }
 
-    public function test_an_empty_table_is_idle(): void
+    public function test_an_empty_table_with_a_live_worker_is_idle(): void
     {
         $this->useDatabaseQueue();
+        $this->workerIsAlive();
 
         $status = $this->health()->status();
 
@@ -123,6 +126,53 @@ final class QueueHealthTest extends TestCase
         $this->assertNull($status['oldestWaitingSeconds']);
         $this->assertFalse($status['likelyNoWorker']);
         $this->assertFalse($status['workerBusy']);
+        $this->assertTrue($status['workerAlive']);
+    }
+
+    /**
+     * Antes esto se daba por sano: sin nada esperando no había con qué delatar al worker
+     * ausente, así que el panel decía que todo iba bien hasta que alguien encolaba algo y
+     * se comía los quince segundos de margen. El latido lo dice de entrada.
+     */
+    public function test_an_empty_table_without_a_heartbeat_means_no_worker(): void
+    {
+        $this->useDatabaseQueue();
+
+        $status = $this->health()->status();
+
+        $this->assertSame(0, $status['waiting']);
+        $this->assertTrue($status['likelyNoWorker']);
+        $this->assertFalse($status['workerAlive']);
+        $this->assertNull($status['workerSeenSeconds']);
+    }
+
+    /**
+     * Un paso de imágenes se pasa media hora dentro del job y no da una sola vuelta al bucle,
+     * así que deja de latir. Tener el trabajo reservado es la otra forma de estar vivo.
+     */
+    public function test_a_reserved_job_keeps_the_worker_alive_without_a_heartbeat(): void
+    {
+        $this->useDatabaseQueue();
+
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => '{}',
+            'attempts' => 1,
+            'reserved_at' => now()->getTimestamp(),
+            'available_at' => now()->getTimestamp() - 60,
+            'created_at' => now()->getTimestamp() - 60,
+        ]);
+
+        $status = $this->health()->status();
+
+        $this->assertSame(1, $status['running']);
+        $this->assertTrue($status['workerAlive']);
+        $this->assertFalse($status['likelyNoWorker']);
+    }
+
+    private function workerIsAlive(): void
+    {
+        $this->app->make(WorkerHeartbeat::class)->beat();
     }
 
     private function useDatabaseQueue(): void

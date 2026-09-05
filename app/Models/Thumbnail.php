@@ -15,6 +15,7 @@ final class Thumbnail extends Model
     protected $fillable = [
         'story_id',
         'name',
+        'shot_order',
         'frame_second',
         'line1',
         'line2',
@@ -35,7 +36,13 @@ final class Thumbnail extends Model
     protected function casts(): array
     {
         return [
+            'shot_order' => 'integer',
             'frame_second' => 'float',
+            'font_size' => 'integer',
+            'pos_y' => 'integer',
+            'vignette' => 'integer',
+            'contrast' => 'integer',
+            'saturation' => 'integer',
             'is_selected' => 'boolean',
         ];
     }

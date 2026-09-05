@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\ContactSheetController;
 use App\Http\Controllers\PipelineController;
 use App\Http\Controllers\QueueController;
 use App\Http\Controllers\StoryController;
 use App\Http\Controllers\StoryInspectionController;
 use App\Http\Controllers\StoryMediaController;
+use App\Http\Controllers\ThumbnailController;
 use App\Jobs\CheckProviderHealth;
 use App\Services\Llm\ProviderHealthStore;
 use Illuminate\Support\Facades\Route;
@@ -37,8 +39,24 @@ Route::get('/llm/health', function (ProviderHealthStore $store) {
     return response()->json($store->get() ?? ['report' => null]);
 })->name('llm.health');
 Route::get('/review', [StoryController::class, 'reviewEntry'])->name('review');
-Route::get('/sheet', fn () => Inertia::render('ContactSheet'))->name('sheet');
-Route::get('/thumbnail', fn () => Inertia::render('Thumbnail'))->name('thumbnail');
+Route::get('/sheet', [ContactSheetController::class, 'entry'])->name('sheet');
+Route::get('/stories/{story}/sheet', [ContactSheetController::class, 'show'])->name('sheet.show');
+Route::get('/stories/{story}/shots/{order}/image', [ContactSheetController::class, 'image'])
+    ->whereNumber('order')
+    ->name('sheet.image');
+Route::get('/thumbnail', [ThumbnailController::class, 'entry'])->name('thumbnail');
+Route::get('/stories/{story}/thumbnail', [ThumbnailController::class, 'show'])->name('thumbnail.show');
+Route::post('/stories/{story}/thumbnail', [ThumbnailController::class, 'store'])->name('thumbnail.store');
+Route::post('/stories/{story}/thumbnail/{thumbnail}/select', [ThumbnailController::class, 'select'])
+    ->name('thumbnail.select');
+Route::delete('/stories/{story}/thumbnail/{thumbnail}', [ThumbnailController::class, 'destroy'])
+    ->name('thumbnail.destroy');
+Route::get('/stories/{story}/thumbnail/{thumbnail}/download', [ThumbnailController::class, 'download'])
+    ->whereNumber('thumbnail')
+    ->name('thumbnail.download');
+Route::get('/stories/{story}/thumbnail/{order}/image', [ThumbnailController::class, 'image'])
+    ->whereNumber('order')
+    ->name('thumbnail.image');
 Route::get('/package', fn () => Inertia::render('Package'))->name('package');
 
 Route::get('/media/{story}/{artifact}', [StoryMediaController::class, 'show'])

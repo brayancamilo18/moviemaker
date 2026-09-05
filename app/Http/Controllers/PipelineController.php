@@ -7,6 +7,7 @@ namespace App\Http\Controllers;
 use App\Enums\StoryStatus;
 use App\Models\Story;
 use App\Models\StoryEvent;
+use App\Services\Image\ShotImageCount;
 use App\Services\Llm\SpendReport;
 use App\Services\Pipeline\PipelineProgress;
 use App\Services\Pipeline\QueueHealth;
@@ -48,6 +49,7 @@ final class PipelineController extends Controller
         private readonly QueueHealth $queue,
         private readonly PipelineProgress $progress,
         private readonly SpendReport $spend,
+        private readonly ShotImageCount $shotImages,
     ) {}
 
     public function index(Request $request): Response
@@ -166,19 +168,20 @@ final class PipelineController extends Controller
         $failedRow = $this->failedRow($story, $progress);
         $jobsDone = $this->jobsDone($story);
         $windows = $this->statusWindows($story);
+        $images = $this->shotImages->get($story->slug);
 
         $rows = [];
 
         foreach (self::ROWS as $index => $row) {
             $number = $index + 1;
-            $state = $this->rowState($number, $row, $jobsDone, $running, $queued, $failedRow);
+            $state = $this->rowState($number, $row, $jobsDone, $running, $queued, $failedRow, $images);
             $rows[] = [
                 'num' => sprintf('%02d', $number),
                 'name' => $row['name'],
                 'job' => $row['job'],
                 'state' => $state,
-                'progress' => $this->rowProgress($state, $progress, $running === $number),
-                'unit' => $this->rowUnit($number, $state, $story, $progress, $row['noun'], $running === $number),
+                'progress' => $this->rowProgress($state, $progress, $running === $number, $number === 5 ? $images : null),
+                'unit' => $this->rowUnit($number, $state, $story, $progress, $row['noun'], $running === $number, $images),
                 'time' => $this->rowTime(
                     $row,
                     $state,
@@ -210,6 +213,11 @@ final class PipelineController extends Controller
                 'video_seconds' => $story->video_seconds,
                 'verdict' => $story->verdict?->value,
                 'used_fallback' => (bool) $story->used_fallback,
+                // La hoja de contactos existe desde que hay plan, aunque no haya ni una imagen:
+                // es donde se ve qué planos faltan.
+                'sheet_url' => $images === null ? null : route('sheet.show', $story),
+                'shots_done' => $images['done'] ?? null,
+                'shots_total' => $images['total'] ?? null,
             ],
             'rows' => $rows,
             'elapsed' => $this->elapsed($story),
@@ -333,8 +341,9 @@ final class PipelineController extends Controller
 
     /**
      * @param  array{job: string, stage: string|null, name: string, noun: string}  $row
+     * @param  array{done: int, total: int}|null  $images
      */
-    private function rowState(int $number, array $row, int $jobsDone, ?int $running, ?int $queued, ?int $failedRow): string
+    private function rowState(int $number, array $row, int $jobsDone, ?int $running, ?int $queued, ?int $failedRow, ?array $images = null): string
     {
         if ($failedRow === $number) {
             return 'fallido';
@@ -351,6 +360,34 @@ final class PipelineController extends Controller
 
         if ($this->rowComplete($row, $jobsDone, $running)) {
             return 'hecho';
+        }
+
+        return $this->partialState($number, $images);
+    }
+
+    /**
+     * Un paso que nadie está ejecutando pero que ya dejó trabajo en disco no está "en espera":
+     * decirlo así borra de la pantalla las horas de imágenes que sí existen. Pasa siempre que
+     * el paso lo lanzó un comando suelto, y cada vez que un worker se cae a mitad.
+     *
+     * Solo aplica a las imágenes porque es el único paso que deja su avance contado en disco;
+     * los demás son atómicos o no dejan rastro parcial legible.
+     *
+     * @param  array{done: int, total: int}|null  $images
+     */
+    private function partialState(int $number, ?array $images): string
+    {
+        if ($images === null || $images['total'] < 1) {
+            return 'en espera';
+        }
+
+        // El plan de planos existe en cuanto shots.json se escribe, y eso es toda la fila 4.
+        if ($number === 4) {
+            return 'hecho';
+        }
+
+        if ($number === 5 && $images['done'] > 0) {
+            return $images['done'] >= $images['total'] ? 'hecho' : 'a medias';
         }
 
         return 'en espera';
@@ -407,8 +444,9 @@ final class PipelineController extends Controller
 
     /**
      * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
+     * @param  array{done: int, total: int}|null  $images
      */
-    private function rowProgress(string $state, ?array $progress, bool $isRunning): float
+    private function rowProgress(string $state, ?array $progress, bool $isRunning, ?array $images = null): float
     {
         if ($state === 'hecho') {
             return 1.0;
@@ -418,15 +456,22 @@ final class PipelineController extends Controller
             return 0.0;
         }
 
-        if (! $isRunning || $progress === null || $progress['total'] < 1) {
-            return 0.0;
+        if ($isRunning && $progress !== null && $progress['total'] >= 1) {
+            return max(0.0, min(1.0, $progress['done'] / $progress['total']));
         }
 
-        return max(0.0, min(1.0, $progress['done'] / $progress['total']));
+        // Barra de imágenes sin worker detrás: un paso lanzado a mano, o uno que se cortó a
+        // medias, sigue teniendo un avance real que enseñar mientras el JSON lo registre.
+        if ($images !== null && $images['total'] >= 1) {
+            return max(0.0, min(1.0, $images['done'] / $images['total']));
+        }
+
+        return 0.0;
     }
 
     /**
      * @param  array{step: string, label: string, done: int, total: int, stage: string|null, queued: bool}|null  $progress
+     * @param  array{done: int, total: int}|null  $images
      */
     private function rowUnit(
         int $number,
@@ -435,6 +480,7 @@ final class PipelineController extends Controller
         ?array $progress,
         string $noun,
         bool $isRunning,
+        ?array $images = null,
     ): string {
         if ($state === 'en espera' || $state === 'en cola' || $state === 'fallido') {
             return '—';
@@ -444,12 +490,19 @@ final class PipelineController extends Controller
             return $progress['done'].' / '.$progress['total'].' '.$noun;
         }
 
+        // Las imágenes son el paso largo y el único que se puede mirar a medias, así que su
+        // cuenta sale de shots.json y no del contador de la historia: ese solo se escribe al
+        // terminar el paso y deja la fila muda durante la media hora que dura.
         return match ($number) {
             1 => $story->scene_count === null ? '—' : $story->scene_count.' escenas',
             2 => $story->score === null ? '—' : $this->formatScore($story->score).' / 10',
             3 => $story->sentence_count === null ? '—' : $story->sentence_count.' frases',
-            4 => $story->shot_count === null ? '—' : $story->shot_count.' planos',
-            5 => $story->shot_count === null ? '—' : $story->shot_count.' imágenes',
+            4 => $images !== null
+                ? $images['total'].' planos'
+                : ($story->shot_count === null ? '—' : $story->shot_count.' planos'),
+            5 => $images !== null
+                ? $images['done'].' / '.$images['total'].' imágenes'
+                : ($story->shot_count === null ? '—' : $story->shot_count.' imágenes'),
             6 => $this->soundUnit($story),
             7 => $story->video_seconds === null ? '—' : $this->formatClock($story->video_seconds),
             default => '—',

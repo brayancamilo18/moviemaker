@@ -10,13 +10,14 @@ const props = defineProps({
     providers: { type: Object, required: true },
     health: { type: Object, default: null },
     defaults: { type: Object, required: true },
+    queue: { type: Object, default: () => ({ likelyNoWorker: false, failed: 0 }) },
 });
 
 const form = useForm({
     mode: props.defaults.mode === 'original' ? 'original' : 'folclore',
     lore_slug: null,
     premise: '',
-    only_script: true,
+    only_script: false,
 });
 
 form.transform((data) => {
@@ -69,6 +70,8 @@ const canSubmit = computed(() => {
 });
 
 const submitLabel = computed(() => (form.only_script ? 'Generar guion' : 'Generar vídeo completo'));
+
+const noWorker = computed(() => Boolean(props.queue?.likelyNoWorker));
 
 const providerRows = computed(() => [
     { key: 'gemini', label: 'Gemini', ...status.value.gemini },
@@ -259,6 +262,20 @@ function submit() {
         <h1 class="text-[26px] font-extrabold tracking-[-0.02em]">Nueva historia</h1>
         <p class="mt-1 mb-[26px] text-[12px] text-text-muted">Elige el modo y lanza el guion cuando los modelos respondan.</p>
 
+        <div
+            v-if="noWorker"
+            class="mb-[26px] flex items-center gap-3.5 border border-[#6B4C1C] bg-[#1C150A] px-4 py-3.5"
+        >
+            <span class="h-[34px] w-[3px] shrink-0 bg-amber" />
+            <div class="flex-1">
+                <div class="text-[12.5px] font-extrabold text-amber">Nadie está atendiendo la cola</div>
+                <div class="mt-0.5 text-[11.5px] text-[#B49A72]">
+                    La historia se encolará y ahí se quedará. Arranca el worker en otra terminal:
+                    <code class="text-amber">bash scripts/worker.sh</code>
+                </div>
+            </div>
+        </div>
+
         <section class="mb-[26px] border-t-2 border-border pt-4">
             <div class="mb-2.5 text-[11px] font-extrabold tracking-[0.09em] uppercase">Modelos</div>
 
@@ -421,9 +438,9 @@ function submit() {
                         />
                     </span>
                     <span>
-                        <span class="block font-extrabold">Solo generar el guion</span>
+                        <span class="block font-extrabold">Parar después del guion</span>
                         <span class="mt-1 block text-[12px] text-text-muted">
-                            Recomendado. Genera el guion y para, para que puedas leerlo antes de gastar once minutos en imágenes.
+                            Actívalo para leer el guion antes de gastar horas en narración, imágenes y render. Apagado, la historia va sola hasta el vídeo.
                         </span>
                     </span>
                 </button>

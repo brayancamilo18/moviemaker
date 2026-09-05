@@ -135,6 +135,11 @@ return [
         'progress_ttl' => 3600,
         'failed_message_max' => 2000,
         'stale_job_seconds' => 15,
+        // El worker escribe su latido en cada vuelta del bucle, también ocioso. El TTL solo
+        // tiene que cubrir el hueco entre dos vueltas con holgura: por encima de esto se da
+        // por muerto. Un worker ocupado no late —está dentro del job—, y eso lo cubre
+        // QueueHealth mirando los trabajos reservados.
+        'worker_heartbeat_ttl' => 30,
         'stale_draft_seconds' => 30,
         // El render deja intermedios en storage/app. Por debajo de esto el paso ni se encola.
         'work_path' => storage_path('app'),
@@ -318,8 +323,11 @@ return [
     // de video.width. Si algún día hay credenciales y un modelo mayor, esto sube y video.width con él.
     'images' => [
         'provider' => env('IMAGE_PROVIDER', 'pollinations'),
-        'width' => 1024,
-        'height' => 576,
+        // A la resolución del vídeo, no por debajo: generar a 1024×576 para un montaje
+        // de 1280×720 obliga a un reescalado del 25% que ablanda cada plano, y el
+        // proveedor cobra lo mismo por el tamaño mayor.
+        'width' => 1280,
+        'height' => 720,
         'rate_limit_seconds' => 6,
         'max_retries' => 4,
         'concurrency' => 1,
@@ -367,7 +375,11 @@ return [
         ],
     ],
 
-    'image_style_suffix' => 'cinematic horror still, desaturated earth tones, heavy fog, 35mm film grain, low key lighting, rural Iberian or Latin American setting',
+    // Solo estilo fotográfico. El contenido —dónde pasa y qué tiempo hace— lo pone la
+    // biblia de cada historia, que sabe si es un caserío ibérico o un archipiélago chileno.
+    // Cuando el sufijo traía "heavy fog" y "rural Iberian setting" los imponía a los cien
+    // y pico planos de cualquier historia, peleando con su propia ambientación.
+    'image_style_suffix' => 'cinematic horror still, desaturated earth tones, 35mm film grain, low key lighting',
 
     'output_path' => 'stories',
 

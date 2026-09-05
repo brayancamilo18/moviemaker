@@ -179,7 +179,16 @@ final class ImagesStep
         $rows = $this->baselineRows($shots, $prompts, $samePlan, $slug);
 
         try {
-            $rows = $this->generateShots($shots, $selected['shots'], $rows, $prompts, $slug, $force, $onProgress);
+            $rows = $this->generateShots(
+                $shots,
+                $selected['shots'],
+                $rows,
+                $prompts,
+                $slug,
+                $force,
+                $onProgress,
+                $this->prompts->negativePrompt($bible),
+            );
         } catch (Throwable $exception) {
             return [
                 'ok' => false,
@@ -349,6 +358,7 @@ final class ImagesStep
         string $slug,
         bool $force,
         ?callable $onProgress,
+        string $negativePrompt = '',
     ): array {
         $generateOrders = [];
 
@@ -367,7 +377,7 @@ final class ImagesStep
 
             $prompt = $prompts[$index] ?? '';
             $seed = $this->seedFor($slug, $shot, $rows[$index] ?? null, $force);
-            $path = $this->images->generate($prompt, $seed);
+            $path = $this->images->generate($prompt, $seed, $negativePrompt);
 
             $rows[$index] = PlannedShot::fromShot($shot, $prompt, $seed, $path);
             $this->plans->write($slug, $this->planFrom($rows));

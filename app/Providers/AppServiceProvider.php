@@ -19,11 +19,16 @@ use App\Services\Llm\GeminiClient;
 use App\Services\Llm\LlmUsageMeter;
 use App\Services\Llm\ProviderHealth;
 use App\Services\Llm\ProviderHealthStore;
+use App\Services\Pipeline\WorkerHeartbeat;
 use App\Services\Tts\InworldTts;
 use App\Services\Tts\KokoroTts;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Foundation\DevCommands;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Events\Looping;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
@@ -117,7 +122,26 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Looping salta en cada vuelta del bucle del worker, esté ocioso o no, así que su
+        // ausencia distingue "no hay worker" de "el worker está ocupado". JobProcessing se
+        // añade porque un job largo se come varias vueltas y refrescarlo al entrar alarga
+        // el latido hasta donde llega el relevo de QueueHealth por trabajos reservados.
+        Event::listen(Looping::class, function (): void {
+            $this->app->make(WorkerHeartbeat::class)->beat();
+        });
+
+        Event::listen(JobProcessing::class, function (): void {
+            $this->app->make(WorkerHeartbeat::class)->beat();
+        });
+
+        // `artisan dev` trae su propio worker, pero con la memoria que diga php.ini. Inworld
+        // devuelve el audio como base64 dentro del JSON y la memoria crece con cada frase: con
+        // 128 MB la narración muere pasadas unas cien peticiones vivas, a mitad y sin dejar
+        // nada en disco. Registrarlo con el mismo nombre sustituye al de serie.
+        DevCommands::register(
+            'php -d memory_limit=1G artisan queue:listen --tries=1 --timeout=0',
+            'queue',
+        );
     }
 
     private function kokoro(Application $app): KokoroTts

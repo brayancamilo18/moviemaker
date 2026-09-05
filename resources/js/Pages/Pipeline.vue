@@ -6,6 +6,10 @@ import ActiveStrip from '../Components/ActiveStrip.vue';
 const AMBER = '#E2A044';
 const GREEN = '#4FA265';
 const RED = '#D24A3C';
+// Ámbar apagado: hubo trabajo y quedó a medias, pero nadie lo está ejecutando ahora.
+// Comparte familia con el ámbar vivo para que se lea como avance, y pierde brillo para
+// que a un vistazo no se confunda con un paso corriendo.
+const PAUSED = '#A87B3A';
 const S1 = '#131316';
 const MUT = '#8E8D8A';
 const DIM = '#605F5D';
@@ -33,6 +37,23 @@ const backupCost = computed(() => selected.value?.backupCost ?? '');
 const backupTokens = computed(() => selected.value?.backupTokens ?? '');
 
 const pipeTitle = computed(() => selected.value?.story?.title ?? '');
+
+const noWorker = computed(() => Boolean(queue.value?.likelyNoWorker));
+
+const sheetUrl = computed(() => selected.value?.story?.sheet_url ?? null);
+
+const sheetLabel = computed(() => {
+    const done = selected.value?.story?.shots_done ?? 0;
+    const total = selected.value?.story?.shots_total ?? 0;
+
+    if (total === 0) {
+        return 'Ver los planos';
+    }
+
+    return done >= total
+        ? 'Ver los ' + total + ' planos'
+        : 'Ver los planos · ' + done + ' de ' + total;
+});
 
 const pipeSub = computed(() => {
     if (!selected.value) {
@@ -69,7 +90,9 @@ function currentStepNum(list) {
         return Number(failed.num);
     }
 
-    const running = list.find((row) => row.state === 'en curso' || row.state === 'en cola');
+    const running = list.find(
+        (row) => row.state === 'en curso' || row.state === 'en cola' || row.state === 'a medias',
+    );
 
     if (running) {
         return Number(running.num);
@@ -82,8 +105,17 @@ function styleRow(row) {
     const state = row.state;
     const running = state === 'en curso';
     const failed = state === 'fallido';
+    const partial = state === 'a medias';
     const idle = state === 'en espera' || state === 'en cola';
-    const color = state === 'hecho' ? GREEN : failed ? RED : running ? AMBER : '#4E4D4B';
+    const color = state === 'hecho'
+        ? GREEN
+        : failed
+            ? RED
+            : running
+                ? AMBER
+                : partial
+                    ? PAUSED
+                    : '#4E4D4B';
     const prog = Number(row.progress ?? 0);
 
     return {
@@ -98,10 +130,12 @@ function styleRow(row) {
         unitStyle: 'width:150px;text-align:right;font-size:11.5px;color:' + (idle ? '#4E4D4B' : MUT),
         stateStyle: 'width:76px;text-align:right;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:800;color:' + color,
         resume: () => resumeRow(row),
-        resumeLabel: failed ? 'Reanudar' : 'Reejecutar',
+        // "Reanudar" y no "Reejecutar": las imágenes ya generadas se conservan y solo se
+        // piden las que faltan, así que reanudar aquí no vuelve a pagar el proveedor.
+        resumeLabel: failed || partial ? 'Reanudar' : 'Reejecutar',
         resumeStyle: idle
             ? 'visibility:hidden;width:88px;border:0'
-            : 'width:88px;background:transparent;border:1px solid ' + (failed ? '#5A2E28' : '#26272B') + ';color:' + (failed ? '#E58C7F' : DIM) + ';padding:5px 0;font-size:11px;cursor:pointer;margin-left:10px',
+            : 'width:88px;background:transparent;border:1px solid ' + (failed ? '#5A2E28' : partial ? '#4A3A21' : '#26272B') + ';color:' + (failed ? '#E58C7F' : partial ? PAUSED : DIM) + ';padding:5px 0;font-size:11px;cursor:pointer;margin-left:10px',
         barWrap: prog > 0 || running ? 'height:4px;background:#1B1C1F;margin-top:10px;margin-left:38px' : 'display:none',
         bar: 'height:100%;width:' + (prog * 100) + '%;background:' + color,
         errWrap: failed ? 'margin:12px 0 2px 38px;padding:12px 14px;background:#1C1211;border:1px solid #3A2622' : 'display:none',
@@ -262,6 +296,12 @@ onUnmounted(() => {
                 <h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em">{{ pipeTitle }}</h1>
                 <div style="font-size:12px;color:#8E8D8A;margin-top:4px">{{ pipeSub }}</div>
             </div>
+            <Link
+                v-if="sheetUrl"
+                :href="sheetUrl"
+                class="hs-sheet-link"
+                style="flex:none;background:transparent;border:1px solid #2A2B2F;color:#E2A044;padding:8px 14px;font-size:12px;text-decoration:none"
+            >{{ sheetLabel }}</Link>
         </div>
 
         <ActiveStrip
@@ -269,6 +309,17 @@ onUnmounted(() => {
             :stories="active"
             :selected-id="selectedId"
         />
+
+        <div
+            v-if="noWorker"
+            style="border:1px solid #6B4C1C;background:#1C150A;padding:13px 16px;display:flex;align-items:center;gap:14px;margin-bottom:20px"
+        >
+            <span style="width:3px;height:34px;background:#E2A044;flex:none"></span>
+            <div style="flex:1">
+                <div style="font-size:12.5px;font-weight:800;color:#E2A044">Nadie está atendiendo la cola</div>
+                <div style="font-size:11.5px;color:#B49A72;margin-top:2px">Lo que reanudes desde aquí se encolará y ahí se quedará. Arranca el worker: <code style="color:#E2A044">bash scripts/worker.sh</code></div>
+            </div>
+        </div>
 
         <div
             v-if="backupOn"
@@ -324,6 +375,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.hs-sheet-link:hover {
+    border-color: #E2A044;
+}
 .hs-pause:disabled {
     opacity: 1;
     cursor: not-allowed;

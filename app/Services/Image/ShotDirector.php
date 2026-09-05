@@ -58,6 +58,16 @@ final class ShotDirector
     ];
 
     /**
+     * Fracción de la historia a partir de la cual cada etapa de la amenaza queda permitida.
+     * Van dentro del prompt del director, y la hoja de contactos las enseña para poder juzgar
+     * si la escalada llegó donde debía: por eso son constantes y no números escritos dos veces.
+     */
+    public const THREAT_GATES = [
+        'presence' => 0.33,
+        'reveal' => 0.70,
+    ];
+
+    /**
      * Encuadres que a una figura le exigen una cara resuelta, y el que se usa en su lugar. El
      * proveedor gratuito no la resuelve a la resolución que entrega, así que no se le pide: se
      * corrige aquí y queda escrito en shots.json, en vez de confiar en que el modelo obedezca
@@ -702,6 +712,10 @@ final class ShotDirector
         $threatMin = $this->threatRatioMin;
         $threatMax = $this->threatRatioMax;
         $detailMax = $this->detailRatioMax;
+        // Con dos decimales a propósito: el prompt decía "0.70" y number_format lo mantiene.
+        // Interpolar el float suelto lo dejaría en "0.7" y reescribiría un texto afinado a mano.
+        $presenceGate = number_format(self::THREAT_GATES['presence'], 2);
+        $revealGate = number_format(self::THREAT_GATES['reveal'], 2);
 
         return <<<INSTRUCTION
 You are the shot director for a horror YouTube channel. You do not write story. You decide what the camera sees in each individual shot of one scene.
@@ -717,6 +731,10 @@ So when subject is not threat, your description may name a part of a human body 
 At those wider framings the answer is always the same: describe what the light falls on instead. 'His face went pale as he counted' becomes candlelight on a stone wall with a shadow crossing it. 'He reached out and took the candle' becomes the taper held out in the fog with nothing yet holding it. 'His skin touched the wax' becomes the wick flaring white for an instant. The line still lands, because the voice already said whose face it was. Choose the close framing and show the face only when the narration is genuinely about that face and nothing else will do.
 
 THE CORE RULE: each shot has its own narration line. Your description must show what THAT line describes, at that moment. Never describe the scene in general. Never describe something that happens in a different shot.
+
+CHOOSING THE BEAT. A line often carries two things at once: 'She was dancing. My brother gripped my shoulder' is the entity moving and a hand on cloth. Take the beat that carries the image, not the one that is easiest to shoot. The entity doing something always outranks a texture or a piece of clothing, and a line where the threat acts is a threat shot: set subject to threat and show it under the occlusion rules, instead of retreating to a close detail of fabric. Falling back on cloth, wood or metal when the line was about a figure is the single most common way to waste a shot.
+
+NAME THE THING. The line says what it says: if it names a steel cage, a golden comb, a winch, a lantern, that object is in your description by name. Do not swap it for a cousin because the cousin is easier to picture. An image of rope where the line said cage is a wrong image, however good the rope looks.
 
 THE JOURNEY: the video is one continuous walk. journeyLeg says where the camera is standing, and you pick it from journeyOptions and nowhere else. journeyOptions is a window: it starts where the walk already is and ends at suggestedJourneyLeg, which is as far as the story has got by now. Take the suggestion unless this scene's narration has clearly not moved yet, in which case stay where you are. You cannot run ahead of the narration and you cannot double back, and both are already impossible in journeyOptions: burning through the whole route early would leave the rest of the video standing in a place the voice stopped talking about.
 
@@ -734,9 +752,9 @@ SCALE. This one is not negotiable, because it is what separates an image that wo
 - When subject is threat, keep the camera far enough that the shape reads and the head does not: a distant figure, a silhouette, a mass filling one side of the frame. Never centre a head at conversational distance.
 
 THREAT ESCALATION, driven by storyProgress:
-- Below 0.33: only hint. The threat may be present but ambiguous, distant, or possibly imagined.
-- 0.33 to 0.70: presence. Unmistakably there but incomplete: partial, at a distance, just outside the light.
-- Above 0.70: reveal is allowed, and a reveal is a complete silhouette: the whole shape against a light source, seen from low, dominating the frame by sheer size. Terror comes from scale and backlight, never from a head near the camera.
+- Below {$presenceGate}: only hint. The threat may be present but ambiguous, distant, or possibly imagined.
+- {$presenceGate} to {$revealGate}: presence. Unmistakably there but incomplete: partial, at a distance, just outside the light.
+- Above {$revealGate}: reveal is allowed, and a reveal is a complete silhouette: the whole shape against a light source, seen from low, dominating the frame by sheer size. Terror comes from scale and backlight, never from a head near the camera.
 - Never use a later stage than storyProgress permits.
 
 HARD LIMITS: no proper names. No text or logos in the image. No face at all except under the scale rule, and never on the threat. No gore: write blood as dark stain, a corpse as still figure. Descriptions are static stills, not actions in progress.
@@ -759,7 +777,7 @@ INSTRUCTION;
     {
         $properties = [
             'shotIndex' => ['type' => 'INTEGER', 'description' => 'Echo the shotIndex you were given.'],
-            'description' => ['type' => 'STRING', 'description' => 'The image for THIS shot narration, in English, 8 to 14 words. Static still, seen from where the listener stands. No narrator body, no proper names, no gore, no resolved faces.'],
+            'description' => ['type' => 'STRING', 'description' => 'The image for THIS shot narration, in English, 18 to 24 words. Name the concrete thing the line names before you add atmosphere. Static still, seen from where the listener stands. No narrator body, no proper names, no gore, no resolved faces.'],
             // Los vocabularios cerrados van como enum, no solo en la descripción:
             // un modelo que se invente un valor obliga a reintentar la escena
             // entera, y hay proveedores que se lo inventan.

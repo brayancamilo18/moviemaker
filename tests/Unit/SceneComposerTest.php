@@ -54,6 +54,46 @@ final class SceneComposerTest extends TestCase
         $this->assertEqualsWithDelta(15.0, $plan['duration'], 0.001);
     }
 
+    public function test_a_hard_cut_before_a_fade_leaves_both_xfade_inputs_on_one_timebase(): void
+    {
+        // concat devuelve 1/1000000 y los clips llegan en 1/15360: sin igualar la
+        // base de tiempo al entrar, el xfade que sigue a un corte seco aborta el
+        // render con "input link timebases do not match".
+        $graph = $this->filterGraph([null, 10.0]);
+
+        $this->assertStringContainsString('[0]settb=AVTB[s0]', $graph);
+        $this->assertStringContainsString('[1]settb=AVTB[s1]', $graph);
+        $this->assertStringContainsString('[2]settb=AVTB[s2]', $graph);
+        $this->assertStringContainsString('[s0][s1]concat=n=2:v=1:a=0[v1]', $graph);
+        $this->assertStringContainsString('[v1][s2]xfade=', $graph);
+        $this->assertStringContainsString('[out]', $graph);
+    }
+
+    public function test_every_input_is_normalised_however_the_cuts_fall(): void
+    {
+        foreach ([[0.5], [null], [null, null], [5.0, null, 10.0]] as $offsets) {
+            $graph = $this->filterGraph($offsets);
+
+            for ($input = 0; $input <= count($offsets); $input++) {
+                $this->assertStringContainsString(
+                    sprintf('[%d]settb=AVTB[s%d]', $input, $input),
+                    $graph,
+                    'Falta normalizar la entrada '.$input,
+                );
+            }
+        }
+    }
+
+    /**
+     * @param  list<float|null>  $offsets
+     */
+    private function filterGraph(array $offsets): string
+    {
+        $method = new \ReflectionMethod(SceneComposer::class, 'filterGraph');
+
+        return (string) $method->invoke($this->composer(), $offsets);
+    }
+
     public function test_total_duration_equals_sum_of_real_shot_durations(): void
     {
         $shots = [

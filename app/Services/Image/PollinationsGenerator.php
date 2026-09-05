@@ -80,9 +80,9 @@ final class PollinationsGenerator implements ImageGenerator
         $this->outageMaxProbes = (int) $config->get('stories.images.outage.max_probes');
     }
 
-    public function generate(string $prompt, int $seed): string
+    public function generate(string $prompt, int $seed, string $negativePrompt = ''): string
     {
-        $path = $this->cachePath($prompt, $seed);
+        $path = $this->cachePath($prompt, $seed, $negativePrompt);
 
         if ($this->files->exists($path) && $this->isValidImageFile($path)) {
             // También a la vuelta de la caché: recortar es idempotente y así se arreglan las que se
@@ -99,7 +99,7 @@ final class PollinationsGenerator implements ImageGenerator
         // a fallar igual y la historia acaba llena de marcadores por una caída de media hora. Así
         // que se espera a que vuelva y se vuelve a pedir. Una respuesta mala de verdad no espera.
         while (true) {
-            $outcome = $this->attempts($prompt, $seed, $path);
+            $outcome = $this->attempts($prompt, $seed, $path, $negativePrompt);
 
             if ($outcome['path'] !== null) {
                 return $outcome['path'];
@@ -129,7 +129,7 @@ final class PollinationsGenerator implements ImageGenerator
      *
      * @return array{path: string|null, error: string, outage: bool}
      */
-    private function attempts(string $prompt, int $seed, string $path): array
+    private function attempts(string $prompt, int $seed, string $path, string $negativePrompt = ''): array
     {
         $attemptSeed = $seed;
         $attempts = max(1, $this->maxRetries + 1);
@@ -138,7 +138,7 @@ final class PollinationsGenerator implements ImageGenerator
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
             try {
-                $bytes = $this->fetch($prompt, $attemptSeed);
+                $bytes = $this->fetch($prompt, $attemptSeed, $negativePrompt);
             } catch (LockTimeoutException) {
                 $lastError = 'candado de rate limit agotado';
                 $outage = false;
@@ -219,25 +219,33 @@ final class PollinationsGenerator implements ImageGenerator
         return $response->status() < 500;
     }
 
-    private function fetch(string $prompt, int $seed): string
+    private function fetch(string $prompt, int $seed, string $negativePrompt = ''): string
     {
         $lockSeconds = $this->timeout + (int) ceil($this->rateLimitSeconds) + 15;
 
         // El candado serializa a todos los workers. El wait solo cubre el resto de la ventana en caché compartida.
         return $this->cache->lock(self::LOCK_KEY, $lockSeconds)
-            ->block($this->timeout + 60, function () use ($prompt, $seed): string {
+            ->block($this->timeout + 60, function () use ($prompt, $seed, $negativePrompt): string {
                 $this->waitForSlot();
                 $this->reserveSlot();
 
+                $query = [
+                    'width' => $this->width,
+                    'height' => $this->height,
+                    'seed' => $seed,
+                    'model' => $this->model,
+                    'nologo' => 'true',
+                ];
+
+                // Rama negativa de verdad. Vacía no se manda: un negative_prompt en blanco
+                // es un parámetro más que ensucia la URL y la clave de caché del proveedor.
+                if ($negativePrompt !== '') {
+                    $query['negative_prompt'] = $negativePrompt;
+                }
+
                 $response = $this->http
                     ->timeout($this->timeout)
-                    ->get($this->endpoint($prompt), [
-                        'width' => $this->width,
-                        'height' => $this->height,
-                        'seed' => $seed,
-                        'model' => $this->model,
-                        'nologo' => 'true',
-                    ]);
+                    ->get($this->endpoint($prompt), $query);
 
                 if ($this->isRetryableStatus($response->status()) || $response->failed()) {
                     $response->throw();
@@ -311,9 +319,9 @@ final class PollinationsGenerator implements ImageGenerator
         return $origin;
     }
 
-    private function cachePath(string $prompt, int $seed): string
+    private function cachePath(string $prompt, int $seed, string $negativePrompt = ''): string
     {
-        return $this->cacheDirectory.DIRECTORY_SEPARATOR.sha1($this->fingerprint($prompt, $seed)).'.jpg';
+        return $this->cacheDirectory.DIRECTORY_SEPARATOR.sha1($this->fingerprint($prompt, $seed, $negativePrompt)).'.jpg';
     }
 
     /**
@@ -321,9 +329,9 @@ final class PollinationsGenerator implements ImageGenerator
      * prompt y la misma semilla son ficheros distintos: sin ella, cambiar la resolución serviría
      * las viejas y nadie sabría por qué el vídeo no mejora.
      */
-    private function fingerprint(string $prompt, int $seed): string
+    private function fingerprint(string $prompt, int $seed, string $negativePrompt = ''): string
     {
-        return $prompt.(string) $seed.'|'.$this->width.'x'.$this->height;
+        return $prompt.(string) $seed.'|'.$this->width.'x'.$this->height.'|'.$negativePrompt;
     }
 
     /**

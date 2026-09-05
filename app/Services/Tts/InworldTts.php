@@ -124,6 +124,47 @@ final readonly class InworldTts implements TextToSpeech
         return $this->files->exists($this->cachePath($text, $voice, $speed));
     }
 
+    public function cachedBytes(string $text, array $options = []): int
+    {
+        $bytes = 0;
+
+        foreach ($this->cachedFiles($text, $options) as $path) {
+            $bytes += (int) $this->files->size($path);
+        }
+
+        return $bytes;
+    }
+
+    public function forget(string $text, array $options = []): int
+    {
+        $liberado = 0;
+
+        foreach ($this->cachedFiles($text, $options) as $path) {
+            $liberado += (int) $this->files->size($path);
+            $this->files->delete($path);
+        }
+
+        return $liberado;
+    }
+
+    /**
+     * Cada frase ocupa dos ficheros: el que llega del proveedor y el recortado que usa
+     * el ensamblador. Contar o soltar solo uno deja la mitad del peso sin dueño.
+     *
+     * @param  array<string, mixed>  $options
+     * @return list<string>
+     */
+    private function cachedFiles(string $text, array $options): array
+    {
+        $voice = (string) ($options['voice'] ?? $this->voice);
+        $speed = (float) ($options['speed'] ?? $this->speed);
+
+        return array_values(array_filter(
+            [$this->cachePath($text, $voice, $speed), $this->trimmedPath($text, $voice, $speed)],
+            fn (string $path): bool => $this->files->exists($path),
+        ));
+    }
+
     /**
      * Solo comprueba la credencial, sin tocar la red: story:doctor y el preflight se ejecutan a
      * menudo, y el tramo gratuito se mide en caracteres. Una síntesis de cortesía por diagnóstico

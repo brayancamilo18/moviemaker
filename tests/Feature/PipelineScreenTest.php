@@ -9,6 +9,7 @@ use App\Models\Story;
 use App\Services\Pipeline\PipelineDispatcher;
 use App\Services\Pipeline\PipelineProgress;
 use Carbon\Carbon;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -23,6 +24,100 @@ final class PipelineScreenTest extends TestCase
 
         $this->withoutVite();
         $this->travelTo(Carbon::parse('2026-08-30 12:00:00'));
+    }
+
+    protected function tearDown(): void
+    {
+        $files = $this->app->make(Filesystem::class);
+        $files->deleteDirectory(storage_path('app/'.config('stories.output_path').'/pantalla-a-medias'));
+        $files->deleteDirectory(storage_path('app/pantalla-a-medias-imagenes'));
+
+        parent::tearDown();
+    }
+
+    /**
+     * Las imágenes son el paso largo, y el único cuyo avance queda contado en disco. Sin
+     * worker encima —un comando suelto, o uno que se cayó a mitad— la fila decía "en espera"
+     * y un guion "—" con setenta imágenes ya pintadas al lado.
+     */
+    public function test_a_half_generated_images_step_is_reported_as_partial(): void
+    {
+        $story = Story::factory()->create([
+            'slug' => 'pantalla-a-medias',
+            'status' => StoryStatus::Narrated,
+        ]);
+
+        $this->writePlanWithImages('pantalla-a-medias', done: 3, total: 8);
+
+        $this->getJson(route('pipeline.state', ['story' => $story->id]))
+            ->assertOk()
+            ->assertJsonPath('selected.rows.3.state', 'hecho')
+            ->assertJsonPath('selected.rows.3.unit', '8 planos')
+            ->assertJsonPath('selected.rows.4.state', 'a medias')
+            ->assertJsonPath('selected.rows.4.unit', '3 / 8 imágenes')
+            ->assertJsonPath('selected.rows.4.progress', 0.375);
+    }
+
+    public function test_a_plan_with_every_image_reports_the_images_row_as_done(): void
+    {
+        $story = Story::factory()->create([
+            'slug' => 'pantalla-a-medias',
+            'status' => StoryStatus::Narrated,
+        ]);
+
+        $this->writePlanWithImages('pantalla-a-medias', done: 4, total: 4);
+
+        $this->getJson(route('pipeline.state', ['story' => $story->id]))
+            ->assertOk()
+            ->assertJsonPath('selected.rows.4.state', 'hecho')
+            ->assertJsonPath('selected.rows.4.unit', '4 / 4 imágenes');
+    }
+
+    /**
+     * Un plan recién escrito y sin una sola imagen no es avance: es el planificador que acaba
+     * de terminar. La fila de imágenes sigue esperando.
+     */
+    public function test_a_plan_without_images_leaves_the_images_row_waiting(): void
+    {
+        $story = Story::factory()->create([
+            'slug' => 'pantalla-a-medias',
+            'status' => StoryStatus::Narrated,
+        ]);
+
+        $this->writePlanWithImages('pantalla-a-medias', done: 0, total: 6);
+
+        $this->getJson(route('pipeline.state', ['story' => $story->id]))
+            ->assertOk()
+            ->assertJsonPath('selected.rows.3.state', 'hecho')
+            ->assertJsonPath('selected.rows.4.state', 'en espera')
+            ->assertJsonPath('selected.rows.4.unit', '—');
+    }
+
+    private function writePlanWithImages(string $slug, int $done, int $total): void
+    {
+        $files = $this->app->make(Filesystem::class);
+        $imageDirectory = storage_path('app/pantalla-a-medias-imagenes');
+        $files->ensureDirectoryExists($imageDirectory);
+
+        $shots = [];
+
+        for ($order = 1; $order <= $total; $order++) {
+            $path = null;
+
+            if ($order <= $done) {
+                $path = $imageDirectory.DIRECTORY_SEPARATOR.$order.'.jpg';
+                $files->put($path, 'jpg');
+            }
+
+            $shots[] = ['order' => $order, 'sceneOrder' => 1, 'imagePath' => $path];
+        }
+
+        $directory = storage_path('app/'.config('stories.output_path').'/'.$slug);
+        $files->ensureDirectoryExists($directory);
+        $files->put(
+            $directory.DIRECTORY_SEPARATOR.'shots.json',
+            (string) json_encode(['version' => 2, 'plannerVersion' => 1, 'shots' => $shots]),
+        );
     }
 
     public function test_active_contains_only_draft_and_narrated_when_the_rest_are_inactive(): void

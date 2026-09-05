@@ -25,6 +25,14 @@ const isActive = (href) => {
         return path === '/review' || /\/stories\/.+\/review$/.test(path);
     }
 
+    if (href === '/sheet') {
+        return path === '/sheet' || /\/stories\/.+\/sheet$/.test(path);
+    }
+
+    if (href === '/thumbnail') {
+        return path === '/thumbnail' || /\/stories\/.+\/thumbnail$/.test(path);
+    }
+
     return path === href;
 };
 </script>

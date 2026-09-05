@@ -165,12 +165,23 @@ final class SceneComposer
     private function filterGraph(array $offsets): string
     {
         $fade = $this->ffmpeg->formatNumber($this->transitionDuration);
-        $last = '0';
         $filters = [];
         $joins = count($offsets);
 
+        // concat entrega su salida en 1/1000000 y los clips llegan del disco en
+        // 1/15360. Encadenar un xfade detrás de un concat —lo que ocurre en cuanto
+        // un plano estático cae entre dos con movimiento— aborta el render entero:
+        // xfade exige que sus dos entradas compartan base de tiempo. Igualarlas al
+        // entrar deja toda la cadena en la misma y el orden de los cortes secos
+        // deja de importar.
+        for ($input = 0; $input <= $joins; $input++) {
+            $filters[] = sprintf('[%d]settb=AVTB[s%d]', $input, $input);
+        }
+
+        $last = 's0';
+
         foreach ($offsets as $index => $offset) {
-            $incoming = (string) ($index + 1);
+            $incoming = 's'.($index + 1);
             $label = $index === $joins - 1 ? 'out' : 'v'.($index + 1);
 
             if ($offset === null) {

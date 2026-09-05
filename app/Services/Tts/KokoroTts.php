@@ -57,6 +57,27 @@ final class KokoroTts implements TextToSpeech
         return $this->files->exists($this->cachePath($text, $voice, $speed));
     }
 
+    public function cachedBytes(string $text, array $options = []): int
+    {
+        $path = $this->cachePath($text, $options['voice'] ?? $this->voice, (float) ($options['speed'] ?? $this->speed));
+
+        return $this->files->exists($path) ? (int) $this->files->size($path) : 0;
+    }
+
+    public function forget(string $text, array $options = []): int
+    {
+        $path = $this->cachePath($text, $options['voice'] ?? $this->voice, (float) ($options['speed'] ?? $this->speed));
+
+        if (! $this->files->exists($path)) {
+            return 0;
+        }
+
+        $liberado = (int) $this->files->size($path);
+        $this->files->delete($path);
+
+        return $liberado;
+    }
+
     public function isAvailable(): bool
     {
         try {

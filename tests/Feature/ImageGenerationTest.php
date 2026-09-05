@@ -242,6 +242,44 @@ final class ImageGenerationTest extends TestCase
         $this->assertFileExists($second);
     }
 
+    public function test_the_negative_prompt_travels_as_its_own_parameter(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+
+        $this->generatorAt(1280, 720)->generate('a dim hallway in fog', 7, 'crowds of people, watermark');
+
+        Http::assertSent(function ($request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            // Fuera del prompt: dentro sería la palabra pidiendo salir, no una negación.
+            return ($query['negative_prompt'] ?? null) === 'crowds of people, watermark'
+                && ! str_contains(rawurldecode($request->url()), 'no crowds of people');
+        });
+    }
+
+    public function test_an_empty_negative_prompt_is_not_sent_at_all(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+
+        $this->generatorAt(1280, 720)->generate('a dim hallway in fog', 7);
+
+        Http::assertSent(function ($request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return ! array_key_exists('negative_prompt', $query);
+        });
+    }
+
+    public function test_the_same_prompt_with_another_negative_is_another_cache_entry(): void
+    {
+        $this->fakePromptResponses($this->jpeg());
+
+        $sin = $this->generatorAt(1280, 720)->generate('a dim hallway in fog', 7);
+        $con = $this->generatorAt(1280, 720)->generate('a dim hallway in fog', 7, 'watermark');
+
+        $this->assertNotSame($sin, $con);
+    }
+
     public function test_the_placeholder_also_depends_on_the_resolution(): void
     {
         $this->fakePromptResponses('not-an-image');
@@ -536,7 +574,7 @@ final class ImageGenerationTest extends TestCase
                 private int $successes,
             ) {}
 
-            public function generate(string $prompt, int $seed): string
+            public function generate(string $prompt, int $seed, string $negativePrompt = ''): string
             {
                 $this->calls++;
 

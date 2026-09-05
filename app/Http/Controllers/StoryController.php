@@ -57,6 +57,9 @@ final class StoryController extends Controller
             'defaults' => [
                 'mode' => (string) $this->config->get('stories.story.default_mode'),
             ],
+            // Lanzar una historia entera contra una cola que nadie atiende no da error: da
+            // silencio. Vale más avisar antes de pulsar que dejar la fila en `jobs` esperando.
+            'queue' => $this->queue->status(),
         ]);
     }
 

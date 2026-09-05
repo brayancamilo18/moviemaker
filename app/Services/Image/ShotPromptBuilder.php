@@ -82,7 +82,6 @@ final class ShotPromptBuilder
                 [
                     $description,
                     $this->styleSuffix,
-                    $this->channelNegatives(),
                 ],
                 static fn (string $part): bool => $part !== '',
             )));
@@ -104,22 +103,50 @@ final class ShotPromptBuilder
         $parts[] = $this->part(self::RANK_JOURNEY, $this->sanitize($this->light($bible, $shot)));
         $parts[] = $this->part(self::RANK_SETTING, $this->sanitize($bible->setting));
         $parts[] = $this->part(self::RANK_REST, $this->sanitize($shot->framing));
-        $parts[] = $this->part(self::RANK_REST, $this->sanitize($bible->weather));
         $parts[] = $this->part(self::RANK_REST, $this->sanitize(implode(' ', $bible->palette)));
 
-        // El tope gobierna solo la parte descriptiva. Los negativos son la única defensa contra
-        // caras resueltas y marcas de agua, y el sufijo es lo que mantiene el estilo constante
-        // entre planos: ninguno de los dos compite por el sitio de lo que describe la escena.
+        // El tope gobierna solo la parte descriptiva, y el sufijo es lo que mantiene el estilo
+        // constante entre planos. Los negativos ya no viajan aquí: van por la rama negativa.
         $prompt = array_values(array_filter(
             [
                 $this->descriptive($this->dedupe($parts), $this->maxWords),
                 $this->styleSuffix,
-                $this->negatives($bible),
             ],
             static fn (string $part): bool => $part !== '',
         ));
 
         return implode(', ', $prompt);
+    }
+
+    /**
+     * Lo que no debe salir, para la rama negativa del proveedor. Se devuelve como lista de
+     * conceptos, no como frases con "no" delante: el codificador de texto de un modelo de
+     * difusión no interpreta la negación, así que "no container ships" dentro del prompt
+     * positivo era exactamente la manera de pedir barcos.
+     */
+    public function negativePrompt(VisualBible $bible): string
+    {
+        $items = ['text', 'watermark', 'logos', 'resolved facial features', 'direct eye contact'];
+
+        foreach ($bible->avoid as $item) {
+            $item = $this->sanitize($item);
+
+            // La biblia escribe en prosa y a veces ya viene negado. En la rama negativa
+            // el "no" sobra: lo que se lista aquí es, por definición, lo que se evita.
+            $item = preg_replace('/^no\s+/i', '', $item) ?? $item;
+
+            if ($item !== '') {
+                $items[] = $item;
+            }
+        }
+
+        $unicos = [];
+
+        foreach ($items as $item) {
+            $unicos[mb_strtolower($item)] = $item;
+        }
+
+        return implode(', ', array_values($unicos));
     }
 
     /**

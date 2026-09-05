@@ -12,10 +12,11 @@ final class QueueHealth
     public function __construct(
         private readonly Repository $config,
         private readonly DatabaseManager $db,
+        private readonly WorkerHeartbeat $heartbeat,
     ) {}
 
     /**
-     * @return array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool}
+     * @return array{pending: int, waiting: int, running: int, oldestWaitingSeconds: int|null, failed: int, likelyNoWorker: bool, workerBusy: bool, workerAlive: bool, workerSeenSeconds: int|null}
      */
     public function status(): array
     {
@@ -28,6 +29,8 @@ final class QueueHealth
                 'failed' => 0,
                 'likelyNoWorker' => false,
                 'workerBusy' => false,
+                'workerAlive' => true,
+                'workerSeenSeconds' => null,
             ];
         }
 
@@ -51,17 +54,29 @@ final class QueueHealth
             ? null
             : max(0, now()->getTimestamp() - (int) $oldestAvailableAt);
 
+        // Un worker metido en un job largo no da vueltas al bucle y deja de latir, pero tiene
+        // el trabajo reservado: eso también es estar vivo. Sin este relevo, media hora de
+        // imágenes se vería en el panel como que no hay nadie atendiendo la cola.
+        $seenSeconds = $this->heartbeat->secondsSinceBeat();
+        $alive = $seenSeconds !== null || $running > 0;
+
         return [
             'pending' => $waiting + $running,
             'waiting' => $waiting,
             'running' => $running,
             'oldestWaitingSeconds' => $oldestWaitingSeconds,
             'failed' => (int) $failedConnection->table($failedTable)->count(),
-            'likelyNoWorker' => $waiting > 0
+            // Sin latido no hay que esperar a que un trabajo se enrancie para decirlo, y con
+            // la cola vacía se dice igual: antes se callaba porque no había nada esperando.
+            'likelyNoWorker' => ! $alive || (
+                $waiting > 0
                 && $running === 0
                 && $oldestWaitingSeconds !== null
-                && $oldestWaitingSeconds > $staleAfter,
+                && $oldestWaitingSeconds > $staleAfter
+            ),
             'workerBusy' => $running > 0 && $waiting > 0,
+            'workerAlive' => $alive,
+            'workerSeenSeconds' => $seenSeconds,
         ];
     }
 }

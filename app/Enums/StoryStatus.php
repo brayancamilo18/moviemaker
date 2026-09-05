@@ -76,4 +76,26 @@ enum StoryStatus: string
     {
         return in_array($next, self::TRANSITIONS[$this->value], true);
     }
+
+    /**
+     * Cuánto ha avanzado por el pipeline, para poder comparar dos estados.
+     *
+     * Solo lo tienen los estados que gana el pipeline solo, mirando lo que hay en disco. Los
+     * que salen de una decisión —aprobada, descargada, publicada, descartada— devuelven null
+     * y así nadie los pisa por haber encontrado un fichero. Fallida también: que los
+     * artefactos existan no borra que alguien tenga que mirar por qué falló.
+     */
+    public function pipelineRank(): ?int
+    {
+        return match ($this) {
+            self::Draft => 0,
+            self::ScriptReady => 1,
+            self::Narrated => 2,
+            self::ImagesReady => 3,
+            self::Mixed => 4,
+            self::Rendered => 5,
+            self::PendingReview => 6,
+            default => null,
+        };
+    }
 }
